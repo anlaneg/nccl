@@ -1,0 +1,873 @@
+src/include/info.h
+  s_d56d273778037f::t_25ee96363574f4 18
+src/misc/ibvwrap.cc
+  s_04e48a5302c4b4::t_f478eb7d6c4c48 21
+  h_82948378cfbeda 24,34,87,90 gitai:{"mixed_line_ranges":[{"Single":24},{"Single":87}],"operations":[]}
+  s_e73be0c61998fc::t_e77246bfdf551e 115
+  s_c6481a02eca7e3::t_fadbe587ee7fd5 126
+  s_b638cab0dcddaf::t_947d78ddfc2b93 135
+  s_f1d043c8267df0::t_933fc5c6401a24 150
+  s_ec8b80b112cf1d::t_f1af0e5d434599 109
+  s_015ced18ea478f::t_1a509ca6836e8b 160
+  s_68e62b86fb502c::t_430c0ce3a94a36 155
+  s_3c8bd254fb4280::t_86f9b042c0c4f7 121
+  s_d1599e05e2ea5f::t_2281a0f02606fe 140
+  s_e5398aa368646d::t_886d2f1af04ab5 114
+  s_07320ebb938081::t_edbc62accadef1 145
+src/collectives.cc
+  s_607ff73a86bf76::t_1093479091f568 110 gitai:{"mixed_line_ranges":[{"Single":110}],"operations":[]}
+src/include/ibvwrap.h
+  s_f670bf4f1a66d2::t_adc70b073cf126 74
+src/register/register.cc
+  s_ccea060f13d795::t_024c3775489ff1 116
+src/misc/utils.cc
+  s_0151335a81e758::t_f978965f3f3c6d 158
+  s_629d8465749b48::t_566d64b54817ec 187
+  s_9d45e7b09d1425::t_9354827e5efcc3 137
+  s_35d85e850029fe::t_5a5e84f591930b 164
+  s_c3d2df35d1ab29::t_c3539903ee8bf8 149 gitai:{"mixed_line_ranges":[{"Single":149}],"operations":[]}
+  s_c6508aa8e0b678::t_619f4f31b96b73 136
+  s_fe3d096c543e55::t_43ce0c6c041e1c 154
+src/transport/net_ib.cc
+  s_c0b4ba6d29316d::t_258b3a369d7215 2199
+  s_0d905f7ac5246c::t_9103cc0a00b55d 713
+  s_1ce0d18de3edee::t_0a3d25d241c6f0 2302
+  s_f5c6a35cf583c1::t_dba21d667e249a 735
+  s_66e43255e8e8fb::t_0a5babc16510cd 210
+  s_f311aa7987824c::t_499384588f6ec7 742
+  s_9fc35ca25e9c57::t_62c2f0bdaf29b2 743
+  s_c9efe75cdb6347::t_5419d166d822d8 707
+  s_da12076690b57b::t_2469691892bfa0 720
+  s_ebc4bbffd3f2e4::t_f24065dff09e71 1980
+  s_99c538c0709319::t_091d25f015b3c9 730
+  s_2ffbb36544ffef::t_6fc65f51a3313c 748
+  s_b9566b9a61334b::t_c09faeb0eef825 1086
+  s_08ebb0ac827d5b::t_8536f17e1e6ed6 2205-2221 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a799f057708d63640bd8255","tool_type":"agent","tool_id":"Edit","line_ranges":[{"Range":[2205,2221]}]}]}
+  s_96ab3c96c105ec::t_d4cf7febe91c85 2132
+  s_6d3c275bd8cfd7::t_1f38af3947cad8 2225
+  s_75e12660828b74::t_985f3e68877060 705
+  s_108b14c8e51f04::t_9a2c611f7ca735 756 gitai:{"mixed_line_ranges":[{"Single":756}],"operations":[]}
+  s_f7587069eee33b::t_37521b5add6d17 2307
+  s_ba98defc2769d9::t_cf21433b7f7f87 2082
+  s_b4f8a1e9b977aa::t_5bf32a7c0e6f08 2081
+  s_3791449655ef1f::t_329a1e49d535f3 2035
+  s_8d63582d0acaf2::t_c3421454ab054c 2090
+  h_82948378cfbeda 217,1155,1174,1927,1936,2077,2084,2092,2238,2245,2262-2263 gitai:{"mixed_line_ranges":[{"Single":217},{"Single":1174},{"Range":[2262,2263]}],"operations":[]}
+  s_a69c95e6109fe2::t_13fabb16248f63 2088 gitai:{"mixed_line_ranges":[{"Single":2088}],"operations":[]}
+  s_a720f2f1687654::t_67987a8f5b93ba 2109
+  s_af1ccad40fadce::t_05de76eb892d96 2139 gitai:{"mixed_line_ranges":[{"Single":2139}],"operations":[]}
+src/misc/ibvsymbols.cc
+  h_82948378cfbeda 29 gitai:{"mixed_line_ranges":[{"Single":29}],"operations":[]}
+  s_5847687419964c::t_3893ebc7be6d2c 9
+src/misc/mlx5dvwrap.cc
+  s_c77e6d0e689053::t_53e3808afc0a25 23
+src/misc/socket.cc
+  s_799c3d5aed22b3::t_e948839dc2227d 151
+  s_4e16324aadc034::t_5270acd7819320 161
+  s_5925af3539d86c::t_164045094fa0cb 154
+  s_ef578cbdad02b2::t_9d0bab346ad107 170
+  s_cc6f094b8d3c92::t_8a927340df5596 140 gitai:{"mixed_line_ranges":[{"Single":140}],"operations":[]}
+  s_21059ba31c8664::t_48219cef3dde26 366 gitai:{"mixed_line_ranges":[{"Single":366}],"operations":[]}
+  s_cfd012c03ded0a::t_b81e42f76e86d1 369
+  s_0f2a9797f8b378::t_3f64705e58d812 166
+  s_193cd87bcf2962::t_48dc59257a4de6 144
+  s_75f77110d4aa8d::t_b81515fa95f3cb 156 gitai:{"mixed_line_ranges":[{"Single":156}],"operations":[]}
+examples/01_communicators/01_multiple_devices_single_process/main.cc
+  h_82948378cfbeda 130 gitai:{"mixed_line_ranges":[{"Single":130}],"operations":[]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "95ed17415953e891ee3c1ba1961db4023dd13e55",
+  "prompts": {},
+  "humans": {
+    "h_82948378cfbeda": {
+      "author": "logan <logan@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_0151335a81e758": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-cdeee159-08a8-4055-84bf-07336946346a",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_015ced18ea478f": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a1101b61-07a2-41f7-bb49-b4f92323d67d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_04e48a5302c4b4": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-ecec061e-5607-4a45-aca6-0c877fdeaac5",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_07320ebb938081": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-648c968f-7fd0-4942-9fbc-df3e8dd0d60a",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_08ebb0ac827d5b": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a75a1ce7708d63640bd7f40",
+        "model": "openrouter-2o__dev"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_0d905f7ac5246c": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-c4682372-72cd-45a1-a439-d29bb41d82e7",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_0f2a9797f8b378": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-183c1fa3-9a43-4e7c-9b11-283e38a0448a",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_108b14c8e51f04": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-8d1b2826-8be6-4930-acde-b766d3a3af98",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_193cd87bcf2962": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-10dce5ab-584a-469a-8e6a-cfe2222b069f",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_1ce0d18de3edee": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-d23d7eda-a893-49eb-873d-17235c142aa3",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_21059ba31c8664": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-9c9440bb-233b-4d37-8710-265b54a73f09",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_2ffbb36544ffef": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-6ff3ac92-de51-49b1-8a05-eb1d787fa911",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_35d85e850029fe": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a5d4d1e3-4a45-4ef3-ab7c-bbad59dd3453",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_3791449655ef1f": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-e32a4cdc-2a4f-4bd2-8c20-72632fd338be",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_3c8bd254fb4280": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-086592c1-d6f2-407c-9ed2-9938dfcb6a34",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_4e16324aadc034": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-7a6eda4e-7cfe-4b24-b8e0-2ee0421973a9",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_5847687419964c": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a18ff399-76ed-4dfc-ac5a-0c4a203b8fea",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_5925af3539d86c": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-cd611fe0-936d-4835-8e0f-a46f7bb6743b",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_607ff73a86bf76": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-41d3ff95-de56-4d2a-88ed-25b99e43ee22",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_629d8465749b48": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-165b4beb-51cb-4e5e-b9ac-a8d04e279081",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_66e43255e8e8fb": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-30aff10e-6439-484a-b84f-42a097ffb304",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_68e62b86fb502c": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-7cafb1e1-d26e-4ebd-89ed-5faeb654cee8",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_6d3c275bd8cfd7": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-28c08b20-3ac1-4ab1-917a-d794f503fa30",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_75e12660828b74": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-35ced952-fedb-4804-8afc-b5714834bba1",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_75f77110d4aa8d": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-088826ed-c34c-49ce-bddf-7273534e3a2d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_799c3d5aed22b3": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-0e3afa9a-d552-4b11-9f86-b254c2ea3d44",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_8d63582d0acaf2": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-b5de0a8d-f531-4955-8e9e-3cba51ca5b94",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_96ab3c96c105ec": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-3041b39b-577f-496d-8f55-aa30b1477b8b",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_99c538c0709319": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-c221aac4-38ef-4dfb-a699-a8f6241e8c5c",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_9d45e7b09d1425": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-ab2072b2-08db-4541-bfe6-5b96a1c6251e",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_9fc35ca25e9c57": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-7f908e86-2e3f-447d-a1f6-6b6976ff83e3",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_a69c95e6109fe2": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-4ad85ade-34ea-49fa-bb13-b021ccd8fe9f",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_a720f2f1687654": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a3e08014-805d-4218-99bc-c99cca51cb0f",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_af1ccad40fadce": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-39092b62-9c44-4e8a-ab7d-b8223c5e1b13",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_b4f8a1e9b977aa": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-7b5f8c76-efd2-4b45-97cb-f6290b694b1c",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_b638cab0dcddaf": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-23ae9062-9854-4181-97e0-c505791e5a2d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_b9566b9a61334b": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a72314b7-295e-4c13-b283-0cd55c583cb9",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_ba98defc2769d9": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-1e51cc6c-e27f-4f1f-9633-47cfa8feab71",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_c0b4ba6d29316d": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-6140ef4d-2728-4e93-940d-d42c43b41e9b",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_c3d2df35d1ab29": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-538de87d-a20d-4e23-817c-95edc54bd134",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_c6481a02eca7e3": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-51030da3-9930-4eb6-9073-df9f16c9e5eb",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_c6508aa8e0b678": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-840b8234-fd5f-49dc-b042-147fe61365dc",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_c77e6d0e689053": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-1bf01d10-f922-4d8c-aadc-b7ddbbb296f8",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_c9efe75cdb6347": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a421853a-864c-48c4-ae4c-58fc42255a4d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_cc6f094b8d3c92": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a0cd6198-edc8-487d-9bdc-e905597e4a1f",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_ccea060f13d795": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-105540e2-182b-487a-9f0c-a221fa23aeaf",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_cfd012c03ded0a": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-8d0eb2fb-351b-4821-88cb-9ac3d4c4d5e3",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_d1599e05e2ea5f": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-c3470b02-a481-4d25-8718-4f787f5ce47e",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_d56d273778037f": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-002c2dff-bd35-4249-a14c-7c475729499e",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_da12076690b57b": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-57e6c964-0adb-4444-acea-2de5f5f26ec7",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_e5398aa368646d": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-45657df8-f52e-4a9a-9942-86d9a6b5144d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_e73be0c61998fc": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a4491fd3-cc63-43e5-97c9-c2f7b1da6d67",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_ebc4bbffd3f2e4": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-ea40023f-a2ab-4185-9535-fcc227ec2a80",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_ec8b80b112cf1d": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-14e0c1b5-b389-4499-8ed9-758f9db37dad",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_ef578cbdad02b2": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-5bf814f5-672e-417f-b6ee-1af5b8da9bb8",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_f1d043c8267df0": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-2ce42c79-3120-4905-ae53-a67e598fd509",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_f311aa7987824c": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-7e7b809b-8c71-4ce2-9f32-8cfd9cd9f9b6",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_f5c6a35cf583c1": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-d296b729-eb88-4940-b24a-8397e04abc8b",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_f670bf4f1a66d2": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-3d829984-b2e0-4f2e-8535-6b5679076c41",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_f7587069eee33b": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-e16c8ded-9621-488a-876e-c4a4bf928bf1",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_fe3d096c543e55": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-4cbaa421-2656-4609-a503-4d9930d6c36d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {
+    "examples/01_communicators/01_multiple_devices_single_process/main.cc": [
+      {
+        "hash": "h_82948378cfbeda",
+        "line_ranges": [
+          {
+            "Single": 130
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 130
+          }
+        ],
+        "operations": []
+      }
+    ],
+    "src/collectives.cc": [
+      {
+        "hash": "s_607ff73a86bf76::t_1093479091f568",
+        "line_ranges": [
+          {
+            "Single": 110
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 110
+          }
+        ],
+        "operations": []
+      }
+    ],
+    "src/misc/ibvsymbols.cc": [
+      {
+        "hash": "h_82948378cfbeda",
+        "line_ranges": [
+          {
+            "Single": 29
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 29
+          }
+        ],
+        "operations": []
+      }
+    ],
+    "src/misc/ibvwrap.cc": [
+      {
+        "hash": "h_82948378cfbeda",
+        "line_ranges": [
+          {
+            "Single": 24
+          },
+          {
+            "Single": 34
+          },
+          {
+            "Single": 87
+          },
+          {
+            "Single": 90
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 24
+          },
+          {
+            "Single": 87
+          }
+        ],
+        "operations": []
+      }
+    ],
+    "src/misc/socket.cc": [
+      {
+        "hash": "s_cc6f094b8d3c92::t_8a927340df5596",
+        "line_ranges": [
+          {
+            "Single": 140
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 140
+          }
+        ],
+        "operations": []
+      },
+      {
+        "hash": "s_21059ba31c8664::t_48219cef3dde26",
+        "line_ranges": [
+          {
+            "Single": 366
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 366
+          }
+        ],
+        "operations": []
+      },
+      {
+        "hash": "s_75f77110d4aa8d::t_b81515fa95f3cb",
+        "line_ranges": [
+          {
+            "Single": 156
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 156
+          }
+        ],
+        "operations": []
+      }
+    ],
+    "src/misc/utils.cc": [
+      {
+        "hash": "s_c3d2df35d1ab29::t_c3539903ee8bf8",
+        "line_ranges": [
+          {
+            "Single": 149
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 149
+          }
+        ],
+        "operations": []
+      }
+    ],
+    "src/transport/net_ib.cc": [
+      {
+        "hash": "s_08ebb0ac827d5b::t_8536f17e1e6ed6",
+        "line_ranges": [
+          {
+            "Range": [
+              2205,
+              2221
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a799f057708d63640bd8255",
+            "tool_type": "agent",
+            "tool_id": "Edit",
+            "line_ranges": [
+              {
+                "Range": [
+                  2205,
+                  2221
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "hash": "s_108b14c8e51f04::t_9a2c611f7ca735",
+        "line_ranges": [
+          {
+            "Single": 756
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 756
+          }
+        ],
+        "operations": []
+      },
+      {
+        "hash": "h_82948378cfbeda",
+        "line_ranges": [
+          {
+            "Single": 217
+          },
+          {
+            "Single": 1155
+          },
+          {
+            "Single": 1174
+          },
+          {
+            "Single": 1927
+          },
+          {
+            "Single": 1936
+          },
+          {
+            "Single": 2077
+          },
+          {
+            "Single": 2084
+          },
+          {
+            "Single": 2092
+          },
+          {
+            "Single": 2238
+          },
+          {
+            "Single": 2245
+          },
+          {
+            "Range": [
+              2262,
+              2263
+            ]
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 217
+          },
+          {
+            "Single": 1174
+          },
+          {
+            "Range": [
+              2262,
+              2263
+            ]
+          }
+        ],
+        "operations": []
+      },
+      {
+        "hash": "s_a69c95e6109fe2::t_13fabb16248f63",
+        "line_ranges": [
+          {
+            "Single": 2088
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 2088
+          }
+        ],
+        "operations": []
+      },
+      {
+        "hash": "s_af1ccad40fadce::t_05de76eb892d96",
+        "line_ranges": [
+          {
+            "Single": 2139
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 2139
+          }
+        ],
+        "operations": []
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_08ebb0ac827d5b": {
+      "tool": "trae",
+      "conversation_id": "6a75a1ce7708d63640bd7f40",
+      "session_id": "6a75a1ce7708d63640bd7f40",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_08ebb0ac827d5b::t_2b0ce643ee3b3d": {
+      "tool": "trae",
+      "conversation_id": "6a75a1ce7708d63640bd7f40",
+      "session_id": "6a75a1ce7708d63640bd7f40",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_08ebb0ac827d5b::t_4baa67eeb94b49": {
+      "tool": "trae",
+      "conversation_id": "6a75a1ce7708d63640bd7f40",
+      "session_id": "6a75a1ce7708d63640bd7f40",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_08ebb0ac827d5b::t_8536f17e1e6ed6": {
+      "tool": "trae",
+      "conversation_id": "6a75a1ce7708d63640bd7f40",
+      "session_id": "6a75a1ce7708d63640bd7f40",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
