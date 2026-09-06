@@ -14,14 +14,16 @@
 
 // Used to pass NCCL call information between functions
 struct ncclInfo {
-  ncclFunc_t coll;
-  const char* opName;
+  ncclFunc_t coll;/** 操作符类型 */
+  const char* opName;/** 操作符名称 */
   // NCCL Coll Args
-  const void* sendbuff;
-  void* recvbuff;
-  size_t count;
+  const void* sendbuff;/** 发送数据指针 */
+  void* recvbuff;/** 接收数据指针 */
+  size_t count;/** 数据数量 */
+  /** 数据类型 */
   ncclDataType_t datatype;
   ncclRedOp_t op;
+  /** 对端gpu编号（仅在点对点操作中有效） */
   int root; // peer for p2p operations
   ncclComm_t comm;
   cudaStream_t stream;

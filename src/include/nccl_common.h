@@ -69,7 +69,7 @@ typedef enum {
   ncclFuncScatter = 9,
   ncclFuncGather = 10,
   ncclNumFuncs = 11
-} ncclFunc_t;
+} ncclFunc_t;/** 操作符类型 */
 
 
 #endif

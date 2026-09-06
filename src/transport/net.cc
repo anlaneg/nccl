@@ -154,10 +154,11 @@ struct netRegInfo {
 static ncclResult_t canConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
   *ret = 1;
   if (info1->hostHash == info2->hostHash) {
+    /**在同一节点内，检查是否禁用了内节点网络*/
     // If on the same host, check intra-node net is not disabled.
     NCCLCHECK(ncclTopoCheckNet(comm->topo, info1->rank, info2->rank, ret));
   }
-  return ncclSuccess;
+  return ncclSuccess;/**跨节点通信，返回成功 */
 }
 
 NCCL_PARAM(NetSharedBuffers, "NET_SHARED_BUFFERS", -2);
@@ -1864,6 +1865,7 @@ static ncclResult_t recvProxyDeregBuffer(struct ncclProxyConnection* connection,
   return ncclSuccess;
 }
 
+/**提供跨节点通信 */
 struct ncclTransport netTransport = {
   "NET",
   canConnect,

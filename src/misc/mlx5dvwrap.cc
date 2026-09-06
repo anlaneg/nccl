@@ -20,6 +20,7 @@ static std::once_flag initOnceFlag;
 static ncclResult_t initResult;
 struct ncclMlx5dvSymbols mlx5dvSymbols;
 
+/*初始化mlx5dvSymbols,拿到mlx5dv的api符号指针*/
 ncclResult_t wrap_mlx5dv_symbols(void) {
   std::call_once(initOnceFlag,
                [](){ initResult = buildMlx5dvSymbols(&mlx5dvSymbols); });

@@ -15,7 +15,7 @@
 #include "nccl.h"
 
 #ifdef PROFAPI
-#define NCCL_API(ret, func, args...)        \
+#define NCCL_API(ret/*返回值类型 */, func/*函数名*/, args/*参数类型及形参名称列表 */...)        \
     extern "C"                              \
     __attribute__ ((visibility("default"))) \
     __attribute__ ((alias(#func)))          \

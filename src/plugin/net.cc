@@ -54,6 +54,7 @@ typedef enum ncclNetPluginState {
 
 #define MAX_STR_LEN 255
 typedef struct netPluginLib {
+  /**插件库的名称 */
   char name[MAX_STR_LEN];                       // Name of the plugin library
   void* dlHandle;                               // Handle to the plugin library
   ncclNet_t* ncclNet;                           // Pointer to the ncclNet_t structure
@@ -76,6 +77,7 @@ netPluginLib_t netPluginLibs[NCCL_NET_MAX_PLUGINS] = { 0 };
 static std::mutex netPluginMutex;
 static std::once_flag initPluginLibsOnceFlag;
 
+/**卸载插件 */
 static ncclResult_t ncclNetPluginUnload(netPluginLib_t* pluginLib) {
   if ((pluginLib->dlHandle) && ((pluginLib->ncclNetPluginRefCount) == 0)) {
     INFO(NCCL_INIT|NCCL_NET, "Unloading plugin %s", pluginLib->name);
@@ -89,8 +91,9 @@ static ncclResult_t ncclNetPluginUnload(netPluginLib_t* pluginLib) {
   return ncclSuccess;
 }
 
+/**加载插件 */
 static ncclResult_t ncclNetPluginLoad(netPluginLib_t* pluginLib) {
-  pluginLib->dlHandle = ncclOpenNetPluginLib(pluginLib->name);
+  pluginLib->dlHandle = ncclOpenNetPluginLib(pluginLib->name);/**打开插件库 */
 
   if (pluginLib->dlHandle == nullptr) goto fail;
   // load ncclNet
@@ -169,6 +172,7 @@ ncclResult_t ncclNetCheckDeviceVersion(struct ncclComm* comm, ncclNet_t* net, in
   return ncclSuccess;
 }
 
+/**初始化网络插件 */
 static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* pluginLib) {
   int ndev;
   // Init must be called for each new comm to set the right context
@@ -232,10 +236,11 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ncclNetPluginAssignToComm(struct ncclComm* comm, int pluginIndex, bool* isAssigned) {
+static ncclResult_t ncclNetPluginAssignToComm(struct ncclComm* comm, int pluginIndex/**要使用的插件索引 */, bool* isAssigned) {
   if (ncclSuccess != ncclNetCheckDeviceVersion(comm, netPluginLibs[pluginIndex].ncclNet, 0)) goto fail;
 
   if (netPluginLibs[pluginIndex].ncclNetPluginState >= ncclNetPluginStateEnabled) {
+    /*设置ncclNet*/
     comm->ncclNet = netPluginLibs[pluginIndex].ncclNet;
     comm->ncclNetVer = netPluginLibs[pluginIndex].ncclNetVer;
     comm->netPluginIndex = pluginIndex;
@@ -279,7 +284,7 @@ static ncclResult_t ncclNetPluginDisableOtherExternal(int pluginIndex) {
 
 static void initPluginLibsOnceFunc() {
   char* netPluginName = nullptr;
-  const char* defaultNetPlugin = "libnccl-net.so";
+  const char* defaultNetPlugin = "libnccl-net.so";/**默认网络插件 */
   const char* envNetPlugin = nullptr;
   char* envNetPluginList = nullptr;
   char* savePtr = nullptr;
@@ -293,7 +298,7 @@ static void initPluginLibsOnceFunc() {
       envNetPlugin = "";
     envNetPluginList = strdup(envNetPlugin);
     // Iterate over list until the list is empty
-    netPluginName = strtok_r(envNetPluginList, ",", &savePtr);
+    netPluginName = strtok_r(envNetPluginList, ",", &savePtr);/**环境变量指定的网络插件是一组逗号分隔的列表 */
     while(netPluginName) {
       // We have 2 internal plugins (ib and socket)
       // So, we can have at most( NCCL_NET_MAX_PLUGINS - (NCCL_NET_NUM_INTERNAL_PLUGINS)) in the NCCL_NET_PLUGIN list
@@ -306,8 +311,9 @@ static void initPluginLibsOnceFunc() {
         netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
         netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
         strcpy(netPluginLibs[pluginCounter].name, netPluginName);
-        pluginCounter++;
+        pluginCounter++;/**占用这个counter */
       } else {
+        /**插件名称过长，忽略 */
         INFO(NCCL_NET|NCCL_ENV,"NCCL_NET_PLUGIN list contains a plugin name %s longer than %d characters, ignoring it.", netPluginName, MAX_STR_LEN);
       }
       netPluginName = strtok_r(nullptr, ",", &savePtr);
@@ -315,13 +321,14 @@ static void initPluginLibsOnceFunc() {
     if (envNetPluginList) free(envNetPluginList);
   } else {
     // Add default net plugin
+    /**无环境变量插件，使用默认网络插件 */
     netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
     netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
     strcpy(netPluginLibs[pluginCounter++].name, defaultNetPlugin);
   }
 
   // Add 2 internal ib and socket plugins
-  netPluginLibs[pluginCounter].ncclNet = &ncclNetIb;
+  netPluginLibs[pluginCounter].ncclNet = &ncclNetIb;/**增加内置ib插件 */
   netPluginLibs[pluginCounter].ncclGin = NULL;
   if (ncclParamGinType() == -1)
     netPluginLibs[pluginCounter].ncclGin = (ncclGin_t *)-1;
@@ -332,7 +339,7 @@ static void initPluginLibsOnceFunc() {
   netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateInitReady;
   netPluginLibs[pluginCounter].ncclGinPluginState = netPluginLibs[pluginCounter].ncclGin ? ncclNetPluginStateInitReady : ncclNetPluginStateLoadFailed;
   ++pluginCounter;
-  netPluginLibs[pluginCounter].ncclNet = &ncclNetSocket;
+  netPluginLibs[pluginCounter].ncclNet = &ncclNetSocket;/**增加内置socket插件 */
   netPluginLibs[pluginCounter++].ncclNetPluginState = ncclNetPluginStateInitReady;
   pluginCount = pluginCounter;
 }
@@ -352,6 +359,7 @@ ncclResult_t ncclNetInit(struct ncclComm* comm) {
   bool ncclNetPluginInitialized = false;
   std::call_once(initPluginLibsOnceFlag, initPluginLibsOnceFunc);
   std::lock_guard<std::mutex> lock(netPluginMutex);
+  /**遍历所有网络插件 */
   for (int pluginIndex = 0; pluginIndex < pluginCount; pluginIndex++) {
     if ((pluginIndex < (pluginCount - NCCL_NET_NUM_INTERNAL_PLUGINS)) && (netPluginLibs[pluginIndex].ncclNetPluginState == ncclNetPluginStateLoadReady)) {
       NCCLCHECK(ncclNetPluginLoad(&netPluginLibs[pluginIndex]));
@@ -359,7 +367,7 @@ ncclResult_t ncclNetInit(struct ncclComm* comm) {
     if ((netPluginLibs[pluginIndex].ncclNetPluginState >= ncclNetPluginStateInitReady)
         && (!comm->config.netName || (strcasecmp(comm->config.netName, netPluginLibs[pluginIndex].ncclNet->name) == 0))) {
       // plugin init must be done by all comms to setup the context, therefore we use ">="
-      NCCLCHECK(ncclNetPluginInit(comm, &netPluginLibs[pluginIndex]));
+      NCCLCHECK(ncclNetPluginInit(comm, &netPluginLibs[pluginIndex]));/**初始化此插件 */
       if (netPluginLibs[pluginIndex].ncclNetPluginState == ncclNetPluginStateEnabled) {
         bool isAssigned = false;
         NCCLCHECK(ncclNetPluginAssignToComm(comm, pluginIndex, &isAssigned));

@@ -12,9 +12,13 @@
 #include "transport.h"
 
 struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
+  /*同一节点内 ,GPU 之间可 P2P 访问显存*/
   &p2pTransport,
+  /**同一节点内,但 两张 GPU 之间不能 P2P (比如跨 CPU socket 且没 P2P 能力) */
   &shmTransport,
+  /*跨节点 通信，通过net plugin选一个具体后端ib verbs,socket,ucx等*/
   &netTransport,
+  /*交换机内做归约 (In-Network Reduction)*/
   &collNetTransport,
   &profilerTransport // Not really used for transport, only to create proxy ops polling on profiler counters.
 };
@@ -29,6 +33,7 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
     struct ncclTransport *transport = ncclTransports[t];
     struct ncclTransportComm* transportComm = type == 1 ? &transport->send : &transport->recv;
     int ret = 0;
+    /**检查是否可以连接 */
     NCCLCHECK(transport->canConnect(&ret, comm, graph, myInfo, peerInfo));
     if (ret) {
       connector->transportComm = transportComm;

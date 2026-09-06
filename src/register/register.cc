@@ -113,6 +113,7 @@ ncclResult_t ncclRegCleanup(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+/** 注册内存 */
 NCCL_API(ncclResult_t, ncclCommRegister, const ncclComm_t comm, void* buff, size_t size, void** handle);
 ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
   if (!ncclParamLocalRegister() || ncclP2pUsesMemcpy()) {

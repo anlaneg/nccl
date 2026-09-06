@@ -25,7 +25,7 @@ inline uint8_t ncclP2pChannelBaseForRound(struct ncclComm* comm, int p2pRound) {
     base = groupDelta*divUp(localSize, NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
     base += localDelta/NCCL_MAX_DEV_WORK_P2P_PER_BATCH;
   } else {
-    base = p2pRound;
+    base = p2pRound;/** 单节点时，每个round对应一个channel base */
   }
   return reverseBits(base, log2Up(comm->p2pnChannels));
 }

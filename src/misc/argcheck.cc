@@ -27,6 +27,7 @@ ncclResult_t CudaPtrCheck(const void* pointer, struct ncclComm* comm, const char
 
 ncclResult_t PtrCheck(void* ptr, const char* opname, const char* ptrname) {
   if (ptr == NULL) {
+    /**检查指针是否为空，若为空则报错 */
     WARN("%s : %s argument is NULL", opname, ptrname);
     return ncclInvalidArgument;
   }
@@ -35,6 +36,7 @@ ncclResult_t PtrCheck(void* ptr, const char* opname, const char* ptrname) {
 
 ncclResult_t CommCheck(struct ncclComm* comm, const char* opname, const char* ptrname) {
   NCCLCHECK(PtrCheck(comm, opname, ptrname));
+  /**检查comm对象是否被损坏(只检查两端magic是否一致) */
   if (comm->startMagic != NCCL_MAGIC || comm->endMagic != NCCL_MAGIC) {
     WARN("Error: corrupted comm object detected");
     return ncclInvalidArgument;
@@ -49,6 +51,7 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
     return ncclInvalidArgument;
   }
   if (info->datatype < 0 || info->datatype >= ncclNumTypes) {
+    /**检查数据类型是否有效 */
     WARN("%s : invalid type %d", info->opName, info->datatype);
     return ncclInvalidArgument;
   }

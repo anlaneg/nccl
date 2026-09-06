@@ -104,8 +104,10 @@ ncclResult_t ncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
   return ncclEnqueueCheck(&info);
 }
 
+/*声明ncclAllReduce函数 */
 NCCL_API(ncclResult_t, ncclAllReduce, const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream);
+/** ncclAllReduce 函数实现*/
 ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream) {
   NVTX3_FUNC_WITH_PARAMS(AllReduce, NcclNvtxParamsAllReduce,
@@ -113,8 +115,8 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
 
   struct ncclInfo info = { ncclFuncAllReduce, "AllReduce",
     sendbuff, recvbuff, count, datatype, op, 0, comm, stream, /* Args */
-    ALLREDUCE_CHUNKSTEPS, ALLREDUCE_SLICESTEPS };
-  return ncclEnqueueCheck(&info);
+    ALLREDUCE_CHUNKSTEPS, ALLREDUCE_SLICESTEPS };/*利用AllReduce info进行enqueue*/
+  return ncclEnqueueCheck(&info);/**入队处理 */
 }
 
 NCCL_API(ncclResult_t, ncclBroadcast, const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
@@ -189,17 +191,18 @@ ncclResult_t ncclScatter(const void* sendbuff, void* recvbuff, size_t count,
   return ncclEnqueueCheck(&info);
 }
 
-NCCL_API(ncclResult_t, ncclSend, const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
+/**提供send操作 */
+NCCL_API(ncclResult_t, ncclSend, const void* sendbuff/**当前gpu要发送的数据指针 */, size_t count/**发送数据数量 */, ncclDataType_t datatype/**发送数据类型 */, int peer/**目标gpu编号 */,
     ncclComm_t comm, cudaStream_t stream);
 ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream) {
   NVTX3_FUNC_WITH_PARAMS(Send, NcclNvtxParamsSendRecv,
     NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), peer));
 
-  struct ncclInfo info = { ncclFuncSend, "Send",
-    NULL, (void*)sendbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
+  struct ncclInfo info = { ncclFuncSend, "Send"/**指明发送操作 */,
+    NULL/**无接收指针 */, (void*)sendbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
-  return ncclEnqueueCheck(&info);
+  return ncclEnqueueCheck(&info);/**send操作入队处理 */
 }
 
 NCCL_API(ncclResult_t, ncclRecv, void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
@@ -212,5 +215,5 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int
   struct ncclInfo info = { ncclFuncRecv, "Recv",
     NULL, recvbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
-  return ncclEnqueueCheck(&info);
+  return ncclEnqueueCheck(&info);/**recv操作入队处理 */
 }

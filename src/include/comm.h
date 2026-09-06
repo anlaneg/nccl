@@ -376,9 +376,9 @@ struct ncclKernelPlanner {
     struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> recvQueue;
   };
   struct ncclTaskCollSorter collSorter;
-  struct Peer* peers/*[nRanks]*/;
-  int nTasksColl, nTasksP2p;
-  int nTasksP2pSend, nTasksP2pRecv;
+  struct Peer* peers/*[nRanks]*/;/*以gpu编号为索引，记录每个gpu的发送和接收队列 */
+  int nTasksColl, nTasksP2p/**p2p task数目 */;
+  int nTasksP2pSend/**p2p send task数目 */, nTasksP2pRecv/**p2p recv task数目 */;
   bool persistent;
   // The list of user streams aggregated over all tasks present.
   struct ncclCudaStreamList* streams;
@@ -439,7 +439,7 @@ typedef enum ncclGroupTaskType {
 struct ncclCommSymTeams;
 
 struct ncclComm {
-  uint64_t startMagic;
+  uint64_t startMagic;/*起始magic */
   struct ncclMemoryStack memPermanent, memScoped;
   // List of destructors to run when comm is destructed
   struct ncclDestructor* destructorHead;
@@ -478,7 +478,9 @@ struct ncclComm {
   uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect mismatches.
 
   uint64_t commHash;
+  /*当前gpu在communicator中的编号*/
   int rank;    // my rank in the communicator
+  /*communicator中gpu的数目*/
   int nRanks;  // number of GPUs in communicator
   int cudaDev; // my cuda device index
   int nvmlDev; // my nvml device index
@@ -608,11 +610,11 @@ struct ncclComm {
 
   // Next comm in this thread's active ncclGroup[Start|End](). Holds "0x1" when
   // this comm is not yet in a group.
-  struct ncclComm* groupNext[ncclGroupTaskTypeNum];
+  struct ncclComm* groupNext[ncclGroupTaskTypeNum];/** 下一个任务的communicator (按任务类型分组)*/
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;
   int localPersistentRefs; // number of persistent plan-lists capturing this comm
-  struct P2pSchedulePair { int sendRank; int recvRank; } *p2pSchedule;
+  struct P2pSchedulePair { int sendRank/**发给谁 */; int recvRank/**收自谁 */; } *p2pSchedule;
 
   struct ncclKernelPlanner planner;
 
@@ -671,7 +673,7 @@ struct ncclComm {
   struct ncclDevrState devrState; // The symmetric runtime state
   struct ncclSymkState symkState; // The symmetric kernels state (built on previous)
 
-  uint64_t endMagic;
+  uint64_t endMagic;/** 结束magic */
 };
 
 static_assert(offsetof(struct ncclComm, startMagic) == 0, "startMagic must be the first field of ncclComm");

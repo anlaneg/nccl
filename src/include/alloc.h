@@ -131,13 +131,13 @@ static inline ncclResult_t ncclCudaHostFree(void* ptr) {
 template <typename T>
 ncclResult_t ncclCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {
   if (nelem > 0) {
-    T* p = (T*)malloc(nelem*ncclSizeOfT<T>());
+    T* p = (T*)malloc(nelem*ncclSizeOfT<T>());/**申请nelem个T类型的内存 */
     if (p == NULL) {
       WARN("Failed to malloc %ld bytes", nelem*ncclSizeOfT<T>());
       return ncclSystemError;
     }
     //INFO(NCCL_ALLOC, "%s:%d malloc Size %ld pointer %p", filefunc, line, nelem*ncclSizeOfT<T>(), p);
-    memset(p, 0, nelem*ncclSizeOfT<T>());
+    memset(p, 0, nelem*ncclSizeOfT<T>());/**初始化内存为0 */
     *ptr = p;
   } else {
     *ptr = NULL;

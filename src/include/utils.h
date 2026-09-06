@@ -344,11 +344,12 @@ inline void ncclMemoryPoolTakeAll(struct ncclMemoryPool* me, struct ncclMemoryPo
 
 template<typename T, T *T::*next>
 struct ncclIntruQueue {
-  T *head, *tail;
+  T *head/** 队头头指针 */, *tail/** 队尾尾指针 */;
 };
 
 template<typename T, T *T::*next>
 inline void ncclIntruQueueConstruct(ncclIntruQueue<T,next> *me) {
+  /**初始化队列头指针和尾指针为空 */
   me->head = nullptr;
   me->tail = nullptr;
 }
@@ -360,7 +361,7 @@ inline bool ncclIntruQueueEmpty(ncclIntruQueue<T,next> *me) {
 
 template<typename T, T *T::*next>
 inline T* ncclIntruQueueHead(ncclIntruQueue<T,next> *me) {
-  return me->head;
+  return me->head;/** 返回队头头指针 ,只查看，不摘除*/
 }
 
 template<typename T, T *T::*next>
@@ -370,9 +371,9 @@ inline T* ncclIntruQueueTail(ncclIntruQueue<T,next> *me) {
 
 template<typename T, T *T::*next>
 inline void ncclIntruQueueEnqueue(ncclIntruQueue<T,next> *me, T *x) {
-  x->*next = nullptr;
-  (me->head ? me->tail->*next : me->head) = x;
-  me->tail = x;
+  x->*next = nullptr;/** 新节点的next指针设为nullptr */
+  (me->head ? me->tail->*next : me->head) = x;/** 新节点入队时，如果head为空，则置head,否则置tail的next指针为新节点 */
+  me->tail = x;/*更新tail指针*/
 }
 
 template<typename T, T *T::*next>

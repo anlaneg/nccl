@@ -261,6 +261,7 @@ static ncclResult_t initResult;
 static void initOnceFunc() {
   do {
     const char* val = ncclGetEnv("CUDA_LAUNCH_BLOCKING");
+    /**检查环境变量CUDA_LAUNCH_BLOCKING值是否不为空且不为空串，若是则为真，否则为假 */
     ncclCudaLaunchBlocking = val!=nullptr && val[0]!=0 && !(val[0]=='0' && val[1]==0);
   } while (0);
 
@@ -272,6 +273,7 @@ static void initOnceFunc() {
   CUDACHECKGOTO(cudaDriverGetVersion(&driverVersion), ret, error);
   INFO(NCCL_INIT, "cudaDriverVersion %d", driverVersion);
 
+  /*驱动版本过小，报错*/
   if (driverVersion < CUDA_DRIVER_MIN_VERSION) {
     // WARN("CUDA Driver version found is %d. Minimum requirement is %d", driverVersion, CUDA_DRIVER_MIN_VERSION);
     // Silently ignore version check mismatch for backwards compatibility
@@ -307,6 +309,7 @@ error:
   return;
 }
 
+/** 初始化cuda库 */
 ncclResult_t ncclCudaLibraryInit() {
   std::call_once(initOnceFlag, initOnceFunc);
   return initResult;

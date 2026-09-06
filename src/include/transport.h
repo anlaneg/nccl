@@ -103,20 +103,33 @@ struct ncclCollNetSharedRes {
 };
 
 struct ncclTransportComm {
+  /*本地资源分配 + 生成 handshake 材料*/
   ncclResult_t (*setup)(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int channelId, int connIndex);
+  /**连接到远程peer */
   ncclResult_t (*connect)(struct ncclComm* comm, struct ncclConnect*, int nranks, int rank, struct ncclConnector*);
+  /**拆连接,释放 connector 资源 */
   ncclResult_t (*free)(struct ncclConnector*);
+  /**做什么 : 在 proxy 线程 里,一次性建立"跨 comm 共享的资源"。 特点是"每 comm 只调一次,不是每 connection 调一次" 。
+  举例 : net_ib.cc 里,一个 comm 内多个 (self, peer) 连接可能 共享同一个 IB Protection Domain (PD) ;
+  proxySharedInit 就是建这个 PD、共享的 CQ 等。这样后面每个 connection 只需要建自己的 QP,不用重复建 PD。 */
   ncclResult_t (*proxySharedInit)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, int nChannels);
+  /*Proxy 线程侧的连接资源建立*/
   ncclResult_t (*proxySetup)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done);
+  /**Proxy 线程侧的握手完成 */
   ncclResult_t (*proxyConnect)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done);
+  /*Proxy 侧连接销毁*/
   ncclResult_t (*proxyFree)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState);
+  /**Proxy 线程主循环的核心回调*/
   ncclResult_t (*proxyProgress)(struct ncclProxyState* proxyState, struct ncclProxyArgs*);
+  /**用户 buffer 预注册*/
   ncclResult_t (*proxyRegister)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done);
+  /**用户 buffer 取消预注册*/
   ncclResult_t (*proxyDeregister)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, int* done);
 };
 
 struct ncclTransport {
   const char name[8];
+  /**判断两个peer是否可以使用该transport通信 */
   ncclResult_t (*canConnect)(int*, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*);
   struct ncclTransportComm send;
   struct ncclTransportComm recv;

@@ -39,6 +39,7 @@ const char* ncclDatatypeToString(ncclDataType_t type);
 const char* ncclAlgoToString(int algo);
 const char* ncclProtoToString(int proto);
 
+/** 获取数据类型占用内存大小 */
 inline int ncclTypeSize(ncclDataType_t type) {
   switch (type) {
   case ncclInt8:

@@ -6,6 +6,7 @@
 #ifdef NCCL_BUILD_RDMA_CORE
 /* RDMA-core linking mode. Symbols are pointers to linked IB Verbs */
 
+/*设置IB verbs符号指针*/
 #define ASSIGN_SYM(container, symbol, name) container->name= &symbol;
 
 // Passthrough function for ibv_reg_mr macro in verbs.h
@@ -25,6 +26,7 @@ int ibv_internal_query_port(
     return ibv_query_port(context, port_num, port_attr);
 }
 
+/*利用ib的api函数设置IB verbs符号指针*/
 ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   ASSIGN_SYM(ibvSymbols, ibv_get_device_list, ibv_internal_get_device_list);
   ASSIGN_SYM(ibvSymbols, ibv_free_device_list, ibv_internal_free_device_list);

@@ -71,6 +71,7 @@ ncclResult_t wrap_ibv_destroy_qp(struct ibv_qp *qp);
 ncclResult_t wrap_ibv_query_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* supported);
 ncclResult_t wrap_ibv_set_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* supported);
 
+/** 执行qp的发送操作 */
 static inline ncclResult_t wrap_ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad_wr) {
   int ret = qp->context->ops.post_send(qp, wr, bad_wr); /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   if (ret != IBV_SUCCESS) {

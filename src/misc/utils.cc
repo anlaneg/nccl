@@ -133,7 +133,8 @@ uint64_t getPidHash(void) {
   return getHash(pname, strlen(pname));
 }
 
-int parseStringList(const char* string, struct netIf* ifList, int maxList) {
+/**格式：前缀:端口号,前缀:端口号,...,前缀:端口号，解析串填充ifList的prefix和port */
+int parseStringList(const char* string, struct netIf* ifList/**出参，接口列表*/, int maxList/**最大接口数 */) {
   if (!string) return 0;
 
   const char* ptr = string;
@@ -145,18 +146,22 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
     c = *ptr;
     if (c == ':') {
       if (ifC > 0) {
+        /** 遇到':'，将前缀和端口号分离,接口数增加 */
         ifList[ifNum].prefix[ifC] = '\0';
         ifList[ifNum].port = atoi(ptr+1);
         ifNum++; ifC = 0;
       }
+      /** 跳过':'后的所有字符 */
       while (c != ',' && c != '\0') c = *(++ptr);
     } else if (c == ',' || c == '\0') {
       if (ifC > 0) {
+        /** 遇到','或'\0'，将前缀和端口号分离,接口数增加 */
         ifList[ifNum].prefix[ifC] = '\0';
         ifList[ifNum].port = -1;
         ifNum++; ifC = 0;
       }
     } else {
+      /** 其他字符，直接添加到前缀 */
       ifList[ifNum].prefix[ifC] = c;
       ifC++;
     }
@@ -179,7 +184,7 @@ static bool matchPort(const int port1, const int port2) {
 }
 
 
-bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact) {
+bool matchIfList(const char* string/**接口名称*/, int port, struct netIf* ifList, int listSize, bool matchExact) {
   // Make an exception for the case where no user list is defined
   if (listSize == 0) return true;
 

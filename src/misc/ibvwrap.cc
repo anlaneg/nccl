@@ -18,8 +18,10 @@
 
 static std::once_flag initOnceFlag;
 static ncclResult_t initResult;
+/*记录verbs的api符号指针*/
 struct ncclIbvSymbols ibvSymbols;
 
+/*初始化ibvSymbols,拿到ibverbs的api符号指针*/
 ncclResult_t wrap_ibv_symbols(void) {
   std::call_once(initOnceFlag,
                [](){ initResult = buildIbvSymbols(&ibvSymbols); });
@@ -29,6 +31,7 @@ ncclResult_t wrap_ibv_symbols(void) {
 /* CHECK_NOT_NULL: helper macro to check for NULL symbol */
 #define CHECK_NOT_NULL(container, internal_name) \
   if (container.internal_name == NULL) { \
+    /*lib未初始化，导致函数指针为空*/\
      WARN("lib wrapper not initialized."); \
      return ncclInternalError; \
   }
@@ -81,11 +84,13 @@ ncclResult_t wrap_ibv_symbols(void) {
 
 #define IBV_INT_CHECK(container, internal_name, call, error_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
+  /* 调用api函数，检查返回值是否正确*/\
   int ret = container.call; \
   if (ret == error_retval) { \
+    /*调用失败*/\ 
     WARN("Call to " name " failed"); \
     return ncclSystemError; \
-  } \
+  } \ 
   return ncclSuccess;
 
 #define IBV_PASSTHRU(container, internal_name, call) \
@@ -101,20 +106,24 @@ NCCL_PARAM(IbMQpRetryTimeout, "IB_MQP_RETRY_SLEEP_MSEC", 100); // in millisecond
 #define IBV_MQP_RETRY_ERRNO(e)     (IBV_ERR_EQ(e, ETIMEDOUT))
 #define IBV_MQP_RETRY_ERRNO_ALL(e) (ncclParamIbMQpRetryAll() ? (e != 0) : IBV_MQP_RETRY_ERRNO(e))
 
+/*调用ibverbs的fork_init函数*/
 ncclResult_t wrap_ibv_fork_init() {
   IBV_INT_CHECK(ibvSymbols, ibv_internal_fork_init, ibv_internal_fork_init(), -1, "ibv_fork_init");
 }
 
-ncclResult_t wrap_ibv_get_device_list(struct ibv_device ***ret, int *num_devices) {
+/*调用ibverbs的get_device_list函数*/
+ncclResult_t wrap_ibv_get_device_list(struct ibv_device ***ret/*出参，返回设备列表*/, int *num_devices) {
   *ret = ibvSymbols.ibv_internal_get_device_list(num_devices);
   if (*ret == NULL) *num_devices = 0;
   return ncclSuccess;
 }
 
+/*调用ibverbs的free_device_list函数*/
 ncclResult_t wrap_ibv_free_device_list(struct ibv_device **list) {
   IBV_PASSTHRU(ibvSymbols, ibv_internal_free_device_list, ibv_internal_free_device_list(list));
 }
 
+/*调用ibverbs的get_device_name函数*/
 const char *wrap_ibv_get_device_name(struct ibv_device *device) {
   if (ibvSymbols.ibv_internal_get_device_name == NULL) {
     WARN("lib wrapper not initialized.");
@@ -123,26 +132,32 @@ const char *wrap_ibv_get_device_name(struct ibv_device *device) {
   return ibvSymbols.ibv_internal_get_device_name(device);
 }
 
+/*调用ibverbs的open_device函数*/
 ncclResult_t wrap_ibv_open_device(struct ibv_context **ret, struct ibv_device *device) { /*returns 0 on success, -1 on failure*/
   IBV_PTR_CHECK(ibvSymbols, ibv_internal_open_device, ibv_internal_open_device(device), *ret, NULL, "ibv_open_device");
 }
 
+/*调用ibverbs的close_device函数*/
 ncclResult_t wrap_ibv_close_device(struct ibv_context *context) { /*returns 0 on success, -1 on failure*/
   IBV_INT_CHECK(ibvSymbols, ibv_internal_close_device, ibv_internal_close_device(context), -1, "ibv_close_device");
 }
 
+/*调用ibverbs的get_async_event函数*/
 ncclResult_t wrap_ibv_get_async_event(struct ibv_context *context, struct ibv_async_event *event) { /*returns 0 on success, and -1 on error*/
   IBV_INT_CHECK(ibvSymbols, ibv_internal_get_async_event, ibv_internal_get_async_event(context, event), -1, "ibv_get_async_event");
 }
 
+/*调用ibverbs的ack_async_event函数*/
 ncclResult_t wrap_ibv_ack_async_event(struct ibv_async_event *event) {
   IBV_PASSTHRU(ibvSymbols, ibv_internal_ack_async_event, ibv_internal_ack_async_event(event));
 }
 
+/*调用ibverbs的query_device函数*/
 ncclResult_t wrap_ibv_query_device(struct ibv_context *context, struct ibv_device_attr *device_attr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_device, ibv_internal_query_device(context, device_attr), 0, "ibv_query_device");
 }
 
+/*调用ibverbs的query_port函数*/
 ncclResult_t wrap_ibv_query_port(struct ibv_context *context, uint8_t port_num, struct ibv_port_attr *port_attr) {
 #ifndef NCCL_BUILD_RDMA_CORE
   // First try and query the extended port attributes (e.g. active_speed_ex)

@@ -58,15 +58,15 @@ struct ncclGroupJob {
   int groupRefCount;
   bool nonBlockingInit;
   bool joined;
-  struct ncclComm *groupCommHead[ncclGroupTaskTypeNum];
-  struct ncclComm *groupCommPreconnectHead;
+  struct ncclComm *groupCommHead[ncclGroupTaskTypeNum];/**按类型划分的任务链表头（放在此对列的会被并行执行） */
+  struct ncclComm *groupCommPreconnectHead;/*记录preConnect类任务的链表头节点（放在此对列会被并行执行）*/
   ncclResult_t groupError;
   bool abortFlag;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncJobs;
 };
 
 ncclResult_t ncclGroupStartInternal();
-ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo = NULL);
+ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo = NULL/**如果不传参，此值为NULL */);
 ncclResult_t ncclAsyncJobComplete(struct ncclAsyncJob* job);
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -78,7 +78,7 @@ extern __thread struct ncclComm* ncclGroupCommPreconnectHead;
 extern __thread int ncclGroupBlocking;
 
 inline ncclResult_t ncclGroupStartInternal() {
-  ncclGroupDepth++;
+  ncclGroupDepth++;/**增加ncclGroupDepth，表示当前线程进入了一个新的group */
   return ncclSuccess;
 }
 
@@ -126,6 +126,7 @@ inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
 // Add comm to this thread's group needing preconnect
 inline void ncclGroupCommPreconnect(struct ncclComm* comm) {
   if (comm->preconnectNext == reinterpret_cast<struct ncclComm*>(0x1)) {
+    /** 如果当前comm不是已加入的preConnect类任务链表头节点 ，设置为链表头节点 */
     comm->preconnectNext = ncclGroupCommPreconnectHead;
     ncclGroupCommPreconnectHead = comm;
   }

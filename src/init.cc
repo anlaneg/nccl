@@ -374,6 +374,7 @@ ncclResult_t ncclCommEnsureReady(ncclComm_t comm) {
   /* comm must be ready, or error will be reported */
   ncclResult_t ret = ncclSuccess;
   if (__atomic_load_n(comm->abortFlag, __ATOMIC_ACQUIRE)) {
+    /**已中止，需要执行abort操作 */
     ncclGroupJobAbort(comm->groupJob);
   } else {
     NCCLCHECK(ncclCommGetAsyncError(comm, &ret));
@@ -1256,14 +1257,15 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->proxyState = parent->sharedRes->proxyState;
     ncclAtomicRefCountIncrement(&parent->sharedRes->proxyState->refCount);
   } else {
+    /**创建proxy线程与GPU,NIC相互衔接 */
     NCCLCHECKGOTO(ncclProxyCreate(comm), ret, fail);
   }
   NCCLCHECKGOTO(ncclCalloc(&comm->gproxyConn, comm->nRanks), ret, fail);
 
   timers[TIMER_INIT_CONNECT] = clockNano();
   // Build p2p schedule
-  comm->p2pSchedule = ncclMemoryStackAlloc<ncclComm::P2pSchedulePair>(&comm->memPermanent, comm->nRanks);
-  comm->planner.peers = ncclMemoryStackAlloc<ncclKernelPlanner::Peer>(&comm->memPermanent, comm->nRanks);
+  comm->p2pSchedule = ncclMemoryStackAlloc<ncclComm::P2pSchedulePair>(&comm->memPermanent, comm->nRanks);/**申请内存comm->nRanks个P2pSchedulePair结构体 */
+  comm->planner.peers = ncclMemoryStackAlloc<ncclKernelPlanner::Peer>(&comm->memPermanent, comm->nRanks);/**申请内存comm->nRanks个ncclKernelPlanner::Peer结构体 */
   NCCLCHECK(ncclP2pSchedule(comm));
 
   comm->runtimeConn = comm->cuMemSupport && ncclParamRuntimeConnect();
@@ -2061,7 +2063,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
 }
 
 NCCL_API(ncclResult_t, ncclCommInitAll, ncclComm_t* comms, int ndev, const int* devlist);
-ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
+ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev/**gpu数量*/, const int* devlist/**出参，gpu设备编号数组（无重复） */) {
   ncclResult_t ret = ncclSuccess;
   int totalnDev;
   int *gpuFlags = NULL;
@@ -2081,12 +2083,13 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
     goto fail;
   }
 
-  CUDACHECKGOTO(cudaGetDeviceCount(&totalnDev), ret, fail);
+  CUDACHECKGOTO(cudaGetDeviceCount(&totalnDev), ret, fail);/**取设备数 */
   if (devlist) {
     NCCLCHECKGOTO(ncclCalloc(&gpuFlags, totalnDev), ret, fail);
     for (int i = 0; i < ndev; ++i) {
       /* invalid device check. */
       if (devlist[i] < 0 || devlist[i] >= totalnDev) {
+        /*设备编号必须在0到totalnDev-1之间*/
         WARN("Invalid device %d (totalnDev=%d)", devlist[i], totalnDev);
         ret = ncclInvalidArgument;
         goto fail;
@@ -2094,11 +2097,11 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
 
       /* duplicate device check. */
       if (gpuFlags[devlist[i]] != 0) {
-        ret = ncclInvalidUsage;
+        ret = ncclInvalidUsage;/*这个flags当前应为0，说明未被使用（前面刚申请了内存，如为非0，则说明之前devlist中有重复的dev id）*/
         goto fail;
       }
 
-      gpuFlags[devlist[i]] = 1;
+      gpuFlags[devlist[i]] = 1;/**标明使用（目的：验重复用） */
     }
     free(gpuFlags);
     gpuFlags = nullptr;

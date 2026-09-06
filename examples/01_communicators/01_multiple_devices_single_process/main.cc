@@ -127,7 +127,7 @@ int main(int argc, char *argv[]) {
 
     // Query device properties for informational display
     cudaDeviceProp prop;
-    CUDACHECK(cudaGetDeviceProperties(&prop, devices[i]));
+    CUDACHECK(cudaGetDeviceProperties(&prop, devices[i]));/** 获取i号设备属性 */
     printf("  GPU %d: %s (CUDA Device %d)\n", i, prop.name, devices[i]);
     printf("    Compute Capability: %d.%d\n", prop.major, prop.minor);
     printf("    Memory: %.1f GB\n",

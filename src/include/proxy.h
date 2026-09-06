@@ -275,7 +275,7 @@ struct ncclExpectedProxyResponse {
 };
 
 struct ncclProxyAsyncOp {
-  int type;
+  int type;/**操作类型 */
   struct ncclProxyConnection* connection;
   int reqSize, respSize;
   char *reqBuff, *respBuff;
@@ -287,7 +287,7 @@ struct ncclProxyLocalPeer {
   struct ncclSocket sock;
   int tpRank;
   int tpLocalRank;
-  ncclProxyAsyncOp* asyncOps;
+  ncclProxyAsyncOp* asyncOps;/**用于挂异步操作的队列 */
   int asyncOpCounter;
 };
 

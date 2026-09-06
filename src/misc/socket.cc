@@ -115,7 +115,7 @@ static int envSocketFamily(void) {
   int family = -1; // Family selection is not forced, will use first one found
   const char* env = ncclGetEnv("NCCL_SOCKET_FAMILY");
   if (env == NULL)
-    return family;
+    return family;/* 未指定socket family,使用默认值（-1） */
 
   INFO(NCCL_ENV, "NCCL_SOCKET_FAMILY set by environment to %s", env);
 
@@ -132,40 +132,42 @@ static ncclResult_t findInterfaces(const char* prefixList, char* names, union nc
   char line[SOCKET_NAME_MAXLEN+1];
 #endif
   struct netIf userIfs[MAX_IFS];
+  /*支持对结果取反，支持相等匹配*/
   bool searchNot = prefixList && prefixList[0] == '^';
   if (searchNot) prefixList++;
   bool searchExact = prefixList && prefixList[0] == '=';
   if (searchExact) prefixList++;
-  int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);
+  int nUserIfs = parseStringList(prefixList, userIfs/**出参，接口解析列表 */, MAX_IFS);
 
   *found = 0;
   struct ifaddrs *interfaces, *interface;
-  SYSCHECK(getifaddrs(&interfaces), "getifaddrs");
+  SYSCHECK(getifaddrs(&interfaces), "getifaddrs");/**获取接口接口列表 */
   for (interface = interfaces; interface && *found < maxIfs; interface = interface->ifa_next) {
     if (interface->ifa_addr == NULL) continue;
 
     /* We only support IPv4 & IPv6 */
     int family = interface->ifa_addr->sa_family;
     if (family != AF_INET && family != AF_INET6)
-      continue;
+      continue;/** 只支持IPv4和IPv6 */
 
     /* Only consider running interfaces, i.e. UP and physically attached. */
-    if (!(interface->ifa_flags & IFF_RUNNING)) continue;
+    if (!(interface->ifa_flags & IFF_RUNNING)) continue;/** 只考虑运行中的接口 */
 
+    /** 指出发现了哪些接口 */
     TRACE(NCCL_INIT|NCCL_NET,"Found interface %s:%s", interface->ifa_name, ncclSocketToString((union ncclSocketAddress *) interface->ifa_addr, line));
 
     /* Allow the caller to force the socket family type */
     if (sock_family != -1 && family != sock_family)
-      continue;
+      continue;/** 只考虑指定的socket family */
 
     /* We also need to skip IPv6 loopback interfaces */
     if (family == AF_INET6) {
       struct sockaddr_in6* sa = (struct sockaddr_in6*)(interface->ifa_addr);
-      if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr)) continue;
+      if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr)) continue;/** 只考虑非回环接口 */
     }
 
     // check against user specified interfaces
-    if (!(matchIfList(interface->ifa_name, -1, userIfs, nUserIfs, searchExact) ^ searchNot)) {
+    if (!(matchIfList(interface->ifa_name/**接口名称*/, -1, userIfs, nUserIfs, searchExact) ^ searchNot)) {
       continue;
     }
 
@@ -361,9 +363,10 @@ ncclResult_t ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs,
   const char* env = ncclGetEnv("NCCL_SOCKET_IFNAME");
   *nIfs = 0;
   if (env && strlen(env) > 1) {
+    /*使用用户指定的接口名称*/
     INFO(NCCL_ENV, "NCCL_SOCKET_IFNAME set by environment to %s", env);
     // Specified by user : find or fail
-    if (shownIfName++ == 0) INFO(NCCL_NET, "NCCL_SOCKET_IFNAME set to %s", env);
+    if (shownIfName++ == 0) INFO(NCCL_NET, "NCCL_SOCKET_IFNAME set to %s", env);/*打印用户指定的接口名称 */
     NCCLCHECK(findInterfaces(env, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
   } else {
     // Try to automatically pick the right one
