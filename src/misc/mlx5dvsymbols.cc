@@ -24,6 +24,7 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
 // MLX5DV Library versioning
 #define MLX5DV_VERSION "MLX5_1.8"
 
+/*加载libmlx5(即mellanox provider)*/
 ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
   static void* mlx5dvhandle = NULL;
   void* tmp;

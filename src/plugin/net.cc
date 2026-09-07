@@ -36,12 +36,16 @@ extern getNcclCollNet_t getNcclCollNet_v11;
 extern getNcclGin_t getNcclGin_v11;
 NCCL_PARAM(NetPluginRefCount, "NET_PLUGIN_REF_COUNT", 0);
 #define NCCL_NET_VERSION_COUNT 6
+/*有哪些版本（从最高版本开始排列，如果有一个可获得，则退出）*/
 int ncclNetVersion[NCCL_NET_VERSION_COUNT] = {11, 10, 9, 8, 7, 6};
+/*列出不同版本的ncclnet获取函数*/
 getNcclNet_t* getNcclNet[NCCL_NET_VERSION_COUNT] = {getNcclNet_v11, getNcclNet_v10, getNcclNet_v9, getNcclNet_v8, getNcclNet_v7, getNcclNet_v6};
 getNcclCollNet_t* getNcclCollNet[NCCL_NET_VERSION_COUNT] = {getNcclCollNet_v11, getNcclCollNet_v10, getNcclCollNet_v9, getNcclCollNet_v8, getNcclCollNet_v7, getNcclCollNet_v6};
 #define NCCL_GIN_VERSION_COUNT 1
+/*列出不同版本的gin获取函数*/
 getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v11};
 
+/*内置插件数目*/
 #define NCCL_NET_NUM_INTERNAL_PLUGINS 2
 
 typedef enum ncclNetPluginState {
@@ -56,17 +60,27 @@ typedef enum ncclNetPluginState {
 typedef struct netPluginLib {
   /**插件库的名称 */
   char name[MAX_STR_LEN];                       // Name of the plugin library
+  /*插件库对应的so handle*/
   void* dlHandle;                               // Handle to the plugin library
+  /*此版本对应的ncclNet结构体指针，用于指出api函数指针*/
   ncclNet_t* ncclNet;                           // Pointer to the ncclNet_t structure
   int ncclNetVer;                               // Version of the nccl net plugin
+  /*此版本对应的collnet结构体指针，用于指明api函数*/
   ncclCollNet_t* ncclCollNet;                   // Pointer to the ncclCollNet_t structure
+  /*netplugin的加载状态(load,init,enable按顺序三种状态）*/
   ncclNetPluginState_t ncclNetPluginState;      // State of the nccl net plugin
+  /*collnet plugin的加载状态*/
   ncclNetPluginState_t ncclCollNetPluginState;  // State of the nccl coll net plugin
+  /*此版本对应的gin结构体指针，用于指明api函数*/
   ncclGin_t* ncclGin;                           // Pointer to the ncclGin_t structure
+  /*gin插件的加载状态*/
   ncclNetPluginState_t ncclGinPluginState;      // State of the nccl gin plugin
   int ncclNetPluginRefCount;                    // Reference count for the nccl net plugin
+  /*指明网络设备数目*/
   int netPhysDevs;                              // ncclNet - number of physical devices
+  /*指明虚拟网络设备数目*/
   int netVirtDevs;                              // ncclNet - number of virtual devices
+  /*指明collnet物理设备数目*/
   int collNetPhysDevs;                          // ncclCollNet -  number of physical devices
   int collNetVirtDevs;                          // ncclCollNet -  number of virtual devices
 } netPluginLib_t;
@@ -91,20 +105,23 @@ static ncclResult_t ncclNetPluginUnload(netPluginLib_t* pluginLib) {
   return ncclSuccess;
 }
 
-/**加载插件 */
+/**加载插件（net插件，collnet插件，gin插件） */
 static ncclResult_t ncclNetPluginLoad(netPluginLib_t* pluginLib) {
   pluginLib->dlHandle = ncclOpenNetPluginLib(pluginLib->name);/**打开插件库 */
 
-  if (pluginLib->dlHandle == nullptr) goto fail;
+  if (pluginLib->dlHandle == nullptr) goto fail;/*打开插件失败*/
   // load ncclNet
   for (int i = 0; i < NCCL_NET_VERSION_COUNT; i++) {
+	/*设置尝试的net版本号*/
     pluginLib->ncclNetVer = ncclNetVersion[i];
+    /*i号版本的处理函数传入lib,用于获取此版本对应的函数api结构体*/
     pluginLib->ncclNet = getNcclNet[i](pluginLib->dlHandle);
-    if (pluginLib->ncclNet) break;
+    if (pluginLib->ncclNet) break;/*已取得退出，尝试结束*/
   }
 
   // if we fail to find a net, exit
   if (pluginLib->ncclNet == nullptr) {
+	  /*加载失败，报错*/
     INFO(NCCL_INIT|NCCL_NET, "External network plugin %s is unsupported",
          (ncclPluginLibPaths[ncclPluginTypeNet] ? ncclPluginLibPaths[ncclPluginTypeNet] : pluginLib->name));
     goto fail;
@@ -114,22 +131,26 @@ static ncclResult_t ncclNetPluginLoad(netPluginLib_t* pluginLib) {
 
   // load ncclCollNet
   for (int i = 0; i < NCCL_NET_VERSION_COUNT; i++) {
+	  /*按版本优先级加载nccl collnet*/
     pluginLib->ncclCollNet = getNcclCollNet[i](pluginLib->dlHandle);
-    if (pluginLib->ncclCollNet) break;
+    if (pluginLib->ncclCollNet) break;/*此版本加载成功，跳出*/
   }
 
   if (pluginLib->ncclCollNet == nullptr)
+	  /*加载失败*/
     pluginLib->ncclCollNetPluginState = ncclNetPluginStateLoadFailed;
   else
     pluginLib->ncclCollNetPluginState = ncclNetPluginStateInitReady;
 
   // load gin
   for (int i = 0; i < NCCL_GIN_VERSION_COUNT; i++) {
+	  /*按优先级加载gin*/
     pluginLib->ncclGin = getNcclGin[i](pluginLib->dlHandle);
-    if (pluginLib->ncclGin) break;
+    if (pluginLib->ncclGin) break;/*此版本加载成功*/
   }
 
   if (pluginLib->ncclGin == nullptr)
+	  /*加载gin失败*/
     pluginLib->ncclGinPluginState = ncclNetPluginStateLoadFailed;
   else
     pluginLib->ncclGinPluginState = ncclNetPluginStateInitReady;
@@ -179,11 +200,13 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
   if (pluginLib->ncclNetPluginState >= ncclNetPluginStateInitReady && pluginLib->ncclNet) {
     ncclNetCommConfig_t commConfig = {};
     commConfig.trafficClass = comm->config.trafficClass == NCCL_CONFIG_UNDEF_INT ? NCCL_NET_TRAFFIC_CLASS_UNDEF : comm->config.trafficClass;
+    /*执行网络初始化*/
     if (pluginLib->ncclNet->init(&comm->netContext, comm->commHash, &commConfig, ncclDebugLog, ncclProfilerCallback) != ncclSuccess) goto fail;
   }
   // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->ncclNetPluginState == ncclNetPluginStateInitReady && pluginLib->ncclNet) {
-    if (pluginLib->ncclNet->devices(&ndev) != ncclSuccess || ndev <= 0) goto fail;
+    /*取网络设备数目*/
+	  if (pluginLib->ncclNet->devices(&ndev) != ncclSuccess || ndev <= 0) goto fail;
     pluginLib->netPhysDevs = ndev;
     pluginLib->netVirtDevs = NCCL_UNDEF_DEV_COUNT;
   }
@@ -192,6 +215,7 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
 
   // Init must be called for each new comm to set the right context
   if (pluginLib->ncclCollNetPluginState >= ncclNetPluginStateInitReady && pluginLib->ncclCollNet) {
+	  /*网络插件有collnet的执行初始化（对ib而言没有）*/
     if (pluginLib->ncclCollNet->init(&comm->collNetContext, comm->commHash, ncclDebugLog) != ncclSuccess) pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
   }
   // Detection of the devices is only done when the plugin is being initialized the first time
@@ -207,6 +231,7 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
   if (pluginLib->ncclGinPluginState == ncclNetPluginStateInitReady && pluginLib->ncclGin) {
     if ((ncclParamGinType() == -1) && (pluginLib->ncclGin == (ncclGin_t *)-1)) {
       void* throwAwayContext = nullptr;
+      /*采用ibgdaki插件*/
       if (ncclGinIbGdaki.init(&throwAwayContext, comm->commHash, ncclDebugLog) == ncclSuccess) {
         if (ncclGinIbGdaki.devices(&ndev) == ncclSuccess && ndev > 0) {
           pluginLib->ncclGin = &ncclGinIbGdaki;
@@ -214,12 +239,14 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
         ncclGinIbGdaki.finalize(throwAwayContext);
       }
       else {
+    	  /*未初始化成功的，采用ginib proxy*/
         pluginLib->ncclGin = &ncclGinIbProxy;
       }
     }
     if (pluginLib->ncclGin->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess) pluginLib->ncclGinPluginState = ncclNetPluginStateDisabled;
     else if (pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) pluginLib->ncclGinPluginState = ncclNetPluginStateDisabled;
     else {
+    	/*gin插件置为enable*/
       pluginLib->ncclGinPluginState = ncclNetPluginStateEnabled;
     }
   }
@@ -236,29 +263,30 @@ fail:
   goto exit;
 }
 
+/*为comm设置使能的ncclNet,ncclCollNet,ncclGin*/
 static ncclResult_t ncclNetPluginAssignToComm(struct ncclComm* comm, int pluginIndex/**要使用的插件索引 */, bool* isAssigned) {
   if (ncclSuccess != ncclNetCheckDeviceVersion(comm, netPluginLibs[pluginIndex].ncclNet, 0)) goto fail;
 
   if (netPluginLibs[pluginIndex].ncclNetPluginState >= ncclNetPluginStateEnabled) {
-    /*设置ncclNet*/
+    /*此网络插件已被使能，设置ncclNet（比如ib情况下对应的即为ncclNetIb）*/
     comm->ncclNet = netPluginLibs[pluginIndex].ncclNet;
     comm->ncclNetVer = netPluginLibs[pluginIndex].ncclNetVer;
     comm->netPluginIndex = pluginIndex;
-    netPluginLibs[pluginIndex].ncclNetPluginRefCount++;
-    *isAssigned = true;
+    netPluginLibs[pluginIndex].ncclNetPluginRefCount++;/*引用计数增大*/
+    *isAssigned = true;/*assigned成功*/
     INFO(NCCL_INIT|NCCL_NET, "Assigned NET plugin %s to comm", netPluginLibs[pluginIndex].ncclNet->name);
     if (netPluginLibs[pluginIndex].ncclCollNetPluginState >= ncclNetPluginStateEnabled) {
-      comm->ncclCollNet = netPluginLibs[pluginIndex].ncclCollNet;
+      comm->ncclCollNet = netPluginLibs[pluginIndex].ncclCollNet;/*有collnet的设置*/
     }
     if (netPluginLibs[pluginIndex].ncclGinPluginState >= ncclNetPluginStateEnabled) {
       INFO(NCCL_INIT|NCCL_NET, "Assigned GIN plugin %s to comm", netPluginLibs[pluginIndex].ncclGin->name);
-      comm->sharedRes->ginState.ncclGin = netPluginLibs[pluginIndex].ncclGin;
+      comm->sharedRes->ginState.ncclGin = netPluginLibs[pluginIndex].ncclGin;/*有gin的设置*/
     }
   }
 exit:
   return ncclSuccess;
 fail:
-  *isAssigned = false;
+  *isAssigned = false;/*assigned失败*/
   netPluginLibs[pluginIndex].ncclNetPluginState = ncclNetPluginStateEnabled;
   netPluginLibs[pluginIndex].ncclCollNetPluginState = ncclNetPluginStateEnabled;
   netPluginLibs[pluginIndex].ncclGinPluginState = ncclNetPluginStateEnabled;
@@ -282,20 +310,24 @@ static ncclResult_t ncclNetPluginDisableOtherExternal(int pluginIndex) {
   return ncclSuccess;
 }
 
+/*通过环境变量初始化网络插件数组(如没有指定环境变量，则使用默认插件名称）
+ * ，记录在netPluginLibs数组中，并增加内置的ib网络插件，socket网络插件*/
 static void initPluginLibsOnceFunc() {
   char* netPluginName = nullptr;
-  const char* defaultNetPlugin = "libnccl-net.so";/**默认网络插件 */
+  const char* defaultNetPlugin = "libnccl-net.so";/**默认网络插件名称 */
   const char* envNetPlugin = nullptr;
   char* envNetPluginList = nullptr;
   char* savePtr = nullptr;
   int pluginCounter = 0;
 
+  /*先初始化为0*/
   memset(netPluginLibs, 0, NCCL_NET_MAX_PLUGINS * sizeof(netPluginLib_t));
   envNetPlugin = ncclGetEnv("NCCL_NET_PLUGIN");
   if (envNetPlugin) {
+	  /*通过环境变量设置的net插件*/
     INFO(NCCL_ENV|NCCL_NET, "NCCL_NET_PLUGIN set by environment to %s", envNetPlugin);
     if (strcasecmp(envNetPlugin, "none") == 0)
-      envNetPlugin = "";
+      envNetPlugin = "";/*如果为none则认为未设置*/
     envNetPluginList = strdup(envNetPlugin);
     // Iterate over list until the list is empty
     netPluginName = strtok_r(envNetPluginList, ",", &savePtr);/**环境变量指定的网络插件是一组逗号分隔的列表 */
@@ -303,14 +335,15 @@ static void initPluginLibsOnceFunc() {
       // We have 2 internal plugins (ib and socket)
       // So, we can have at most( NCCL_NET_MAX_PLUGINS - (NCCL_NET_NUM_INTERNAL_PLUGINS)) in the NCCL_NET_PLUGIN list
       if (pluginCounter >= (NCCL_NET_MAX_PLUGINS - (NCCL_NET_NUM_INTERNAL_PLUGINS))) {
+    	  /*插件数目指定的过多*/
         INFO(NCCL_NET|NCCL_ENV,"NCCL_NET_PLUGIN list contains more than %d plugins, ignoring the rest", (NCCL_NET_MAX_PLUGINS - (NCCL_NET_NUM_INTERNAL_PLUGINS + 1)));
         break;
       }
       // need to leave space for the name + "\n"
       if((strlen(netPluginName)+1) <= MAX_STR_LEN) {
-        netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
-        netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
-        strcpy(netPluginLibs[pluginCounter].name, netPluginName);
+        netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;/*先loadready*/
+        netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();/*通过环境取引用计数*/
+        strcpy(netPluginLibs[pluginCounter].name, netPluginName);/*指定插件名称*/
         pluginCounter++;/**占用这个counter */
       } else {
         /**插件名称过长，忽略 */
@@ -324,24 +357,26 @@ static void initPluginLibsOnceFunc() {
     /**无环境变量插件，使用默认网络插件 */
     netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
     netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
-    strcpy(netPluginLibs[pluginCounter++].name, defaultNetPlugin);
+    strcpy(netPluginLibs[pluginCounter++].name, defaultNetPlugin);/*指定默认名称*/
   }
 
   // Add 2 internal ib and socket plugins
-  netPluginLibs[pluginCounter].ncclNet = &ncclNetIb;/**增加内置ib插件 */
-  netPluginLibs[pluginCounter].ncclGin = NULL;
+  netPluginLibs[pluginCounter].ncclNet = &ncclNetIb;/**增加内置ib网络插件（这种没有指定name) */
+  netPluginLibs[pluginCounter].ncclGin = NULL;/*ib插件gin初始为空*/
+  /*按gintype环境变量来决定gin取值*/
   if (ncclParamGinType() == -1)
     netPluginLibs[pluginCounter].ncclGin = (ncclGin_t *)-1;
   else if (ncclParamGinType() == NCCL_NET_DEVICE_GIN_PROXY)
     netPluginLibs[pluginCounter].ncclGin = &ncclGinIbProxy;
   else if (ncclParamGinType() == NCCL_NET_DEVICE_GIN_GDAKI)
     netPluginLibs[pluginCounter].ncclGin = &ncclGinIbGdaki;
-  netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateInitReady;
+  netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateInitReady;/*内置的直接initready*/
+  /*置gin插件状态*/
   netPluginLibs[pluginCounter].ncclGinPluginState = netPluginLibs[pluginCounter].ncclGin ? ncclNetPluginStateInitReady : ncclNetPluginStateLoadFailed;
   ++pluginCounter;
   netPluginLibs[pluginCounter].ncclNet = &ncclNetSocket;/**增加内置socket插件 */
   netPluginLibs[pluginCounter++].ncclNetPluginState = ncclNetPluginStateInitReady;
-  pluginCount = pluginCounter;
+  pluginCount = pluginCounter;/*全局变量，指明网络插件lib总数*/
 }
 
 static ncclResult_t ncclNetPluginFinalize(struct ncclComm* comm, int pluginIndex) {
@@ -355,29 +390,35 @@ static ncclResult_t ncclNetPluginFinalize(struct ncclComm* comm, int pluginIndex
   return ncclSuccess;
 }
 
+/*为comm设置网络插件信息*/
 ncclResult_t ncclNetInit(struct ncclComm* comm) {
   bool ncclNetPluginInitialized = false;
+  /*初始化网络插件数组（内置的插件排在最后位置，环境变量指定的插件排在最前面）*/
   std::call_once(initPluginLibsOnceFlag, initPluginLibsOnceFunc);
   std::lock_guard<std::mutex> lock(netPluginMutex);
   /**遍历所有网络插件 */
   for (int pluginIndex = 0; pluginIndex < pluginCount; pluginIndex++) {
     if ((pluginIndex < (pluginCount - NCCL_NET_NUM_INTERNAL_PLUGINS)) && (netPluginLibs[pluginIndex].ncclNetPluginState == ncclNetPluginStateLoadReady)) {
+    	/*加载环境变量指定的load有效插件*/
       NCCLCHECK(ncclNetPluginLoad(&netPluginLibs[pluginIndex]));
     }
     if ((netPluginLibs[pluginIndex].ncclNetPluginState >= ncclNetPluginStateInitReady)
         && (!comm->config.netName || (strcasecmp(comm->config.netName, netPluginLibs[pluginIndex].ncclNet->name) == 0))) {
+    	/*此类型插件initready，且配置指定了此名称或者配置没有指定名称*/
       // plugin init must be done by all comms to setup the context, therefore we use ">="
-      NCCLCHECK(ncclNetPluginInit(comm, &netPluginLibs[pluginIndex]));/**初始化此插件 */
+      NCCLCHECK(ncclNetPluginInit(comm, &netPluginLibs[pluginIndex]));/** 初始化此网络插件 */
       if (netPluginLibs[pluginIndex].ncclNetPluginState == ncclNetPluginStateEnabled) {
         bool isAssigned = false;
+        /*为comm绑定网络插件*/
         NCCLCHECK(ncclNetPluginAssignToComm(comm, pluginIndex, &isAssigned));
         if (isAssigned) {
           // If one external plugin is assigned to a comm, then disable all other external plugins
-          ncclNetPluginDisableOtherExternal(pluginIndex);
-          ncclNetPluginInitialized = true;
+          ncclNetPluginDisableOtherExternal(pluginIndex);/*禁用其它外部插件*/
+          ncclNetPluginInitialized = true;/*网络插件初始化完成*/
           break;
         }
         else {
+        	/*没有assigned成功，释放*/
           ncclNetPluginFinalize(comm, pluginIndex);
         }
       }

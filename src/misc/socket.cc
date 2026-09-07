@@ -363,12 +363,13 @@ ncclResult_t ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs,
   const char* env = ncclGetEnv("NCCL_SOCKET_IFNAME");
   *nIfs = 0;
   if (env && strlen(env) > 1) {
-    /*使用用户指定的接口名称*/
+    /*环境变量指定了接口名称，使用这个名称*/
     INFO(NCCL_ENV, "NCCL_SOCKET_IFNAME set by environment to %s", env);
     // Specified by user : find or fail
     if (shownIfName++ == 0) INFO(NCCL_NET, "NCCL_SOCKET_IFNAME set to %s", env);/*打印用户指定的接口名称 */
     NCCLCHECK(findInterfaces(env, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
   } else {
+	  /*未指定名称*/
     // Try to automatically pick the right one
     // Start with IB
     NCCLCHECK(findInterfaces("ib", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));

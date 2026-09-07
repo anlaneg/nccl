@@ -27,7 +27,7 @@ typedef struct {
   //             or ``getEnv`` again on the same variable name. In any other case, modifying the variable (e.g., through
   //             ``setenv``) is considered undefined behavior since NCCL might access the returned address after the plugin has
   //             reset the variable.
-  const char* (*getEnv)(const char* name);
+  const char* (*getEnv)(const char* name);/*获取指定名称的环境变量*/
 } ncclEnv_v1_t;
 
 #endif

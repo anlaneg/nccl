@@ -137,11 +137,13 @@ static ncclResult_t ncclInit() {
 static ncclResult_t envInitResult = ncclSuccess;
 static std::once_flag envInitOnceFlag;
 
+/*初始化env插件*/
 static void envInitOnceFunc() {
   NCCLCHECKGOTO(ncclEnvPluginInit(), envInitResult, exit);
 exit:;
 }
 
+/*初始化环境变量，初始化env插件*/
 ncclResult_t ncclInitEnv() {
   std::call_once(envInitOnceFlag, envInitOnceFunc);
   return envInitResult;
@@ -419,7 +421,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
     CUDACHECK(cudaEventCreateWithFlags(&sharedRes->scratchEvent, cudaEventDisableTiming));
     comm->sharedRes = sharedRes;
     sharedRes->refCount = 1;
-    NCCLCHECK(ncclNetInit(comm));
+    NCCLCHECK(ncclNetInit(comm));/*为comm绑定网络插件*/
   } else {
     comm->sharedRes = parent->sharedRes;
     ncclAtomicRefCountIncrement(&parent->sharedRes->refCount);

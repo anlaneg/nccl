@@ -506,6 +506,7 @@ static ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portN
   return ncclSuccess;
 }
 
+/*利用环境变量禁用IB*/
 NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
 NCCL_PARAM(IbMergeVfs, "IB_MERGE_VFS", 1);
 NCCL_PARAM(IbMergeNics, "IB_MERGE_NICS", 1);
@@ -679,7 +680,7 @@ static ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfile
   if (ncclParamIbDisable()) return ncclInternalError;/*禁用ibverbs,直接返回 */
   static int shownIbHcaEnv = 0;
   if(wrap_ibv_symbols() != ncclSuccess) { return ncclInternalError; }/*初始化ibverbs的api符号指针失败，直接返回*/
-  /*强制要求mlx5dv存在（否则告警）*/
+  /*尝试加载mellanox provider,要求mlx5dv存在（否则告警）*/
   if(wrap_mlx5dv_symbols() != ncclSuccess) { INFO(NCCL_NET, "NET/IB : Failed to open mlx5dv symbols. Advance features like CX-8 Direct-NIC will be disabled."); }
 
   if (ncclNIbDevs == -1) {
@@ -2697,8 +2698,8 @@ ncclResult_t ncclIbFinalize(void* ctx) {
 /**定义ib类型的网络插件 */
 ncclNet_t ncclNetIb = {
   "IB",
-  ncclIbInit,
-  ncclIbDevices,
+  ncclIbInit,/*网络插件初始化时调用*/
+  ncclIbDevices,/*网络插件初始化后调用，返回ib设备数目*/
   ncclIbGetProperties,
   ncclIbListen,
   ncclIbConnect,
@@ -2983,6 +2984,7 @@ ncclResult_t ncclGinIbGdakiQueryLastError(void *ginCtx, bool *hasError) {
   return ncclGinGdakiQueryLastError(ginCtx, hasError);
 }
 
+/*ibgdaki插件*/
 ncclGin_t ncclGinIbGdaki = {
   "GIN_IB_GDAKI",
   ncclGinIbGdakiInit,

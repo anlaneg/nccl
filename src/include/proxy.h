@@ -321,7 +321,7 @@ struct ncclProxyState {
   int buffSizes[NCCL_NUM_PROTOCOLS];
   bool allocP2pNetLLBuffers;
   bool dmaBufSupport;
-  ncclNet_t* ncclNet;
+  ncclNet_t* ncclNet;/*网络插件（比如ncclNetIb)*/
   ncclCollNet_t* ncclCollNet;
   struct ncclGinState* ginState;
 

@@ -24,7 +24,8 @@ extern ncclEnv_v1_t ncclIntEnv_v1;
 #define EXT_ENV_PLUGIN 0
 #define INT_ENV_PLUGIN 1
 #define NUM_ENV_PLUGIN 2
-static ncclEnv_t *ncclEnvPlugins[NUM_ENV_PLUGIN] = { nullptr, &ncclIntEnv_v1 };
+/*用于获取环境变量的插件*/
+static ncclEnv_t *ncclEnvPlugins[NUM_ENV_PLUGIN] = { nullptr/*容许定制（扩展）的插件位置*/, &ncclIntEnv_v1/*默认插件*/ };
 
 enum {
   envPluginLoadFailed  = -1,
@@ -33,23 +34,29 @@ enum {
 };
 static int envPluginStatus = envPluginLoadReady;
 
+/*加载用于获取env的插件*/
 static ncclResult_t ncclEnvPluginLoad(void) {
   const char* envName;
+  /*之前尝试过，已失败，直接返回不再尝试*/
   if (envPluginStatus != envPluginLoadReady) goto exit;
 
   if ((envName = getenv("NCCL_ENV_PLUGIN")) != nullptr) {
+	  /*设置了env插件*/
     INFO(NCCL_ENV, "NCCL_ENV_PLUGIN set by environment to %s", envName);
     if (strcasecmp(envName, "none") == 0) {
-      goto fail;
+      goto fail;/*env插件名称不得为none*/
     }
   }
+  /*打开env插件*/
   envPluginLib = ncclOpenEnvPluginLib(envName);
   if (nullptr == envPluginLib) {
-    goto fail;
+    goto fail;/*加载失败*/
   } else if (ncclPluginLibPaths[ncclPluginTypeEnv]) {
+	  /*取lib路径*/
     envName = ncclPluginLibPaths[ncclPluginTypeEnv];
   }
 
+  /*取插件操作api结构体*/
   ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v1(envPluginLib);
   if (nullptr == ncclEnvPlugins[EXT_ENV_PLUGIN]) {
     INFO(NCCL_INIT, "External env plugin %s is unsupported", envName);
@@ -57,7 +64,7 @@ static ncclResult_t ncclEnvPluginLoad(void) {
   }
   INFO(NCCL_INIT, "Successfully loaded external env plugin %s", envName);
 
-  envPluginStatus = envPluginLoadSuccess;
+  envPluginStatus = envPluginLoadSuccess;/*通过环境变量加载插件成功*/
 
 exit:
   return ncclSuccess;
@@ -65,7 +72,7 @@ fail:
   // Fallback to internal/default plugin
   if (envPluginLib) NCCLCHECK(ncclClosePluginLib(envPluginLib, ncclPluginTypeEnv));
   envPluginLib = nullptr;
-  envPluginStatus = envPluginLoadFailed;
+  envPluginStatus = envPluginLoadFailed;/*加载env插件失败*/
   goto exit;
 }
 
@@ -86,11 +93,16 @@ void ncclEnvPluginFinalize(void);
 static bool initialized;
 
 ncclResult_t ncclEnvPluginInit(void) {
+	/*初始化环境变量*/
   initEnv();
+  /*加载env插件*/
   NCCLCHECK(ncclEnvPluginLoad());
+  /*如果evn插件加载成功，则表示可以用扩展的env插件，否则用默认的env插件*/
   ncclEnvPlugin = (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
+  /*env插件初始化*/
   NCCLCHECK(ncclEnvPlugin->init(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH, NCCL_SUFFIX));
   atexit(ncclEnvPluginFinalize);
+  /*指明已初始化*/
   __atomic_store_n(&initialized, true, __ATOMIC_RELEASE);
   return ncclSuccess;
 }
@@ -102,6 +114,7 @@ void ncclEnvPluginFinalize(void) {
   }
 }
 
+/*通过env插件获取环境变量（env插件有默认插件实现）*/
 const char* ncclEnvPluginGetEnv(const char* name) {
   return ncclEnvPlugin->getEnv(name);
 }

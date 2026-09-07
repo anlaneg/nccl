@@ -124,12 +124,12 @@
   if (RES != ncclSuccess && RES != ncclInProgress) { \
     /* Print the back trace*/ \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
-    return RES; \
+    return RES;/*直接返回错误*/ \
   } \
 } while (0)
 
-#define NCCLCHECKGOTO(call, RES, label) do { \
-  RES = call; \
+#define NCCLCHECKGOTO(call, RES/*记录返回值的变量*/, label/*失败时要跳转的label*/) do { \
+  RES = call;/*调这个函数*/ \
   if (RES != ncclSuccess && RES != ncclInProgress) { \
     /* Print the back trace*/ \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \

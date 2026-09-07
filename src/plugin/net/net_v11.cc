@@ -13,6 +13,7 @@ static ncclCollNet_v11_t* ncclCollNet_v11;
 static ncclGin_v11_t* ncclGin_v11;
 
 ncclNet_t* getNcclNet_v11(void* lib) {
+	/*取v11对应的ncclnet函数api结构体*/
   ncclNet_v11 = (ncclNet_v11_t*)dlsym(lib, "ncclNetPlugin_v11");
   if (ncclNet_v11) {
     INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded net plugin %s (v11)", ncclNet_v11->name);

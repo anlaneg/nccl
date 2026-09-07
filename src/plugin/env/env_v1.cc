@@ -11,6 +11,7 @@
 
 static ncclEnv_v1_t* ncclEnv_v1;
 
+/*通过此函数自插件查找env结构体*/
 ncclEnv_t* getNcclEnv_v1(void* lib) {
   ncclEnv_v1 = (ncclEnv_v1_t*)dlsym(lib, "ncclEnvPlugin_v1");
   if (ncclEnv_v1) {
@@ -29,7 +30,7 @@ static ncclResult_t ncclEnvFinalize(void) {
 }
 
 static const char* ncclEnvGetEnv(const char* name) {
-  return getenv(name);
+  return getenv(name);/*实现默认取环境变量*/
 }
 
 ncclEnv_v1_t ncclIntEnv_v1 = {

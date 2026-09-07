@@ -67,9 +67,9 @@ typedef struct {
   // Name of the network (mainly for logs)
   const char* name;
   // Initialize the network.
-  ncclResult_t (*init)(void** ctx, uint64_t commId, ncclNetCommConfig_v11_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction);
+  ncclResult_t (*init/*网络插件初始化时调用*/)(void** ctx, uint64_t commId, ncclNetCommConfig_v11_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction);
   // Return the number of adapters.
-  ncclResult_t (*devices)(int* ndev);
+  ncclResult_t (*devices)(int* ndev/*出参*/);
   // Get various device properties.
   ncclResult_t (*getProperties)(int dev, ncclNetProperties_v11_t* props);
   // Create a receiving object and provide a handle to connect to it. The

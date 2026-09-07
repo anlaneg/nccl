@@ -71,6 +71,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
 // IBVERBS Library versioning
 #define IBVERBS_VERSION "IBVERBS_1.1"
 
+/*直接查找并打开ibverbs lib*/
 ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   static void* ibvhandle = NULL;
   void* tmp;
