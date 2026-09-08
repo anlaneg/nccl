@@ -18,6 +18,7 @@ typedef struct {
 } ncclNetCommConfig_v11_t;
 
 typedef struct {
+	/*设备名称*/
   char* name;                      // Used mostly for logging.
   char* pciPath;                   // Path to the PCI device in /sys.
   uint64_t guid;                   // Unique identifier for the NIC chip. Important for

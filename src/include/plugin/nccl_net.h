@@ -22,7 +22,9 @@
 #define MAX_COLLNET_SIZE (512*1024*1024L) //Set for initial collent plugins when size was not dynamically queried
 
 #define NCCL_PTR_HOST 0x1
+/*通过peermem支持gdr*/
 #define NCCL_PTR_CUDA 0x2
+/*通过dma buffer支持gdr*/
 #define NCCL_PTR_DMABUF 0x4
 
 #define NCCL_NET_MR_FLAG_FORCE_SO (1 << 0)

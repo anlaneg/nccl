@@ -62,7 +62,7 @@ struct ncclSocket {
   int salen;
   uint64_t magic;
   enum ncclSocketType type;
-  int customRetry;
+  int customRetry;/*是否custom自已尝试重连*/
   int finalizeCounter; // Used to keep track of initial handshake for async sockets.
   char finalizeBuffer[sizeof(uint64_t)]; // Used to keep track of initial handshake for async sockets.
 };

@@ -25,24 +25,28 @@ static void msleep(unsigned int time_msec) {
   nanosleep(&tv, NULL);
 }
 
-static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int block, int* closed) {
+static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr/*buffer*/, int size/*buffer大小*/, int* offset/*偏移量*/, int block, int* closed/*出参，是否关闭*/) {
   int bytes = 0;
   *closed = 0;
   char* data = (char*)ptr;
   char line[SOCKET_NAME_MAXLEN+1];
   do {
+	  /*检查是否recv,则接收buffer*/
     if (op == NCCL_SOCKET_RECV) bytes = recv(sock->fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
+    /*检查是否send,则发送buffer*/
     if (op == NCCL_SOCKET_SEND) bytes = send(sock->fd, data+(*offset), size-(*offset), block ? MSG_NOSIGNAL : MSG_DONTWAIT | MSG_NOSIGNAL);
     if (op == NCCL_SOCKET_RECV && bytes == 0) {
+    	/*收到的长度为0，连接关闭*/
       *closed = 1;
       return ncclSuccess;
     }
     if (bytes == -1) {
       if ((op == NCCL_SOCKET_SEND && errno == EPIPE) || (op == NCCL_SOCKET_RECV && errno == ECONNRESET)) {
-        *closed = 1;
+        *closed = 1;/*发送失败，关闭*/
         return ncclSuccess;
       }
       if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+    	  /*遇到其它错误，返回错误*/
         WARN("socketProgressOpt: Call to %s %s failed : %s", (op == NCCL_SOCKET_RECV ? "recv from" : "send to"),
              ncclSocketToString(&sock->addr, line), strerror(errno));
         return ncclRemoteError;
@@ -50,7 +54,7 @@ static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr
         bytes = 0;
       }
     }
-    (*offset) += bytes;
+    (*offset) += bytes;/*增加偏移*/
     if (sock->abortFlag && __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE)) {
       INFO(NCCL_NET, "socketProgressOpt: abort called");
       return ncclInternalError;
@@ -59,10 +63,13 @@ static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr
   return ncclSuccess;
 }
 
-static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int* pclosed = NULL) {
+/*按op操作socket,执行收/发*/
+static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, int size/*内容长度*/, int* offset/*出参，偏移量*/, int* pclosed = NULL) {
   int closed;
+  /*按op操作*/
   NCCLCHECK(socketProgressOpt(op, sock, ptr, size, offset, 0 /*block*/, &closed));
   if (closed) {
+	  /*需要关闭socket*/
     if (pclosed) {
       *pclosed = closed;
       return ncclSuccess;
@@ -105,6 +112,7 @@ fail:
   return buf;
 }
 
+/*取地址中指明的port*/
 static uint16_t socketToPort(union ncclSocketAddress *addr) {
   struct sockaddr *saddr = &addr->sa;
   return ntohs(saddr->sa_family == AF_INET ? addr->sin.sin_port : addr->sin6.sin6_port);
@@ -126,8 +134,8 @@ static int envSocketFamily(void) {
   return family;
 }
 
-static ncclResult_t findInterfaces(const char* prefixList, char* names, union ncclSocketAddress *addrs, int sock_family,
-                                   int maxIfNameSize, int maxIfs, int* found) {
+static ncclResult_t findInterfaces(const char* prefixList, char* names, union ncclSocketAddress *addrs, int sock_family/*要匹配的family*/,
+                                   int maxIfNameSize, int maxIfs/*查找的最大数目*/, int* found) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
 #endif
@@ -142,7 +150,7 @@ static ncclResult_t findInterfaces(const char* prefixList, char* names, union nc
   *found = 0;
   struct ifaddrs *interfaces, *interface;
   SYSCHECK(getifaddrs(&interfaces), "getifaddrs");/**获取接口接口列表 */
-  for (interface = interfaces; interface && *found < maxIfs; interface = interface->ifa_next) {
+  for (interface = interfaces; interface && *found < maxIfs/*查找到的数目必须小于要求的最大数*/; interface = interface->ifa_next) {
     if (interface->ifa_addr == NULL) continue;
 
     /* We only support IPv4 & IPv6 */
@@ -358,7 +366,7 @@ ncclResult_t ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs,
                                 int* nIfs) {
   static int shownIfName = 0;
   // Allow user to force the INET socket family selection
-  int sock_family = envSocketFamily();
+  int sock_family = envSocketFamily();/*要匹配的socket family*/
   // User specified interface
   const char* env = ncclGetEnv("NCCL_SOCKET_IFNAME");
   *nIfs = 0;
@@ -407,6 +415,7 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   if (socketToPort(&sock->addr)) {
     // Port is forced by env. Make sure we get the port.
     int opt = 1;
+    /*设置port reuse*/
     SYSCHECK(setsockopt(sock->fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt");
 #if defined(SO_REUSEPORT)
     SYSCHECK(setsockopt(sock->fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)), "setsockopt");
@@ -414,11 +423,11 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   }
 
   // addr port should be 0 (Any port)
-  SYSCHECK(bind(sock->fd, &sock->addr.sa, sock->salen), "bind");
+  SYSCHECK(bind(sock->fd, &sock->addr.sa, sock->salen), "bind");/*绑定此port（可能为0）*/
 
   /* Get the assigned Port */
   socklen_t size = sock->salen;
-  SYSCHECK(getsockname(sock->fd, &sock->addr.sa, &size), "getsockname");
+  SYSCHECK(getsockname(sock->fd, &sock->addr.sa, &size), "getsockname");/*取设置的port地址（0时分配的port）*/
 
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
@@ -428,7 +437,7 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   /* Put the socket in listen mode
    * NB: The backlog will be silently truncated to the value in /proc/sys/net/core/somaxconn
    */
-  SYSCHECK(listen(sock->fd, 16384), "listen");
+  SYSCHECK(listen(sock->fd, 16384), "listen");/*执行listen系统调用*/
   sock->state = ncclSocketStateReady;
   return ncclSuccess;
 }
@@ -439,7 +448,7 @@ ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress*
     return ncclInvalidArgument;
   }
   if (sock->state != ncclSocketStateReady) return ncclInternalError;
-  memcpy(addr, &sock->addr, sizeof(union ncclSocketAddress));
+  memcpy(addr, &sock->addr, sizeof(union ncclSocketAddress));/*取socket地址*/
   return ncclSuccess;
 }
 
@@ -550,16 +559,19 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
   return ncclSuccess;
 }
 
+/*重置socket对应的fd*/
 static ncclResult_t socketResetFd(struct ncclSocket* sock) {
   ncclResult_t ret = ncclSuccess;
   int fd = -1;
+  /*创建socket（tcp socket)*/
   SYSCHECKGOTO(fd = socket(sock->addr.sa.sa_family, SOCK_STREAM, 0), "socket", ret, cleanup);
   // if sock->fd is valid, close it and reuse its number
   if (sock->fd != -1) {
+	  /*创建socket失败*/
     SYSCHECKGOTO(dup2(fd, sock->fd), "dup2", ret, cleanup);
     SYSCHECKGOTO(close(fd), "close", ret, cleanup);
   } else {
-    sock->fd = fd;
+    sock->fd = fd;/*设置socket对应fd*/
   }
   NCCLCHECKGOTO(socketSetFlags(sock), ret, exit);
 exit:
@@ -575,13 +587,17 @@ cleanup:
 static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, const char funcName[]) {
   char line[SOCKET_NAME_MAXLEN+1];
   if (errCode == 0) {
+	  /*指明为连接成功*/
     sock->state = ncclSocketStateConnected;
   } else if (errCode == EINPROGRESS) {
+	  /*处理中，置为connect polling状态*/
     sock->state = ncclSocketStateConnectPolling;
   } else if (errCode == EINTR || errCode == EWOULDBLOCK || errCode == EAGAIN || errCode == ETIMEDOUT ||
              errCode == EHOSTUNREACH || errCode == ECONNREFUSED) {
     if (sock->customRetry == 0) {
+    	/*nccl负责重试及避让*/
       if (sock->errorRetries++ == ncclParamRetryCnt()) {
+    	  /*重试次数超限*/
         sock->state = ncclSocketStateError;
         WARN("%s: connect to %s returned %s, exceeded error retry count after %d attempts",
              funcName, ncclSocketToString(&sock->addr, line), strerror(errCode), sock->errorRetries);
@@ -591,11 +607,13 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
       INFO(NCCL_NET|NCCL_INIT, "%s: connect to %s returned %s, retrying (%d/%ld) after sleep for %u msec",
            funcName, ncclSocketToString(&sock->addr, line), strerror(errCode),
            sock->errorRetries, ncclParamRetryCnt(), sleepTime);
-      msleep(sleepTime);
+      msleep(sleepTime);/*避让重试*/
     }
+    /*重置socket*/
     NCCLCHECK(socketResetFd(sock)); /* in case of failure in connect, socket state is unspecified */
-    sock->state = ncclSocketStateConnecting;
+    sock->state = ncclSocketStateConnecting;/*指明为connting状态（一会会执行再连）*/
   } else {
+	  /*连接失败*/
     sock->state = ncclSocketStateError;
     WARN("%s: connect to %s failed : %s", funcName, ncclSocketToString(&sock->addr, line), strerror(errCode));
     return ncclSystemError;
@@ -605,7 +623,8 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
 
 static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
   /* blocking/non-blocking connect() is determined by asyncFlag. */
-  int ret = connect(sock->fd, &sock->addr.sa, sock->salen);
+  int ret = connect(sock->fd, &sock->addr.sa, sock->salen);/*连接到远端*/
+  /*执行connect成功与否检查*/
   return socketConnectCheck(sock, (ret == -1) ? errno : 0, __func__);
 }
 
@@ -651,20 +670,23 @@ static ncclResult_t socketFinalizeConnect(struct ncclSocket* sock) {
   } else {
     if (sock->finalizeCounter < sizeof(sock->magic)) {
       sent = sock->finalizeCounter;
-      NCCLCHECK(socketProgress(NCCL_SOCKET_SEND, sock, &sock->magic, sizeof(sock->magic), &sent));
+      /*发送magic*/
+      NCCLCHECK(socketProgress(NCCL_SOCKET_SEND/*指明send*/, sock, &sock->magic, sizeof(sock->magic), &sent));
       sock->finalizeCounter = sent;
       if (sent < sizeof(sock->magic)) return ncclSuccess;
     }
+    /*发送type*/
     sent = sock->finalizeCounter - sizeof(sock->magic);
     NCCLCHECK(socketProgress(NCCL_SOCKET_SEND, sock, &sock->type, sizeof(sock->type), &sent));
     sock->finalizeCounter = sent + sizeof(sock->magic);
     if (sent < sizeof(sock->type)) return ncclSuccess;
   }
-  sock->state = ncclSocketStateReady;
+  sock->state = ncclSocketStateReady;/*变更为state ready状态*/
   return ncclSuccess;
 }
 
 static ncclResult_t socketProgressState(struct ncclSocket* sock) {
+	/*按状态处理*/
   if (sock->state == ncclSocketStateAccepting) {
     NCCLCHECK(socketTryAccept(sock));
   }
@@ -672,12 +694,14 @@ static ncclResult_t socketProgressState(struct ncclSocket* sock) {
     NCCLCHECK(socketFinalizeAccept(sock));
   }
   if (sock->state == ncclSocketStateConnecting) {
+	  /*对于正在连接状态，执行connect*/
     NCCLCHECK(socketStartConnect(sock));
   }
   if (sock->state == ncclSocketStateConnectPolling) {
     NCCLCHECK(socketPollConnect(sock));
   }
   if (sock->state == ncclSocketStateConnected) {
+	  /*connect成功后调用*/
     NCCLCHECK(socketFinalizeConnect(sock));
   }
   return ncclSuccess;
@@ -692,8 +716,9 @@ ncclResult_t ncclSocketReady(struct ncclSocket* sock, int *running) {
     WARN("ncclSocketReady: unexpected socket state %d", sock->state);
     return ncclRemoteError;
   }
-  *running = (sock->state == ncclSocketStateReady) ? 1 : 0;
+  *running = (sock->state == ncclSocketStateReady) ? 1/*未达到state ready，则置为0*/ : 0;
   if (*running == 0) {
+	  /*未达到ready,继续运行*/
     NCCLCHECK(socketProgressState(sock));
     *running = (sock->state == ncclSocketStateReady) ? 1 : 0;
   }
@@ -721,10 +746,10 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   }
   TRACE(NCCL_INIT|NCCL_NET,"Connecting to socket %s", ncclSocketToString(&sock->addr, line));
 
-  sock->state = ncclSocketStateConnecting;
+  sock->state = ncclSocketStateConnecting;/*指定为正在连接状态*/
   sock->finalizeCounter = 0;
   do {
-    NCCLCHECK(socketProgressState(sock));
+    NCCLCHECK(socketProgressState(sock));/*执行连接*/
   } while (sock->asyncFlag == 0 &&
       (sock->abortFlag == NULL || __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE) == 0) &&
       (sock->state == ncclSocketStateConnecting ||
@@ -733,6 +758,7 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
 
   if (sock->abortFlag && __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE)) return ncclInternalError;
 
+  /*按状态跳转*/
   switch (sock->state) {
     case ncclSocketStateConnecting:
     case ncclSocketStateConnectPolling:
@@ -799,14 +825,15 @@ exit:
   return ret;
 }
 
-ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddress* addr, uint64_t magic, enum ncclSocketType type, volatile uint32_t* abortFlag, int asyncFlag, int customRetry) {
+/*初始化sock*/
+ncclResult_t ncclSocketInit(struct ncclSocket* sock/*出参，待初始化的socket*/, const union ncclSocketAddress* addr/*要设置的地址*/, uint64_t magic, enum ncclSocketType type, volatile uint32_t* abortFlag, int asyncFlag, int customRetry) {
   ncclResult_t ret = ncclSuccess;
 
   if (sock == NULL) goto exit;
   sock->errorRetries = 0;
   sock->abortFlag = abortFlag;
   sock->asyncFlag = asyncFlag;
-  sock->state = ncclSocketStateInitialized;
+  sock->state = ncclSocketStateInitialized;/*状态指定为初始*/
   sock->magic = magic;
   sock->type = type;
   sock->fd = -1;
@@ -816,9 +843,10 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddre
   if (addr) {
     /* IPv4/IPv6 support */
     int family;
-    memcpy(&sock->addr, addr, sizeof(union ncclSocketAddress));
+    memcpy(&sock->addr, addr, sizeof(union ncclSocketAddress));/*设置地址*/
     family = sock->addr.sa.sa_family;
     if (family != AF_INET && family != AF_INET6) {
+    	/*只考虑v4,v6两种*/
       char line[SOCKET_NAME_MAXLEN+1];
       WARN("ncclSocketInit: connecting to address %s with family %d is neither AF_INET(%d) nor AF_INET6(%d)",
           ncclSocketToString(&sock->addr, line), family, AF_INET, AF_INET6);
@@ -827,8 +855,9 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddre
     }
     sock->salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
     // in case of error, we close the fd before returning as it's unclear if the caller has to use ncclSocketClose for cleanup
-    NCCLCHECKGOTO(socketResetFd(sock), ret, fail);
+    NCCLCHECKGOTO(socketResetFd(sock), ret, fail);/*初始化socket*/
   } else {
+	  /*没有指定地址，置为0*/
     memset(&sock->addr, 0, sizeof(union ncclSocketAddress));
   }
 exit:
