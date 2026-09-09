@@ -681,7 +681,7 @@ static ncclResult_t ncclIbFinalizeDevices(void) {
 
 static ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
-  if (netRefCount++) return ret;
+  if (netRefCount++) return ret;/*已初始化过(容许多次进入），直接退出*/
   ncclProfilerFunction = profFunction;
   if (ncclParamIbDisable()) return ncclInternalError;/*禁用ibverbs,直接返回 */
   static int shownIbHcaEnv = 0;
@@ -696,7 +696,7 @@ static ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfile
       int nIpIfs = 0;
       ncclNIbDevs = 0;
       ncclNMergedIbDevs = 0;
-      NCCLCHECK(ncclFindInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1/*最多找一个*/, &nIpIfs));
+      NCCLCHECK(ncclFindInterfaces(ncclIbIfName/*出参，找到的接口名称*/, &ncclIbIfAddr/*出参，出接口地址*/, MAX_IF_NAME_SIZE, 1/*最多找一个*/, &nIpIfs));
       if (nIpIfs != 1) {
     	  /*没有找到*/
         WARN("NET/IB : No IP interface found.");
@@ -714,21 +714,23 @@ static ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfile
       struct netIf userIfs[MAX_IB_DEVS];
       bool searchNot = userIbEnv && userIbEnv[0] == '^';/*是否排除指定的设备名称 */
       if (searchNot) userIbEnv++;
-      bool searchExact = userIbEnv && userIbEnv[0] == '=';
+      bool searchExact = userIbEnv && userIbEnv[0] == '=';/*是否严格匹配*/
       if (searchExact) userIbEnv++;
       int nUserIfs = parseStringList(userIbEnv, userIfs, MAX_IB_DEVS);
 
       /** 获取所有ibverbs设备 */
-      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) { ret = ncclInternalError; goto fail; }
+      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs/*出参，ib设备总数目*/)) { ret = ncclInternalError; goto fail; }
 
       for (int d=0; d<nIbDevs && ncclNIbDevs<MAX_IB_DEVS; d++) {
         struct ibv_context * context = NULL;
+        /*打开此设备*/
         if (ncclSuccess != wrap_ibv_open_device(&context, devices[d]) || context == NULL) {
           WARN("NET/IB : Unable to open device %s", devices[d]->name);
           continue;/** 跳过无法打开的设备 */
         }
         char dataDirectDevicePath[PATH_MAX] = "/sys";
         int devCount = /*undefined*/-1, devOffset = 0;
+        /*provider是否为mellanox*/
         enum ncclIbProvider ibProvider = wrap_mlx5dv_is_supported(devices[d]) ? IB_PROVIDER_MLX5 : IB_PROVIDER_NONE;
 
         int nPorts = 0;
@@ -740,7 +742,7 @@ static ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfile
           if (ncclSuccess != wrap_ibv_close_device(context)) { ret = ncclInternalError; goto fail; }
           continue;
         }
-        /** 遍历所有物理端口 */
+        /** 遍历此ib设备所有port */
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
             struct ibv_port_attr portAttr;
             if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
@@ -1153,7 +1155,7 @@ struct ncclIbRemSizesFifo {
   int elems[MAX_REQUESTS][NCCL_NET_IB_MAX_RECVS];
   uint64_t fifoTail;
   uint64_t addr;
-  uint32_t rkeys[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint32_t rkeys[NCCL_IB_MAX_DEVS_PER_NIC];/*远端各nic的rkey*/
   uint32_t flags;
   struct ibv_mr* mrs[NCCL_IB_MAX_DEVS_PER_NIC];
   struct ibv_sge sge;
@@ -1169,12 +1171,13 @@ struct alignas(8) ncclIbSendCommDev {
 
 // Wrapper to track an MR per-device, if needed
 struct ncclIbMrHandle {
+	/*记录注册得到的mr*/
   ibv_mr* mrs[NCCL_IB_MAX_DEVS_PER_NIC];
 };
 
 struct alignas(32) ncclIbNetCommBase {
   ncclNetVDeviceProps_t vProps;
-  bool isSend;
+  bool isSend;/*是否发端*/
   struct ncclIbRequest reqs[MAX_REQUESTS];/**空间的req被标记为NCCL_NET_IB_REQ_UNUSED */
   struct ncclIbQp qps[NCCL_IB_MAX_QPS];
   int nqps;
@@ -1309,12 +1312,12 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbNetCommDevBase* base, 
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, struct ncclIbGidInfo* sGidInfo, uint32_t dest_qp_num, struct ncclIbDevInfo* info, bool fifoTc, int tc, int sl) {
+ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, struct ncclIbGidInfo* sGidInfo, uint32_t dest_qp_num/*目的qpn*/, struct ncclIbDevInfo* info, bool fifoTc, int tc, int sl) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
-  qpAttr.qp_state = IBV_QPS_RTR;
+  qpAttr.qp_state = IBV_QPS_RTR;/*指定状态*/
   qpAttr.path_mtu = info->mtu;
-  qpAttr.dest_qp_num = dest_qp_num;
+  qpAttr.dest_qp_num = dest_qp_num;/*设置目的qpn*/
   qpAttr.rq_psn = 0;
   qpAttr.max_dest_rd_atomic = 1;
   qpAttr.min_rnr_timer = 12;
@@ -1351,6 +1354,7 @@ ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, struct ncclIbGidInfo* sGidInfo, uint
   qpAttr.ah_attr.src_path_bits = 0;
   qpAttr.ah_attr.port_num = info->ib_port;
   TRACE(NCCL_NET, "NET/IB : ncclIbRtrQp qpn=%u mtu=%d dst=%u ll=%u port=%u sl: %d tc: %d", qp->qp_num, info->mtu, dest_qp_num, info->link_layer, info->ib_port, qpAttr.ah_attr.sl, qpAttr.ah_attr.grh.traffic_class);
+  /*修改qp*/
   NCCLCHECK(wrap_ibv_modify_qp(qp, &qpAttr, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER));
   return ncclSuccess;
 }
@@ -1598,9 +1602,10 @@ ib_connect:
   // ensure that the remote devices have the same link layer than the local devices used in the connection.
   if (comm->base.vProps.ndevs > 0) {
     int ibDev0 = comm->devs[0].base.ibDevN;
-    link_layer = ncclIbDevs[ibDev0].portAttr.link_layer;
+    link_layer = ncclIbDevs[ibDev0].portAttr.link_layer;/*本端设备link layer*/
     for (int i = 0; i < remMeta.ndevs; i++) {
       if (remMeta.devs[i].link_layer != link_layer) {
+    	  /*本端link layer与远端link layer不匹配*/
         WARN("NET/IB : Remote %s device is incompatible with the local [%d]%s:%d/%s. Try selecting NICs of only one link type using NCCL_IB_HCA",
              NCCL_IB_LLSTR(remMeta.devs[i].link_layer), ibDev0, ncclIbDevs[ibDev0].devName, ncclIbDevs[ibDev0].portNum, NCCL_IB_LLSTR(link_layer));
         return ncclInternalError;
@@ -1645,7 +1650,9 @@ ib_connect:
 
     ncclIbDev* ibDev = ncclIbDevs + commDev->base.ibDevN;
     remDevInfo->mtu = std::min(remDevInfo->mtu, ibDev->portAttr.active_mtu);
+    /*变更为rtr状态*/
     NCCLCHECKGOTO(ncclIbRtrQp(qp, &commDev->base.gidInfo, remQpInfo->qpn, remDevInfo, false, remMeta.tc, remMeta.sl), ret, fail);
+    /*变更为rts状态*/
     NCCLCHECKGOTO(ncclIbRtsQp(qp), ret, fail);
   }
 
@@ -1656,6 +1663,7 @@ ib_connect:
   stage->offset = 0;
 
 ib_send_ready:
+  /*告诉对端ready*/
   NCCLCHECKGOTO(ncclSocketProgress(NCCL_SOCKET_SEND, &comm->base.sock, &comm->base.ready, sizeof(int), &stage->offset), ret, fail);
   if (stage->offset != sizeof(int)) return ncclSuccess;
 
@@ -1739,7 +1747,9 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm, ncclNetDeviceHandle
   NCCLCHECKGOTO(ncclIbStatsInit(&rComm->base.stats), ret, fail);
   stage->comm = rComm;
   stage->state = ncclIbCommStateAccept;
+  /*初始化socket*/
   NCCLCHECKGOTO(ncclSocketInit(&rComm->base.sock), ret, fail);
+  /*当前状态为stateAccept,执行accept*/
   NCCLCHECKGOTO(ncclSocketAccept(&rComm->base.sock, &lComm->sock), ret, fail);
 
   // Alloc stage->buffer here to be used for all following steps
@@ -1994,18 +2004,18 @@ ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r) {
 
 ncclResult_t ncclIbTest(void* request, int* done, int* size);
 
-ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, ibv_mr** mhandle) {
+ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, ibv_mr** mhandle/*出参，得到的mr*/) {
   static __thread uintptr_t pageSize = 0;
-  if (pageSize == 0) pageSize = sysconf(_SC_PAGESIZE);
-  struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;
-  uintptr_t addr = (uintptr_t)data & -pageSize;
-  size_t pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;
+  if (pageSize == 0) pageSize = sysconf(_SC_PAGESIZE);/*使用默认页大小*/
+  struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;/*取mrcache*/
+  uintptr_t addr = (uintptr_t)data & -pageSize;/*取负，导致页内偏移被置0，即addr按页对齐*/
+  size_t pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;/*取这段内存占用多少页*/
   std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
   for (int slot=0; /*true*/; slot++) {
     if (slot == cache->population || addr < cache->slots[slot].addr) { // didn't find in cache
       if (cache->population == cache->capacity) { // must grow cache
         cache->capacity = cache->capacity < 32 ? 32 : 2*cache->capacity;
-        NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));
+        NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));/*扩大cache*/
       }
       // Deregister / register
       struct ibv_mr* mr;
@@ -2015,8 +2025,10 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       if (fd != -1) {
         /* DMA-BUF support */
         if (!ncclIbDevs[base->ibDevN].capsProvider.mlx5.dataDirect) {
+        	/*非mellanox的卡，直接调用*/
           NCCLCHECK(wrap_ibv_reg_dmabuf_mr(&mr, base->pd, offset, pages*pageSize, addr, fd, flags));
         } else {
+        	/*调用mellanox函数*/
           NCCLCHECK(wrap_mlx5dv_reg_dmabuf_mr(&mr, base->pd, offset, pages*pageSize, addr, fd, flags, MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT));
         }
       } else {
@@ -2025,21 +2037,22 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
           NCCLCHECK(wrap_ibv_reg_mr_iova2(&mr, base->pd, (void*)addr, pages*pageSize, addr, flags));
         }
         else {
-          /** 注册内存 */
+          /** 普通注册mr */
           NCCLCHECK(wrap_ibv_reg_mr(&mr, base->pd, (void*)addr, pages*pageSize, flags));
         }
       }
       TRACE(NCCL_INIT|NCCL_NET,"regAddr=0x%lx size=%lld rkey=0x%x lkey=0x%x fd=%d", (unsigned long)addr, (long long)pages*pageSize, mr->rkey, mr->lkey, fd);
       if (slot != cache->population) memmove(cache->slots+slot+1, cache->slots+slot, (cache->population-slot)*sizeof(struct ncclIbMr));
-      cache->slots[slot].addr = addr;
-      cache->slots[slot].pages = pages;
-      cache->slots[slot].refs = 1;
-      cache->slots[slot].mr = mr;
+      cache->slots[slot].addr = addr;/*记录注册的地址*/
+      cache->slots[slot].pages = pages;/*记录注册的页数*/
+      cache->slots[slot].refs = 1;/*引用数*/
+      cache->slots[slot].mr = mr;/*注册得到的mr*/
       cache->population += 1;
       *mhandle = mr;
       return ncclSuccess;
     } else if ((addr >= cache->slots[slot].addr) &&
         ((addr-cache->slots[slot].addr)/pageSize+pages) <= cache->slots[slot].pages) {
+    	/*被cache命中，直接返回之前获得的mr*/
       cache->slots[slot].refs += 1;
       *mhandle = cache->slots[slot].mr;
       return ncclSuccess;
@@ -2051,7 +2064,7 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
 struct ncclIbNetCommDevBase* ncclIbGetNetCommDevBase(ncclIbNetCommBase* base, int devIndex) {
   if (base->isSend) {
     struct ncclIbSendComm* sComm = (struct ncclIbSendComm*) base;
-    return &sComm->devs[devIndex].base;
+    return &sComm->devs[devIndex].base;/*按index取base*/
   } else {
     struct ncclIbRecvComm* rComm = (struct ncclIbRecvComm*) base;
     return &rComm->devs[devIndex].base;
@@ -2059,7 +2072,7 @@ struct ncclIbNetCommDevBase* ncclIbGetNetCommDevBase(ncclIbNetCommBase* base, in
 }
 
 /* DMA-BUF support */
-ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, void** mhandle) {
+ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int type, uint64_t offset, int fd/*dma buffer fd*/, uint64_t mrFlags, void** mhandle) {
   ncclResult_t ret = ncclSuccess;
   assert(size > 0);
   struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*) comm;
@@ -2067,6 +2080,7 @@ ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int 
   for (int i = 0; i < base->vProps.ndevs; i++) {
     // Each ncclIbNetCommDevBase is at different offset in send and recv netComms
     struct ncclIbNetCommDevBase* devComm = ncclIbGetNetCommDevBase(base, i);
+    /*注册mr（dma buffer方式）*/
     NCCLCHECKGOTO(ncclIbRegMrDmaBufInternal2(devComm, data, size, type, offset, fd, mrFlags, mhandleWrapper->mrs + i), ret, fail);
   }
   *mhandle = (void*) mhandleWrapper;
@@ -2078,11 +2092,11 @@ fail:
 }
 
 ncclResult_t ncclIbRegMrDmaBuf(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle) {
-  return ncclIbRegMrDmaBufInternal(comm, data, size, type, offset, fd, 0ULL, mhandle);
+  return ncclIbRegMrDmaBufInternal(comm, data, size, type, offset, fd/*注册dma buffer*/, 0ULL, mhandle);
 }
 /** 注册内存 */
 ncclResult_t ncclIbRegMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  return ncclIbRegMrDmaBufInternal(comm, data, size, type, 0ULL, -1, 0, mhandle);
+  return ncclIbRegMrDmaBufInternal(comm, data, size, type, 0ULL, -1/*普通非dma buffer*/, 0, mhandle);
 }
 
 ncclResult_t ncclIbDeregMrInternal(ncclIbNetCommDevBase* base, ibv_mr* mhandle) {
@@ -2111,6 +2125,7 @@ ncclResult_t ncclIbDeregMr(void* comm, void* mhandle) {
 
   struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*) mhandle;
   struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*) comm;
+  /*移除mhandle下所有注册的mr*/
   for (int i = 0; i < base->vProps.ndevs; i++) {
     // Each ncclIbNetCommDevBase is at different offset in send and recv netComms
     struct ncclIbNetCommDevBase* devComm = ncclIbGetNetCommDevBase(base, i);
@@ -2516,7 +2531,7 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
   // Only flush once using the last non-zero receive
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
-  req->type = NCCL_NET_IB_REQ_FLUSH;
+  req->type = NCCL_NET_IB_REQ_FLUSH;/*指明为req_flush*/
   req->sock = &comm->base.sock;
   struct ncclIbMrHandle* mhandle = (struct ncclIbMrHandle*) mhandles[last];
 
@@ -2530,7 +2545,7 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
     wr.wr.rdma.rkey = mhandle->mrs[i]->rkey;
     wr.sg_list = &comm->devs[i].gpuFlush.sge;
     wr.num_sge = 1;
-    wr.opcode = IBV_WR_RDMA_READ;
+    wr.opcode = IBV_WR_RDMA_READ;/*读操作*/
     wr.send_flags = IBV_SEND_SIGNALED;
 
     TIME_START(4);
@@ -2749,10 +2764,10 @@ ncclNet_t ncclNetIb = {
   ncclIbDevices,/*网络插件初始化后调用，返回ib设备数目*/
   ncclIbGetProperties,/*取ib设备属性*/
   ncclIbListen,/*执行tcp socket监听*/
-  ncclIbConnect,
-  ncclIbAccept,
-  ncclIbRegMr,
-  ncclIbRegMrDmaBuf,
+  ncclIbConnect,/*双方带外交换信息，创建qp,注册mr,促使qp达到rts状态*/
+  ncclIbAccept,/*执行tcp socket accept*/
+  ncclIbRegMr,/*普通mr注册*/
+  ncclIbRegMrDmaBuf,/*dma buffer mr注册*/
   ncclIbDeregMr,
   ncclIbIsend,
   ncclIbIrecv,

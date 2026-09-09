@@ -938,7 +938,7 @@ void* ncclProxyProgress(void *proxyState_) {
 
   if (setProxyThreadContext(proxyState)) {
     INFO(NCCL_INIT, "[Proxy Progress] Set CUDA context on device %d", proxyState->cudaDev);
-  } else if (cudaSetDevice(proxyState->cudaDev) != cudaSuccess) {
+  } else if (cudaSetDevice(proxyState->cudaDev) != cudaSuccess) {/**为此线程绑定cuda设备 */
     WARN("[Proxy Progress] Failed to set CUDA device %d", proxyState->cudaDev);
   }
 
@@ -949,7 +949,7 @@ void* ncclProxyProgress(void *proxyState_) {
   ncclLastProxyState = state;
   char threadName[NCCL_THREAD_NAMELEN];
   snprintf(threadName, NCCL_THREAD_NAMELEN, "NCCL Progress%2d", proxyState->cudaDev);
-  nvtxNameOsThreadA(syscall(SYS_gettid), threadName);
+  nvtxNameOsThreadA(syscall(SYS_gettid), threadName);/**设置线程名称 */
 
   int lastIdle = 0;
   /* Too frequent call of ncclProxyGetPostedOps() will result in perf regression for small message
@@ -1057,11 +1057,13 @@ static ncclResult_t ncclProxyNewConnection(struct ncclProxyConnectionPool* pool,
     pool->banks++;
     pool->offset = 0;
   }
+  /**分配新的proxy connection id */
   *id = ((pool->banks-1) << NCCL_PROXY_CONN_POOL_SIZE_POW2) + pool->offset;
   pool->offset++;
   return ncclSuccess;
 }
 
+/**根据proxy connection id获取proxy connection */
 static ncclResult_t ncclProxyGetConnection(struct ncclProxyConnectionPool* pool, int id, struct ncclProxyConnection** conn) {
   int bank = id>>NCCL_PROXY_CONN_POOL_SIZE_POW2;
   int offset = id&NCCL_PROXY_CONN_POOL_MASK;
@@ -1365,6 +1367,7 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
     int size = sizeof(struct ncclProxyOpsPool);
     struct ncclProxyOpsPool* pool = NULL;
 
+    /**创建共享内存池 */
     char shmPath[sizeof("/dev/shm/nccl-XXXXXX")];
     shmPath[0] = '\0';
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, (void**)&pool, NULL, proxyState->tpLocalnRanks, &state->handle));
@@ -1420,9 +1423,10 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
   NCCLCHECK(ncclProxyNewConnection(connectionPool, &id));
   NCCLCHECK(ncclProxyGetConnection(connectionPool, id, connection));
 
-  (*connection)->sock = &peer->sock;
-  (*connection)->transport = req->transport;
-  (*connection)->send = req->send;
+  /**初始化proxy connection */
+  (*connection)->sock = &peer->sock;/**对应的socket */
+  (*connection)->transport = req->transport;/**对应的transport */
+  (*connection)->send = req->send;/**是否为发送 */
   (*connection)->tpLocalRank = req->tpLocalRank;
   (*connection)->sameProcess = req->sameProcess;
   peer->tpLocalRank = req->tpLocalRank;
@@ -1430,13 +1434,14 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
 
   resp->connection = *connection;
 
+  /**依据transport和是否为发送，获取对应的transport comm */
   (*connection)->tcomm = (*connection)->send ? &ncclTransports[(*connection)->transport]->send : &ncclTransports[(*connection)->transport]->recv;
   // If we need proxy progress, let's allocate ops and start the thread
   if ((*connection)->tcomm->proxyProgress) {
     /**如果此transport有proxy progress功能，初始化proxy progress线程状态并创建proxy progress线程 */
     NCCLCHECK(proxyProgressInit(proxyState));
     struct ncclProxyProgressState* state = &proxyState->progressState;
-    strncpy(resp->devShmPath, state->opsPoolShmSuffix, sizeof(resp->devShmPath));
+    strncpy(resp->devShmPath, state->opsPoolShmSuffix, sizeof(resp->devShmPath));/**指出dev shm path */
   }
   INFO(NCCL_NET|NCCL_PROXY, "New proxy %s connection %d from local rank %d, transport %d", (*connection)->send ? "send":"recv", id, (*connection)->tpLocalRank, (*connection)->transport);
   __atomic_store_n(&(*connection)->state, connInitialized, __ATOMIC_RELEASE);
@@ -1503,7 +1508,7 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclP
   }
   else if (op->type == ncclProxyMsgInit) {
     TRACE(NCCL_PROXY, "proxyProgressAsync::ncclProxyMsgInit opId=%p op.reqBuff=%p", op->opId, op->reqBuff);
-    res = proxyConnInit(peer, connectionPool, proxyState, (ncclProxyInitReq*) op->reqBuff, (ncclProxyInitResp*) op->respBuff, &op->connection);
+    res = proxyConnInit(peer, connectionPool, proxyState, (ncclProxyInitReq*) op->reqBuff/**请求buffer */, (ncclProxyInitResp*) op->respBuff, &op->connection);
   } else if (op->type == ncclProxyMsgRegister) {
     /**注册 */
     TRACE(NCCL_PROXY, "proxyProgressAsync::ncclProxyMsgRegister opId=%p op.reqBuff=%p, op->reqSize=%d, op->respSize=%d", op->opId, op->reqBuff, op->reqSize, op->respSize);

@@ -33,7 +33,7 @@ ncclResult_t getRandomData(void* buffer, size_t bytes);
 
 struct netIf {
   char prefix[64];
-  int port;
+  int port;/*port编号*/
 };
 
 int parseStringList(const char* string, struct netIf* ifList, int maxList);

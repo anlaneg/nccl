@@ -44,7 +44,7 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
     tmp = dlvsym(handle, symbol, MLX5DV_VERSION);       \
     if (tmp == NULL) {                                   \
       WARN("dlvsym failed on %s - %s version %s", symbol, dlerror(), MLX5DV_VERSION);  \
-      goto teardown;                                     \
+      goto teardown;/*加载符号，并要求符号必须存在*/                                     \
     }                                                    \
     *cast = tmp;                                         \
   } while (0)
@@ -52,7 +52,7 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
 // Attempt to load a specific symbol version - fail silently
 #define LOAD_SYM_VERSION(handle, symbol, funcptr, version) do {  \
     cast = (void**)&funcptr;                                     \
-    *cast = dlvsym(handle, symbol, version);                     \
+    *cast = dlvsym(handle, symbol, version);/*只加载符号，不检查是否存在*/                     \
     if (*cast == NULL) {                                         \
       INFO(NCCL_NET, "dlvsym failed on %s - %s version %s", symbol, dlerror(), version);  \
     }                                                            \
@@ -62,7 +62,7 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
   // Cherry-pick the mlx5dv_get_data_direct_sysfs_path API from MLX5 1.25
   LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_get_data_direct_sysfs_path", mlx5dvSymbols->mlx5dv_internal_get_data_direct_sysfs_path, "MLX5_1.25");
   // Cherry-pick the ibv_reg_dmabuf_mr API from MLX5 1.25
-  LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_reg_dmabuf_mr", mlx5dvSymbols->mlx5dv_internal_reg_dmabuf_mr, "MLX5_1.25");
+  LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_reg_dmabuf_mr"/*注册dmabuf类型的mr*/, mlx5dvSymbols->mlx5dv_internal_reg_dmabuf_mr, "MLX5_1.25");
 
   return ncclSuccess;
 

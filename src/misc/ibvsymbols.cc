@@ -77,6 +77,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   void* tmp;
   void** cast;
 
+  /*lib打开*/
   ibvhandle=dlopen("libibverbs.so", RTLD_NOW);
   if (!ibvhandle) {
     ibvhandle=dlopen("libibverbs.so.1", RTLD_NOW);
@@ -86,22 +87,24 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
     }
   }
 
+  /*在动态库中查找并加载符号symbol,并将其函数指针设置在funcptr中*/
 #define LOAD_SYM(handle, symbol, funcptr) do {           \
     cast = (void**)&funcptr;                             \
-    tmp = dlvsym(handle, symbol, IBVERBS_VERSION);       \
+    tmp = dlvsym(handle, symbol, IBVERBS_VERSION);/*查指定版本符号*/       \
     if (tmp == NULL) {                                   \
       WARN("dlvsym failed on %s - %s version %s", symbol, dlerror(), IBVERBS_VERSION);  \
-      goto teardown;                                     \
+      goto teardown;/*无此符号，报错*/                                     \
     }                                                    \
-    *cast = tmp;                                         \
+    *cast = tmp;/*设置符号*/                                         \
   } while (0)
 
 // Attempt to load a specific symbol version - fail silently
 #define LOAD_SYM_VERSION(handle, symbol, funcptr, version) do {  \
     cast = (void**)&funcptr;                                     \
-    *cast = dlvsym(handle, symbol, version);                     \
+    *cast = dlvsym(handle, symbol, version);/*只尝试查找，不强制必须存在*/                     \
   } while (0)
 
+  /*加载以下符号*/
   LOAD_SYM(ibvhandle, "ibv_get_device_list", ibvSymbols->ibv_internal_get_device_list);
   LOAD_SYM(ibvhandle, "ibv_free_device_list", ibvSymbols->ibv_internal_free_device_list);
   LOAD_SYM(ibvhandle, "ibv_get_device_name", ibvSymbols->ibv_internal_get_device_name);

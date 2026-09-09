@@ -134,34 +134,35 @@ static int envSocketFamily(void) {
   return family;
 }
 
-static ncclResult_t findInterfaces(const char* prefixList, char* names, union ncclSocketAddress *addrs, int sock_family/*要匹配的family*/,
+static ncclResult_t findInterfaces(const char* prefixList/*匹配指令*/, char* names/*出参，以固定大小保存接口名称*/, union ncclSocketAddress *addrs/*出参，以固定大小保存接口对应的地址*/, int sock_family/*要匹配的family*/,
                                    int maxIfNameSize, int maxIfs/*查找的最大数目*/, int* found) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
 #endif
   struct netIf userIfs[MAX_IFS];
-  /*支持对结果取反，支持相等匹配*/
+  /*支持对结果取反*/
   bool searchNot = prefixList && prefixList[0] == '^';
   if (searchNot) prefixList++;
+  /*支持相等匹配*/
   bool searchExact = prefixList && prefixList[0] == '=';
   if (searchExact) prefixList++;
   int nUserIfs = parseStringList(prefixList, userIfs/**出参，接口解析列表 */, MAX_IFS);
 
   *found = 0;
   struct ifaddrs *interfaces, *interface;
-  SYSCHECK(getifaddrs(&interfaces), "getifaddrs");/**获取接口接口列表 */
+  SYSCHECK(getifaddrs(&interfaces), "getifaddrs");/**获取系统接口列表 */
   for (interface = interfaces; interface && *found < maxIfs/*查找到的数目必须小于要求的最大数*/; interface = interface->ifa_next) {
-    if (interface->ifa_addr == NULL) continue;
+    if (interface->ifa_addr == NULL) continue;/*跳过无地址的*/
 
     /* We only support IPv4 & IPv6 */
     int family = interface->ifa_addr->sa_family;
     if (family != AF_INET && family != AF_INET6)
-      continue;/** 只支持IPv4和IPv6 */
+      continue;/** 只支持IPv4和IPv6（其它地址不看） */
 
     /* Only consider running interfaces, i.e. UP and physically attached. */
     if (!(interface->ifa_flags & IFF_RUNNING)) continue;/** 只考虑运行中的接口 */
 
-    /** 指出发现了哪些接口 */
+    /** 指出发现了哪些接口，接口地址是什么 */
     TRACE(NCCL_INIT|NCCL_NET,"Found interface %s:%s", interface->ifa_name, ncclSocketToString((union ncclSocketAddress *) interface->ifa_addr, line));
 
     /* Allow the caller to force the socket family type */
@@ -171,28 +172,30 @@ static ncclResult_t findInterfaces(const char* prefixList, char* names, union nc
     /* We also need to skip IPv6 loopback interfaces */
     if (family == AF_INET6) {
       struct sockaddr_in6* sa = (struct sockaddr_in6*)(interface->ifa_addr);
-      if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr)) continue;/** 只考虑非回环接口 */
+      if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr)) continue;/** ipv6不考虑loopback地址 */
     }
 
     // check against user specified interfaces
-    if (!(matchIfList(interface->ifa_name/**接口名称*/, -1, userIfs, nUserIfs, searchExact) ^ searchNot)) {
-      continue;
+    /*发现的接口与用户配置进行匹配*/
+    if (!(matchIfList(interface->ifa_name/**接口名称*/, -1/*不匹配端口*/, userIfs, nUserIfs, searchExact) ^ searchNot)) {
+      continue;/*忽略失配*/
     }
 
     // Check that this interface has not already been saved
     // getifaddrs() normal order appears to be; IPv4, IPv6 Global, IPv6 Link
     bool duplicate = false;
     for (int i = 0; i < *found; i++) {
+    	/*检查是否重复*/
       if (strcmp(interface->ifa_name, names+i*maxIfNameSize) == 0) { duplicate = true; break; }
     }
 
     if (!duplicate) {
       // Store the interface name
-      strncpy(names + (*found)*maxIfNameSize, interface->ifa_name, maxIfNameSize);
+      strncpy(names + (*found)*maxIfNameSize, interface->ifa_name, maxIfNameSize);/*固定数组形式排列*/
       // Store the IP address
       int salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
       memset(addrs + *found, '\0', sizeof(*addrs));
-      memcpy(addrs + *found, interface->ifa_addr, salen);
+      memcpy(addrs + *found, interface->ifa_addr, salen);/*记录接口地址*/
       (*found)++;
     }
   }
@@ -205,7 +208,7 @@ static bool matchSubnet(struct ifaddrs local_if, union ncclSocketAddress* remote
   /* Check family first */
   int family = local_if.ifa_addr->sa_family;
   if (family != remote->sa.sa_family) {
-    return false;
+    return false;/*两者family不同*/
   }
 
   if (family == AF_INET) {
@@ -215,7 +218,7 @@ static bool matchSubnet(struct ifaddrs local_if, union ncclSocketAddress* remote
     struct in_addr local_subnet, remote_subnet;
     local_subnet.s_addr = local_addr->sin_addr.s_addr & mask->sin_addr.s_addr;
     remote_subnet.s_addr = remote_addr.sin_addr.s_addr & mask->sin_addr.s_addr;
-    return (local_subnet.s_addr ^ remote_subnet.s_addr) ? false : true;
+    return (local_subnet.s_addr ^ remote_subnet.s_addr) ? false : true;/*两者是否在同网段*/
   } else if (family == AF_INET6) {
     struct sockaddr_in6* local_addr = (struct sockaddr_in6*)(local_if.ifa_addr);
     struct sockaddr_in6* mask = (struct sockaddr_in6*)(local_if.ifa_netmask);
@@ -244,8 +247,8 @@ static bool matchSubnet(struct ifaddrs local_if, union ncclSocketAddress* remote
   }
 }
 
-ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName, union ncclSocketAddress* localAddr,
-                                          union ncclSocketAddress* remoteAddr, int ifNameMaxSize, int* found) {
+ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName/*出参，选中的接口*/, union ncclSocketAddress* localAddr/*出参，选中的本端地址*/,
+                                          union ncclSocketAddress* remoteAddr/*远端地址*/, int ifNameMaxSize, int* found/*出参，是否找到*/) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
   char line_a[SOCKET_NAME_MAXLEN+1];
@@ -259,19 +262,19 @@ ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName, union ncclSocketAddress*
     /* We only support IPv4 & IPv6 */
     int family = interface->ifa_addr->sa_family;
     if (family != AF_INET && family != AF_INET6)
-      continue;
+      continue;/*仅ipv4/ipv6*/
 
     // check against user specified interfaces
     if (!matchSubnet(*interface, remoteAddr)) {
-      continue;
+      continue;/*忽略与远端地址非同网段的情况*/
     }
 
     // Store the local IP address
     int salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
-    memcpy(localAddr, interface->ifa_addr, salen);
+    memcpy(localAddr, interface->ifa_addr, salen);/*记录选中的本端地址*/
 
     // Store the interface name
-    strncpy(ifName, interface->ifa_name, ifNameMaxSize);
+    strncpy(ifName, interface->ifa_name, ifNameMaxSize);/*记录选中的地址*/
 
     TRACE(NCCL_INIT|NCCL_NET,"NET : Found interface %s:%s in the same subnet as remote address %s",
           interface->ifa_name, ncclSocketToString(localAddr, line), ncclSocketToString(remoteAddr, line_a));
@@ -282,18 +285,20 @@ ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName, union ncclSocketAddress*
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char* ip_port_pair) {
+ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua/*出参，解析ip_port_pair得到的地址*/, const char* ip_port_pair) {
   if (!(ip_port_pair && strlen(ip_port_pair) > 1)) {
+	  /*不可为空*/
     WARN("Net : string is null");
     return ncclInvalidArgument;
   }
 
-  bool ipv6 = ip_port_pair[0] == '[';
+  bool ipv6 = ip_port_pair[0] == '[';/*以'['来分辨ipv6地址*/
   /* Construct the sockaddress structure */
   if (!ipv6) {
     struct netIf ni;
     // parse <ip_or_hostname>:<port> string, expect one pair
     if (parseStringList(ip_port_pair, &ni, 1) != 1) {
+    	/*只容许一个*/
       WARN("Net : No valid <IPv4_or_hostname>:<port> pair found");
       return ncclInvalidArgument;
     }
@@ -304,6 +309,7 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
+    /*按host/ip取地址*/
     if ( (rv = getaddrinfo(ni.prefix, NULL, &hints, &p)) != 0) {
       WARN("Net : error encountered when getting address info : %s", gai_strerror(rv));
       return ncclInvalidArgument;
@@ -334,8 +340,8 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
   } else {
     int i, j = -1, len = strlen(ip_port_pair);
     for (i = 1; i < len; i++) {
-      if (ip_port_pair[i] == '%') j = i;
-      if (ip_port_pair[i] == ']') break;
+      if (ip_port_pair[i] == '%') j = i;/*%号出现的位置*/
+      if (ip_port_pair[i] == ']') break;/*v6地址结束*/
     }
     if (i == len) {
       WARN("Net : No valid [IPv6]:port pair found");
@@ -347,9 +353,10 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
     memset(ip_str, '\0', sizeof(ip_str));
     memset(port_str, '\0', sizeof(port_str));
     memset(if_name, '\0', sizeof(if_name));
-    strncpy(ip_str, ip_port_pair+1, global_scope ? i-1 : j-1);
-    strncpy(port_str, ip_port_pair+i+2, len-i-1);
+    strncpy(ip_str, ip_port_pair+1, global_scope ? i-1 : j-1);/*取地址*/
+    strncpy(port_str, ip_port_pair+i+2, len-i-1);/*取port*/
     int port = atoi(port_str);
+    /*取通过%分隔指明的接口名称*/
     if (!global_scope) strncpy(if_name, ip_port_pair+j+1, i-j-1); // If not global scope, we need the intf name
 
     struct sockaddr_in6& sin6 = ua->sin6;
@@ -362,7 +369,7 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
   return ncclSuccess;
 }
 
-ncclResult_t ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs, int ifNameMaxSize, int maxIfs,
+ncclResult_t ncclFindInterfaces(char* ifNames/*出参，找到的接口*/, union ncclSocketAddress *ifAddrs/*出参，找到的接口地址*/, int ifNameMaxSize, int maxIfs,
                                 int* nIfs) {
   static int shownIfName = 0;
   // Allow user to force the INET socket family selection
@@ -374,13 +381,13 @@ ncclResult_t ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs,
     /*环境变量指定了接口名称，使用这个名称*/
     INFO(NCCL_ENV, "NCCL_SOCKET_IFNAME set by environment to %s", env);
     // Specified by user : find or fail
-    if (shownIfName++ == 0) INFO(NCCL_NET, "NCCL_SOCKET_IFNAME set to %s", env);/*打印用户指定的接口名称 */
-    NCCLCHECK(findInterfaces(env, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
+    if (shownIfName++ == 0) INFO(NCCL_NET, "NCCL_SOCKET_IFNAME set to %s", env);/*打印用户通过环境变量指定的接口名称 */
+    NCCLCHECK(findInterfaces(env, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));/*结合系统实际接口，确定匹配的接口*/
   } else {
 	  /*未指定名称*/
     // Try to automatically pick the right one
     // Start with IB
-    NCCLCHECK(findInterfaces("ib", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
+    NCCLCHECK(findInterfaces("ib"/*选择ib开头的接口*/, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
     // else see if we can get some hint from COMM ID
     if (*nIfs == 0) {
       const char* commId = ncclGetEnv("NCCL_COMM_ID");
@@ -456,6 +463,7 @@ static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
   socklen_t socklen = sizeof(union ncclSocketAddress);
   sock->fd = accept(sock->acceptFd, (struct sockaddr*)&sock->addr, &socklen);
   if (sock->fd != -1) {
+	  /*接入成功，置accepted状态*/
     sock->state = ncclSocketStateAccepted;
   } else if (errno == ENETDOWN || errno == EPROTO || errno == ENOPROTOOPT || errno == EHOSTDOWN ||
              errno == ENONET || errno == EHOSTUNREACH || errno == EOPNOTSUPP || errno == ENETUNREACH ||
@@ -463,11 +471,13 @@ static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
     /* per accept's man page, for linux sockets, the following errors might be already pending errors
      * and should be considered as EAGAIN. To avoid infinite loop in case of errors, we use the retry count*/
     if (++sock->errorRetries == ncclParamRetryCnt()) {
+    	/*达到最大重试次数*/
       WARN("socketTryAccept: exceeded error retry count after %d attempts, %s", sock->errorRetries, strerror(errno));
       return ncclSystemError;
     }
     INFO(NCCL_NET|NCCL_INIT, "Call to accept returned %s, retrying", strerror(errno));
   } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+	  /*accept出错*/
     WARN("socketTryAccept: Accept failed: %s", strerror(errno));
     return ncclSystemError;
   }
@@ -688,6 +698,7 @@ static ncclResult_t socketFinalizeConnect(struct ncclSocket* sock) {
 static ncclResult_t socketProgressState(struct ncclSocket* sock) {
 	/*按状态处理*/
   if (sock->state == ncclSocketStateAccepting) {
+	  /*对于正要accept的*/
     NCCLCHECK(socketTryAccept(sock));
   }
   if (sock->state == ncclSocketStateAccepted) {
@@ -773,6 +784,7 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   }
 }
 
+/*接入新的client*/
 ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listenSock) {
   ncclResult_t ret = ncclSuccess;
 
@@ -791,12 +803,14 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
   }
 
   if (sock->acceptFd == -1) {
+	/*此sock首次应用于accept调用时，置为accepting状态*/
     memcpy(sock, listenSock, sizeof(struct ncclSocket));
     sock->acceptFd = listenSock->fd;
     sock->state = ncclSocketStateAccepting;
     sock->finalizeCounter = 0;
   }
 
+  /*执行accept*/
   do {
     NCCLCHECKGOTO(socketProgressState(sock), ret, exit);
   } while (sock->asyncFlag == 0 &&
@@ -837,7 +851,7 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock/*出参，待初始化的soc
   sock->magic = magic;
   sock->type = type;
   sock->fd = -1;
-  sock->acceptFd = -1;
+  sock->acceptFd = -1;/*默认acceptFd置为-1*/
   sock->customRetry = customRetry;
 
   if (addr) {

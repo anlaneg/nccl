@@ -146,7 +146,7 @@ int parseStringList(const char* string, struct netIf* ifList/**出参，接口�
     c = *ptr;
     if (c == ':') {
       if (ifC > 0) {
-        /** 遇到':'，将前缀和端口号分离,接口数增加 */
+        /** 遇到':'（有端口情况），将前缀和端口号分离,接口数增加 */
         ifList[ifNum].prefix[ifC] = '\0';
         ifList[ifNum].port = atoi(ptr+1);
         ifNum++; ifC = 0;
@@ -155,13 +155,13 @@ int parseStringList(const char* string, struct netIf* ifList/**出参，接口�
       while (c != ',' && c != '\0') c = *(++ptr);
     } else if (c == ',' || c == '\0') {
       if (ifC > 0) {
-        /** 遇到','或'\0'，将前缀和端口号分离,接口数增加 */
+        /** 遇到','或'\0'（无端口情况） */
         ifList[ifNum].prefix[ifC] = '\0';
         ifList[ifNum].port = -1;
         ifNum++; ifC = 0;
       }
     } else {
-      /** 其他字符，直接添加到前缀 */
+      /** 未遇到',',':'此时按前缀考虑 */
       ifList[ifNum].prefix[ifC] = c;
       ifC++;
     }
@@ -172,11 +172,12 @@ int parseStringList(const char* string, struct netIf* ifList/**出参，接口�
 
 static bool matchIf(const char* string, const char* ref, bool matchExact) {
   // Make sure to include '\0' in the exact case
-  int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
+  int matchLen = matchExact/*精确匹配还是前缀匹配*/ ? strlen(string) + 1 : strlen(ref);
   return strncmp(string, ref, matchLen) == 0;
 }
 
 static bool matchPort(const int port1, const int port2) {
+	/*port为-1时，表示不匹配port*/
   if (port1 == -1) return true;
   if (port2 == -1) return true;
   if (port1 == port2) return true;
@@ -184,7 +185,7 @@ static bool matchPort(const int port1, const int port2) {
 }
 
 
-bool matchIfList(const char* string/**接口名称*/, int port, struct netIf* ifList, int listSize, bool matchExact) {
+bool matchIfList(const char* string/**接口名称*/, int port, struct netIf* ifList, int listSize/*iflist数组大小*/, bool matchExact/*是否精确匹配*/) {
   // Make an exception for the case where no user list is defined
   if (listSize == 0) return true;
 

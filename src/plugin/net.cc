@@ -301,7 +301,7 @@ static ncclResult_t ncclNetPluginDisableOtherExternal(int pluginIndex) {
     if (i != pluginIndex) {
       // Append all disabled plugin names to a string
       snprintf(names+strlen(names), sizeof(names)-strlen(names), (strlen(names) == 0) ? "%s" : ", %s", netPluginLibs[i].name);
-      netPluginLibs[i].ncclNetPluginState = ncclNetPluginStateDisabled;
+      netPluginLibs[i].ncclNetPluginState = ncclNetPluginStateDisabled;/*非pluginIndex的插件均禁用*/
     }
   }
   if(strlen(names) > 0) {
