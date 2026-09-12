@@ -73,6 +73,7 @@ gdr_t ncclGdrCopy = NULL;
 
 ncclResult_t initGdrCopy() {
   if (ncclParamGdrCopyEnable() == 1) {
+	  /*GDR copy被开启*/
     ncclGdrCopy = ncclGdrInit();
   }
   return ncclSuccess;
@@ -81,15 +82,18 @@ ncclResult_t initGdrCopy() {
 // The default Linux stack size (8MB) is safe.
 #define SAFE_STACK_SIZE (8192*1024)
 
+/*设置栈大小*/
 static ncclResult_t setCpuStackSize() {
+	/*参数要求设置cpu stack大小*/
   if (ncclParamSetCpuStackSize() != 0) {
     // Query the stack size used for newly launched threads.
     pthread_attr_t attr;
     size_t stackSize;
     PTHREADCHECK(pthread_attr_init(&attr), "pthread_attr_init");
+    /*取当前线程栈大小*/
     PTHREADCHECK(pthread_attr_getstacksize(&attr, &stackSize), "pthread_attr_getstacksize");
 
-    if (stackSize < SAFE_STACK_SIZE) {
+    if (stackSize < SAFE_STACK_SIZE/*当前线程栈大小小于安全值*/) {
       // GNU libc normally uses RLIMIT_STACK as the default pthread stack size, unless it's set to "unlimited" --
       // in that case a fallback value of 2MB (!) is used.
 
@@ -120,10 +124,10 @@ static ncclResult_t initResult = ncclSuccess;
 static std::once_flag initOnceFlag;
 
 static void initOnceFunc() {
-  setCpuStackSize();
-  initGdrCopy();
+  setCpuStackSize();/*设置栈大小*/
+  initGdrCopy();/*初始化gdr copy*/
   // Always initialize bootstrap network
-  NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);
+  NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);/*确定bootstrap接口名称及地址*/
 
   initNvtxRegisteredEnums();
 exit:;
@@ -157,12 +161,13 @@ ncclResult_t ncclGetVersion(int* version) {
 }
 
 NCCL_API(ncclResult_t, ncclGetUniqueId, ncclUniqueId* out);
-ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
+ncclResult_t ncclGetUniqueId(ncclUniqueId* out/*bootstrap监听地址信息*/) {
+	/*初始化env变量，初始化env插件*/
   NCCLCHECK(ncclInitEnv());
   NCCLCHECK(ncclInit());
-  NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));
+  NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));/*out指针不能为空*/
   struct ncclBootstrapHandle handle;
-  NCCLCHECK(bootstrapGetUniqueId(&handle));
+  NCCLCHECK(bootstrapGetUniqueId(&handle));/*创建bootstrap线程并监听等待连接*/
   // ncclUniqueId and bootstrapHandle don't have the same size and alignment
   // reset to 0 to avoid undefined data
   memset(out, 0, sizeof(*out));
@@ -1965,7 +1970,7 @@ static void ncclCommInitJobFree(void* _job) {
   free(_job);
 }
 
-static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId, ncclUniqueId* commId, int myrank, int cudaDev, ncclConfig_t *config, const char funcName[]) {
+static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks/*gpu总数*/, int nId, ncclUniqueId* commId, int myrank, int cudaDev, ncclConfig_t *config, const char funcName[]) {
   if (nId <= 0 || nId > nranks) {
     WARN("improper usage of ncclCommInitRank: nId = %d, nranks=%d", nId, nranks);
     return ncclInvalidArgument;
@@ -2078,15 +2083,20 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev/**gpu数量*/, const in
   (void)ncclCudaLibraryInit();
 
   CUDACHECK(cudaGetDevice(&oldDev));
+  /*comms指针不得为空*/
   NCCLCHECKGOTO(PtrCheck(comms, "CommInitAll", "comms"), ret, fail);
   if (ndev < 0) {
+	  /*gpu数量不得小于0*/
     WARN("Invalid device count requested : %d", ndev);
     ret = ncclInvalidArgument;
     goto fail;
   }
 
-  CUDACHECKGOTO(cudaGetDeviceCount(&totalnDev), ret, fail);/**取设备数 */
-  if (devlist) {
+  CUDACHECKGOTO(cudaGetDeviceCount(&totalnDev), ret, fail);/**取总设备数 */
+  /*检查devlist中是否有重复的设备id*/
+  if (devlist/*提供了设备列表*/) {
+
+	/*为每个gpu设备申请一个gpuFlags*/
     NCCLCHECKGOTO(ncclCalloc(&gpuFlags, totalnDev), ret, fail);
     for (int i = 0; i < ndev; ++i) {
       /* invalid device check. */
@@ -2099,7 +2109,9 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev/**gpu数量*/, const in
 
       /* duplicate device check. */
       if (gpuFlags[devlist[i]] != 0) {
-        ret = ncclInvalidUsage;/*这个flags当前应为0，说明未被使用（前面刚申请了内存，如为非0，则说明之前devlist中有重复的dev id）*/
+    	  /*这个i号gpu对应的flags当前应为0，说明被使用
+    	   * （在前面刚申请了内存，如为非0，则说明for运行过程中在i之前已处理过，即devlist中有重复的gpu设备编号）*/
+        ret = ncclInvalidUsage;
         goto fail;
       }
 
@@ -2110,13 +2122,14 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev/**gpu数量*/, const in
   }
 
   ncclUniqueId uniqueId;
+  /*创建bootstrap线程并监听了uniqueId中明确的地址*/
   NCCLCHECKGOTO(ncclGetUniqueId(&uniqueId), ret, fail);
-  NCCLCHECKGOTO(ncclGroupStartInternal(), ret, fail);
+  NCCLCHECKGOTO(ncclGroupStartInternal(), ret, fail);/*开始一个新group*/
   for (int i=0; i<ndev; i++) {
     // Ignore return codes .. we need to call ncclGroupEnd to clean up anyway
-    int dev = devlist ? devlist[i] : i;
-    CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);
-    ncclCommInitRankDev(comms+i, ndev,1, &uniqueId, i, dev, &config, __func__);
+    int dev = devlist ? devlist[i] : i;/*取对应的gpu编号*/
+    CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);/*设置当前gpu设备*/
+    ncclCommInitRankDev(comms+i/*i号gpu对应的comms*/, ndev/*gpu总数*/,1, &uniqueId, i/*索引*/, dev/*gpu编号*/, &config, __func__);
   }
   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);
 

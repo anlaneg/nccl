@@ -416,6 +416,7 @@ void ncclResetDebugInit() {
 
 NCCL_PARAM(SetThreadName, "SET_THREAD_NAME", 0);
 
+/*设置线程名称*/
 void ncclSetThreadName(pthread_t thread, const char *fmt, ...) {
   // pthread_setname_np is nonstandard GNU extension
   // needs the following feature test macro

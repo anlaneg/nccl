@@ -138,6 +138,7 @@ ncclResult_t ncclP2PPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclPreconnectJob* job = (struct ncclPreconnectJob*)job_;
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));/**设置当前线程的cuda设备为comm->cudaDev */
+  /*设置cpu亲和性*/
   if (!job_->isThreadMain && CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
   NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1));
   return ncclSuccess;

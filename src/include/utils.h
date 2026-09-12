@@ -57,6 +57,7 @@ inline uint64_t clockNano() {
 
 /* get any bytes of random data from /dev/urandom, return ncclSuccess (0) if it succeeds. */
 inline ncclResult_t getRandomData(void* buffer, size_t bytes) {
+	/*生成随机数*/
   ncclResult_t ret = ncclSuccess;
   if (bytes > 0) {
     const size_t one = 1UL;

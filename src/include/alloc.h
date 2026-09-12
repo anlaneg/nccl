@@ -129,7 +129,7 @@ static inline ncclResult_t ncclCudaHostFree(void* ptr) {
 #define ncclCudaHostCalloc(...) ncclCudaHostCallocDebug(__VA_ARGS__, __FILE__, __LINE__)
 
 template <typename T>
-ncclResult_t ncclCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {
+ncclResult_t ncclCallocDebug(T** ptr, size_t nelem/*元素数目*/, const char *filefunc, int line) {
   if (nelem > 0) {
     T* p = (T*)malloc(nelem*ncclSizeOfT<T>());/**申请nelem个T类型的内存 */
     if (p == NULL) {
@@ -147,18 +147,22 @@ ncclResult_t ncclCallocDebug(T** ptr, size_t nelem, const char *filefunc, int li
 #define ncclCalloc(...) ncclCallocDebug(__VA_ARGS__, __FILE__, __LINE__)
 
 template <typename T>
-ncclResult_t ncclRealloc(T** ptr, size_t oldNelem, size_t nelem) {
+ncclResult_t ncclRealloc(T** ptr/*入出参*/, size_t oldNelem/*旧数目*/, size_t nelem) {
   T* oldp = *ptr;
   if (nelem < oldNelem || (oldp == NULL && oldNelem > 0)) return ncclInternalError;
   if (nelem == oldNelem) return ncclSuccess;
 
-  T* p = (T*)malloc(nelem*ncclSizeOfT<T>());
+  T* p = (T*)malloc(nelem*ncclSizeOfT<T>());/*这里申请的是T类型*/
   if (p == NULL) {
+	  /*申请内存失败*/
     WARN("Failed to malloc %ld bytes", nelem*ncclSizeOfT<T>());
     return ncclSystemError;
   }
+  /*如果旧指针不为空，且有旧数目，则先复制到新位置*/
   if (oldp && oldNelem) memcpy(p, oldp, oldNelem * ncclSizeOfT<T>());
+  /*释放旧指针*/
   if (oldp) free(oldp);
+  /*其它未复制位置置为0*/
   memset(p+oldNelem, 0, (nelem-oldNelem)*ncclSizeOfT<T>());
   *ptr = (T*)p;
   INFO(NCCL_ALLOC, "Mem Realloc old size %ld, new size %ld pointer %p", oldNelem*ncclSizeOfT<T>(), nelem*ncclSizeOfT<T>(), *ptr);

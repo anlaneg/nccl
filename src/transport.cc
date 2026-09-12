@@ -23,7 +23,7 @@ struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
   &profilerTransport // Not really used for transport, only to create proxy ops polling on profiler counters.
 };
 
-template <int type>
+template <int type/*type为1时为发送*/>
 static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclConnect* connect, int channelId, int peer, int connIndex, int* transportType) {
   struct ncclPeerInfo* myInfo = comm->peerInfo+comm->rank;
   struct ncclPeerInfo* peerInfo = comm->peerInfo+peer;
@@ -33,9 +33,10 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
     struct ncclTransport *transport = ncclTransports[t];
     struct ncclTransportComm* transportComm = type == 1 ? &transport->send : &transport->recv;
     int ret = 0;
-    /**检查是否可以连接 */
-    NCCLCHECK(transport->canConnect(&ret, comm, graph, myInfo, peerInfo));
+    /**检查此transport是否可以连接 */
+    NCCLCHECK(transport->canConnect(&ret/*出参，可连接时为真*/, comm, graph, myInfo, peerInfo));
     if (ret) {
+    	/*可连接*/
       connector->transportComm = transportComm;
       NCCLCHECK(transportComm->setup(comm, graph, myInfo, peerInfo, connect, connector, channelId, connIndex));
       if (transportType) *transportType = t;
@@ -134,17 +135,17 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   bool timeReported = false;
   cudaStream_t hostStream, deviceStream;
 
-  NCCLCHECK(ncclCalloc(&data, maxPeers));
-  NCCLCHECKGOTO(ncclCalloc(&recvData, maxPeers), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&sendData, maxPeers), ret, fail);
+  NCCLCHECK(ncclCalloc(&data, maxPeers));/*申请maxPeers个ncclConnect*/
+  NCCLCHECKGOTO(ncclCalloc(&recvData, maxPeers), ret, fail);/*申请maxPeers个ncclConnect*/
+  NCCLCHECKGOTO(ncclCalloc(&sendData, maxPeers), ret, fail);/*申请maxPeers个ncclConnect*/
 
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->hostStream, /*concurrent=*/false, &hostStream), ret, fail);
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), ret, fail);
   // First time initialization
   for (int i=1; i<comm->nRanks; i++) {
     int bootstrapTag = (i<<8) + (graph ? graph->id+1 : 0);
-    int recvPeer = (comm->rank - i + comm->nRanks) % comm->nRanks;
-    int sendPeer = (comm->rank + i) % comm->nRanks;
+    int recvPeer = (comm->rank - i + comm->nRanks) % comm->nRanks;/*从前一个收取*/
+    int sendPeer = (comm->rank + i) % comm->nRanks;/*向后一个发送（这样就构成了一个ring)*/
     uint64_t recvMask = comm->connectRecv[recvPeer];
     uint64_t sendMask = comm->connectSend[sendPeer];
 
@@ -164,7 +165,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     TIME_START(0);
     for (int c=0; c<MAXCHANNELS; c++) {
       if (recvMask & (1UL<<c)) {
-        NCCLCHECKGOTO(selectTransport<0>(comm, graph, recvData[p]+recvChannels++, c, recvPeer, connIndex, &type), ret, fail);
+        NCCLCHECKGOTO(selectTransport<0/*接收*/>(comm, graph, recvData[p]+recvChannels++, c, recvPeer, connIndex, &type), ret, fail);
       }
     }
     TIME_STOP(0);
@@ -172,7 +173,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     sendData[p] = recvData[p]+recvChannels;
     for (int c=0; c<MAXCHANNELS; c++) {
       if (sendMask & (1UL<<c)) {
-        NCCLCHECKGOTO(selectTransport<1>(comm, graph, sendData[p]+sendChannels++, c, sendPeer, connIndex, &type), ret, fail);
+        NCCLCHECKGOTO(selectTransport<1/*发送*/>(comm, graph, sendData[p]+sendChannels++, c, sendPeer, connIndex, &type), ret, fail);
       }
     }
     TIME_STOP(1);

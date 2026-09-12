@@ -124,7 +124,7 @@
   if (RES != ncclSuccess && RES != ncclInProgress) { \
     /* Print the back trace*/ \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
-    return RES;/*直接返回错误*/ \
+    return RES;/*仅非成功且非处理中，直接返回错误*/ \
   } \
 } while (0)
 

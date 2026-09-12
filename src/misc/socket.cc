@@ -247,6 +247,7 @@ static bool matchSubnet(struct ifaddrs local_if, union ncclSocketAddress* remote
   }
 }
 
+/*读取本机接口信息，然后遍历并检查是否与remoteAddr有在同一网段的，返回选中的接口及地址（仅找一个）*/
 ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName/*出参，选中的接口*/, union ncclSocketAddress* localAddr/*出参，选中的本端地址*/,
                                           union ncclSocketAddress* remoteAddr/*远端地址*/, int ifNameMaxSize, int* found/*出参，是否找到*/) {
 #ifdef ENABLE_TRACE
@@ -255,8 +256,8 @@ ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName/*出参，选中的接口
 #endif
   *found = 0;
   struct ifaddrs *interfaces, *interface;
-  SYSCHECK(getifaddrs(&interfaces), "getifaddrs");
-  for (interface = interfaces; interface && !*found; interface = interface->ifa_next) {
+  SYSCHECK(getifaddrs(&interfaces), "getifaddrs");/*取本机接口信息*/
+  for (interface = interfaces; interface && !*found/*没找到继续循环*/; interface = interface->ifa_next) {
     if (interface->ifa_addr == NULL) continue;
 
     /* We only support IPv4 & IPv6 */
@@ -278,7 +279,7 @@ ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName/*出参，选中的接口
 
     TRACE(NCCL_INIT|NCCL_NET,"NET : Found interface %s:%s in the same subnet as remote address %s",
           interface->ifa_name, ncclSocketToString(localAddr, line), ncclSocketToString(remoteAddr, line_a));
-    *found = 1;
+    *found = 1;/*找到*/
   }
 
   freeifaddrs(interfaces);
@@ -297,7 +298,7 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua/*出参，�
   if (!ipv6) {
     struct netIf ni;
     // parse <ip_or_hostname>:<port> string, expect one pair
-    if (parseStringList(ip_port_pair, &ni, 1) != 1) {
+    if (parseStringList(ip_port_pair, &ni, 1/*仅一个*/) != 1) {
     	/*只容许一个*/
       WARN("Net : No valid <IPv4_or_hostname>:<port> pair found");
       return ncclInvalidArgument;
@@ -400,7 +401,9 @@ ncclResult_t ncclFindInterfaces(char* ifNames/*出参，找到的接口*/, union
       }
     }
     // Then look for anything else (but not docker,lo, or virtual)
+    /*仍没有找到，找这些接口之外的*/
     if (*nIfs == 0) NCCLCHECK(findInterfaces("^docker,lo,virbr", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
+    /*仍没有找到，在这三个中选*/
     // Finally look for docker, then lo.
     if (*nIfs == 0) NCCLCHECK(findInterfaces("docker", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
     if (*nIfs == 0) NCCLCHECK(findInterfaces("lo", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));

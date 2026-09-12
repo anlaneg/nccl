@@ -12,7 +12,7 @@
 
 struct ncclBootstrapHandle {
   uint64_t magic;
-  union ncclSocketAddress addr;
+  union ncclSocketAddress addr;/*bootstrap监听的地址*/
 };
 static_assert(sizeof(struct ncclBootstrapHandle) <= sizeof(ncclUniqueId), "Bootstrap handle is too large to fit inside NCCL unique ID");
 

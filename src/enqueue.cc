@@ -2622,6 +2622,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
   return ncclSuccess;
 }
 
+/*将nccInfo入队*/
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   // Early-out on invalid or revoked communicator
   ncclResult_t ret = CommCheck(info->comm, info->opName, "comm");

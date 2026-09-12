@@ -70,6 +70,7 @@ int main(int argc, char *argv[]) {
   CUDACHECK(cudaGetDeviceCount(&num_gpus));/**获取可用GPU数量 */
 
   if (num_gpus == 0) {
+	  /*没有可用的gpu*/
     fprintf(stderr, "No CUDA devices found\n");
     return 1;
   }
@@ -80,7 +81,7 @@ int main(int argc, char *argv[]) {
     printf("Found only %d GPU(s) - pattern will be limited\n", num_gpus);
   }
 
-  printf("Using %d GPUs for ring communication\n", num_gpus);
+  printf("Using %d GPUs for ring communication\n", num_gpus);/*做ring型通信*/
 
   // ========================================================================
   // STEP 2: Prepare Data Structures and Device List
@@ -91,17 +92,17 @@ int main(int argc, char *argv[]) {
   // Create device list (use all available devices)
   int *devices = (int *)malloc(num_gpus * sizeof(int));
   for (int i = 0; i < num_gpus; i++) {
-    devices[i] = i;/**创建gpu设备列表（0到num_gpus-1） */
+    devices[i] = i;/**创建gpu设备编号列表（0到num_gpus-1） */
   }
 
   // Allocate communicators, streams, and buffer pointers
   comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));/*每个gpu对应一个ncclComm_t结构*/
   streams = (cudaStream_t *)malloc(num_gpus * sizeof(cudaStream_t));/*每个gpu对应一个cudaStream_t结构*/
   /**一组指针数据，每个指针指向一个gpu的发送缓冲区（主机端） */
-  h_sendbuff = (float **)malloc(num_gpus * sizeof(float *));
-  h_recvbuff = (float **)malloc(num_gpus * sizeof(float *));
-  d_sendbuff = (float **)malloc(num_gpus * sizeof(float *));
-  d_recvbuff = (float **)malloc(num_gpus * sizeof(float *));
+  h_sendbuff = (float **)malloc(num_gpus * sizeof(float *));/*主机侧发送buffer*/
+  h_recvbuff = (float **)malloc(num_gpus * sizeof(float *));/*主机侧接收buffer*/
+  d_sendbuff = (float **)malloc(num_gpus * sizeof(float *));/*设备侧发送buffer*/
+  d_recvbuff = (float **)malloc(num_gpus * sizeof(float *));/*设备侧接收buffer*/
 
   // ========================================================================
   // STEP 3: Initialize NCCL Communicators
@@ -114,6 +115,7 @@ int main(int argc, char *argv[]) {
    * - Assigns ranks sequentially (GPU 0 = rank 0, GPU 1 = rank 1, etc.)
    */
   printf("Initializing NCCL communicators\n");
+  /*对ncclComm_t结构体进行初始化*/
   NCCLCHECK(ncclCommInitAll(comms, num_gpus, devices/**出参，gpu设备编号数组（无重复） */));
   printf("All communicators initialized successfully\n");
 

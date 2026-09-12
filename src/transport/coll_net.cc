@@ -1645,7 +1645,7 @@ fail:
 
 struct ncclTransport collNetTransport = {
   "COL",
-  canConnect,
+  canConnect,/*判断是否可连接*/
   { sendSetup, sendConnect, sendFree, NULL, sendProxySetup, sendProxyConnect, sendProxyFree, sendProxyProgress, sendProxyRegBuffer, sendProxyDeregBuffer },
   { recvSetup, recvConnect, recvFree, NULL, recvProxySetup, recvProxyConnect, recvProxyFree, recvProxyProgress, recvProxyRegBuffer, recvProxyDeregBuffer }
 };

@@ -451,7 +451,7 @@ struct ncclComm {
   int* topParentLocalRanks;
   struct ncclChannel channels[MAXCHANNELS];
   struct ncclPeerInfo* peerInfo;
-  struct ncclTopoSystem* topo;
+  struct ncclTopoSystem* topo;/*拓扑*/
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
   bool peerInfoValid;
@@ -487,6 +487,7 @@ struct ncclComm {
   int compCap; // compute capability of the GPU
   int minCompCap, maxCompCap; // min/max compute capability in the communicator
   int64_t busId;   // my PCI bus ID in int format
+  /*线程指明的亲和cpu*/
   cpu_set_t cpuAffinity; // CPU affinity of the GPU
   int cudaArch; // matches __CUDA_ARCH__ of device
 

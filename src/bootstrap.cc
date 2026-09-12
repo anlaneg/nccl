@@ -78,8 +78,8 @@ static int isFirstFromRoot(int rank, int root, int nRanks, int nRoots) {
 }
 
 struct bootstrapRootArgs {
-  struct ncclSocket* listenSock;
-  uint64_t magic;
+  struct ncclSocket* listenSock;/*listen的socket*/
+  uint64_t magic;/*ncclBootstrapHandle使用的magic*/
 };
 
 /* Init functions */
@@ -90,6 +90,7 @@ static std::mutex bootstrapNetMutex;
 
 NCCL_PARAM(BootstrapNetEnable,"OOB_NET_ENABLE", 0);
 
+/*确定bootstrap接口名称及地址*/
 ncclResult_t bootstrapNetInit() {
   if (bootstrapNetInitDone == 0) {
     std::lock_guard<std::mutex> lock(bootstrapNetMutex);
@@ -97,24 +98,29 @@ ncclResult_t bootstrapNetInit() {
       const char* env = ncclGetEnv("NCCL_COMM_ID");
       int nIfs = 0;
       if (env) {
+    	  /*取此环境变量指定的地址及端口信息*/
         union ncclSocketAddress remoteAddr;
         if (ncclSocketGetAddrFromString(&remoteAddr, env) != ncclSuccess) {
           WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
           return ncclInvalidArgument;
         }
+        /*在本机选与环境变量指定地址在同一网段的接口及地址（仅找一个）*/
         NCCLCHECK(ncclFindInterfaceMatchSubnet(bootstrapNetIfName, &bootstrapNetIfAddr, &remoteAddr, MAX_IF_NAME_SIZE,
                                                &nIfs));
         if (nIfs <= 0) {
+        	/*没有找到*/
           WARN("NET/Socket : No usable listening interface found");
           return ncclSystemError;
         }
       } else {
+    	  /*没有指定remote,找一个接口*/
         NCCLCHECK(ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1, &nIfs));
         if (nIfs <= 0) {
           WARN("Bootstrap : no socket interface found");
           return ncclInvalidUsage;
         }
       }
+      /*显示找到的bootstrap 接口名及地址*/
       char line[SOCKET_NAME_MAXLEN+MAX_IF_NAME_SIZE+2];
       snprintf(line, sizeof(line), " %s:", bootstrapNetIfName);
       ncclSocketToString(&bootstrapNetIfAddr, line+strlen(line));
@@ -202,16 +208,17 @@ static ncclResult_t socketSend(struct ncclSocket* sock, void* data, int size) {
     NCCLCHECK(ncclSocketSend(sock, data, size));
   return ncclSuccess;
 }
-static ncclResult_t socketRecv(struct ncclSocket* sock, void* data, int size) {
+static ncclResult_t socketRecv(struct ncclSocket* sock, void* data/*出参，收取的内容*/, int size) {
   int recvSize;
-  NCCLCHECK(ncclSocketRecv(sock, &recvSize, sizeof(int)));
+  NCCLCHECK(ncclSocketRecv(sock, &recvSize, sizeof(int)));/*收取size*/
   if (recvSize > size) {
+	  /*收到的size比参数预期的要大*/
     WARN("Message truncated : received %d bytes instead of %d", recvSize, size);
     return ncclInternalError;
   }
   int actualSize = std::min(recvSize, size);
   if (actualSize > 0)
-    NCCLCHECK(ncclSocketRecv(sock, data, actualSize));
+    NCCLCHECK(ncclSocketRecv(sock, data, actualSize));/*再收取实际的内容*/
   return ncclSuccess;
 }
 static ncclResult_t socketSendRecv(struct ncclSocket* sendSock, void* sendData, int sendSize, struct ncclSocket* recvSock,
@@ -279,6 +286,7 @@ fail:
   (void)ncclSocketClose(&sock);
   return res;
 }
+/*bootstrap线程入口*/
 static void* bootstrapRoot(void* rargs) {
   uint64_t timers[BOOTSTRAP_INIT_ROOT_N] = {0};
   struct bootstrapRootArgs* args = (struct bootstrapRootArgs*)rargs;
@@ -306,9 +314,9 @@ static void* bootstrapRoot(void* rargs) {
   do {
     struct ncclSocket sock;
     NCCLCHECKGOTO(ncclSocketInit(&sock), res, out);
-    NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);
-    NCCLCHECKGOTO(socketRecv(&sock, &info, sizeof(info)), res, out);
-    NCCLCHECKGOTO(ncclSocketClose(&sock), res, out);
+    NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);/*accept socket*/
+    NCCLCHECKGOTO(socketRecv(&sock, &info, sizeof(info)), res, out);/*收取info*/
+    NCCLCHECKGOTO(ncclSocketClose(&sock), res, out);/*关闭socket*/
 
     if (c == 0) {
       BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_ROOT_WAIT]);
@@ -392,16 +400,21 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   struct bootstrapRootArgs* args = NULL;
   pthread_t thread;
 
-  NCCLCHECK(ncclCalloc(&listenSock, 1));
+  NCCLCHECK(ncclCalloc(&listenSock, 1));/*申请listenSock*/
+  /*初始化socket*/
   NCCLCHECKGOTO(ncclSocketInit(listenSock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, NULL, 0), ret, fail);
+  /*监听此地址*/
   NCCLCHECKGOTO(ncclSocketListen(listenSock), ret, fail);
+  /*更新监听地址（比如未指定listen port，被自动分配）*/
   NCCLCHECKGOTO(ncclSocketGetAddr(listenSock, &handle->addr), ret, fail);
 
   NCCLCHECKGOTO(ncclCalloc(&args, 1), ret, fail);
   args->listenSock = listenSock;
-  args->magic = handle->magic;
+  args->magic = handle->magic;/*使用的magic*/
+  /*创建bootstrap线程*/
   PTHREADCHECKGOTO(pthread_create(&thread, NULL, bootstrapRoot, (void*)args), "pthread_create", ret, fail);
   ncclSetThreadName(thread, "NCCL BootstrapR");
+  /*使此线程不用join*/
   PTHREADCHECKGOTO(pthread_detach(thread), "pthread_detach", ret, fail); // will not be pthread_join()'d
 exit:
   return ret;
@@ -417,13 +430,16 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
   const char* env = ncclGetEnv("NCCL_COMM_ID");
   if (env) {
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
+    /*从环境变量转地址*/
     if (ncclSocketGetAddrFromString(&handle->addr, env) != ncclSuccess) {
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
       return ncclInvalidArgument;
     }
     handle->magic = NCCL_MAGIC;
   } else {
+	  /*没有指定环境变量，magic用随机数*/
     NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
+    /*使用bootstrap网络地址*/
     memcpy(&handle->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
     NCCLCHECK(bootstrapCreateRoot(handle, false));
   }

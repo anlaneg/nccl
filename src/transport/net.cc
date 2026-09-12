@@ -152,7 +152,7 @@ struct netRegInfo {
 
 /* Determine if two peers can communicate with NET */
 static ncclResult_t canConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
-  *ret = 1;
+  *ret = 1;/*默认置1*/
   if (info1->hostHash == info2->hostHash) {
     /**在同一节点内，检查是否禁用了内节点网络*/
     // If on the same host, check intra-node net is not disabled.
@@ -1869,7 +1869,9 @@ static ncclResult_t recvProxyDeregBuffer(struct ncclProxyConnection* connection,
 /**提供跨节点通信 */
 struct ncclTransport netTransport = {
   "NET",
-  canConnect,
+  canConnect,/*判断是否可连接*/
+  /*负责send*/
   { sendSetup, sendConnect, sendFree, proxySharedInit, sendProxySetup, sendProxyConnect, sendProxyFree, sendProxyProgress, sendProxyRegBuffer, sendProxyDeregBuffer },
+  /*负责recv*/
   { recvSetup, recvConnect, recvFree, proxySharedInit, recvProxySetup, recvProxyConnect, recvProxyFree, recvProxyProgress, recvProxyRegBuffer, recvProxyDeregBuffer }
 };

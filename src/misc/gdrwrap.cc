@@ -32,7 +32,7 @@ pthread_mutex_t gdrLock = PTHREAD_MUTEX_INITIALIZER;
 #define LOAD_SYM(handle, symbol, funcptr) do {         \
     cast = (void**)&funcptr;                             \
     tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
+    if (tmp == NULL) {/*符号必须存在*/                     \
       WARN("dlsym failed on %s - %s", symbol, dlerror());\
       goto teardown;                                     \
     }                                                    \
@@ -42,7 +42,7 @@ pthread_mutex_t gdrLock = PTHREAD_MUTEX_INITIALIZER;
 #define LOAD_SYM_OPTIONAL(handle, symbol, funcptr) do {\
     cast = (void**)&funcptr;                             \
     tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
+    if (tmp == NULL) {/*符号不存在，不报错*/                \
       INFO(NCCL_INIT,"dlsym failed on %s, ignoring", symbol); \
     }                                                    \
     *cast = tmp;                                         \
@@ -51,17 +51,20 @@ pthread_mutex_t gdrLock = PTHREAD_MUTEX_INITIALIZER;
 static std::once_flag initOnceFlag;
 static ncclResult_t initResult;
 
+/*加载gdrapi库并设置相应的函数指针*/
 static void initOnceFunc(void) {
   static void* gdrhandle = NULL;
   void* tmp;
   void** cast;
 
+  /*加载gdrapi库*/
   gdrhandle=dlopen(GDRAPI_LIBNAME, RTLD_NOW);
   if (!gdrhandle) {
     WARN("Failed to open %s", GDRAPI_LIBNAME);
     goto teardown;
   }
 
+  /*设置gdr api函数指针*/
   /* Load the function pointers from the DL library image */
   LOAD_SYM(gdrhandle, "gdr_open", gdr_internal_open);
   LOAD_SYM(gdrhandle, "gdr_close", gdr_internal_close);
@@ -102,6 +105,7 @@ ncclResult_t wrap_gdr_symbols(void) {
   return initResult;
 }
 
+/*调用gdr open函数*/
 gdr_t wrap_gdr_open(void) {
   if (gdr_internal_open == NULL) {
     WARN("GDRCOPY lib wrapper not initialized.");
