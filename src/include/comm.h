@@ -482,7 +482,7 @@ struct ncclComm {
   uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect mismatches.
 
   uint64_t commHash;
-  /*当前gpu在communicator中的编号*/
+  /*当前gpu在communicator中的编号(自身）*/
   int rank;    // my rank in the communicator
   /*communicator中gpu的数目*/
   int nRanks;  // number of GPUs in communicator

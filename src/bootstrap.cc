@@ -466,7 +466,7 @@ struct unexConn {
 struct bootstrapRing_t {
   union {
     struct {
-      void *sendComm, *recvComm;
+      void *sendComm/*发送对应的comm*/, *recvComm/*接收对应的comm*/;
       ncclNetDeviceHandle_t *sendDevHandle, *recvDevHandle;
     } net;
     struct {
@@ -497,7 +497,7 @@ struct bootstrapState {
   struct unexConn* unexpectedConnections;
   int cudaDev;
   int rank;
-  int nranks;
+  int nranks;/*rank总数*/
   uint64_t magic;
   volatile uint32_t* abortFlag;
 };
@@ -505,8 +505,9 @@ struct bootstrapState {
 #define STATE_LISTEN(s, f) (s->listen.f)
 
 // helper functions
-static ncclResult_t createListenSocket(struct ncclComm* comm, uint64_t magic, struct ncclSocket* socket, union ncclSocketAddress* addr,
+static ncclResult_t createListenSocket(struct ncclComm* comm, uint64_t magic, struct ncclSocket* socket, union ncclSocketAddress* addr/*出参，监听的地址*/,
                                        ncclSocketType type) {
+	/*创建listen socket,取listen的地址*/
   NCCLCHECK(ncclSocketInit(socket, &bootstrapNetIfAddr, magic, type, comm->abortFlag));
   NCCLCHECK(ncclSocketListen(socket));
   NCCLCHECK(ncclSocketGetAddr(socket, addr));
@@ -519,36 +520,39 @@ static ncclResult_t getUDS(uint64_t* peerUDS) {
   return ncclSuccess;
 }
 #define MAX_OOB_DEVS 16
-static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
+static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev/*选中的结果*/) {
   static int devOOB = -1;
   if (devOOB < 0) {
     std::lock_guard<std::mutex> lock(bootstrapNetMutex);
     if (devOOB < 0) {
+    	/*取带外网络接口名称*/
       const char* userIfEnv = ncclGetEnv("NCCL_OOB_NET_IFNAME");
       if (userIfEnv && strlen(userIfEnv) > 0) {
         INFO(NCCL_BOOTSTRAP | NCCL_ENV, "NCCL_OOB_NET_IFNAME set to %s", userIfEnv);
-        bool searchNot = userIfEnv && userIfEnv[0] == '^';
+        bool searchNot = userIfEnv && userIfEnv[0] == '^';/*匹配取反*/
         if (searchNot) userIfEnv++;
-        bool searchExact = userIfEnv && userIfEnv[0] == '=';
+        bool searchExact = userIfEnv && userIfEnv[0] == '=';/*精确匹配*/
         if (searchExact) userIfEnv++;
+        /*由环境变量解析成netIf数组*/
         struct netIf userIfs[MAX_OOB_DEVS];
         int nUserIfs = parseStringList(userIfEnv, userIfs, MAX_OOB_DEVS);
         // loop over the device and return the first one matching
         int nDev = 0;
-        NCCLCHECK(comm->ncclNet->devices(&nDev));
+        NCCLCHECK(comm->ncclNet->devices(&nDev));/*取设备总数*/
         int devId = 0;
         while (devId < nDev) {
           ncclNetProperties_t props;
-          comm->ncclNet->getProperties(devId, &props);
+          comm->ncclNet->getProperties(devId, &props);/*取设备devId属性*/
           // check against user specified HCAs/ports
-          if (matchIfList(props.name, props.port, userIfs, nUserIfs, searchExact) ^ searchNot) {
+          if (matchIfList(props.name, props.port, userIfs, nUserIfs/*userIfs数组大小*/, searchExact) ^ searchNot) {
             // All plain physical devices have been initialized at this point
-            devOOB = devId;
+            devOOB = devId;/*带外命中*/
             break;
           }
-          devId++;
+          devId++;/*尝试下一个*/
         }
         if (devOOB == -1) {
+        	/*遍历完所有设备，均未命中*/
           if (!searchNot)
             WARN("no device found matching %s%s, verify NCCL_OOB_NET_IFNAME", searchExact ? "exactly " : "", userIfEnv);
           else
@@ -557,29 +561,32 @@ static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
         }
       } else {
         // default choice is device 0
-        devOOB = 0;
+        devOOB = 0;/*默认选0号设备*/
       }
       // display info on the chosen device
       ncclNetProperties_t props;
       ncclResult_t res = comm->ncclNet->getProperties(devOOB, &props);
       bool hasProp = res == ncclSuccess;
+      /*指明名称*/
       INFO(NCCL_BOOTSTRAP, "Bootstrap: Using %s:%d", (hasProp) ? props.name : "N/A", (hasProp) ? props.port : -1);
     }
   }
-  *dev = devOOB;
+  *dev = devOOB;/*选中的结果*/
   return ncclSuccess;
 }
 
 static ncclResult_t netRingConnect(void* ctx, ncclNet_t* net, struct bootstrapListen_t* listen, char peerHandle[NCCL_NET_HANDLE_MAXSIZE],
-                                   void** sendComm, ncclNetDeviceHandle_t** sendDevHandle,
-                                   void** recvComm, ncclNetDeviceHandle_t** recvDevHandle, volatile uint32_t* abortFlag) {
+                                   void** sendComm/*发送comm*/, ncclNetDeviceHandle_t** sendDevHandle,
+                                   void** recvComm/*接收comm*/, ncclNetDeviceHandle_t** recvDevHandle, volatile uint32_t* abortFlag) {
 
   int abortCounter = 0;
   do {
     NCCLCHECK(checkAbort(abortFlag, &abortCounter));
     if (!*sendComm)
+    	/*连接到发送comm*/
       NCCLCHECK(net->connect(ctx, listen->net.dev, peerHandle, sendComm, sendDevHandle));
     if (!*recvComm)
+    	/*获得接收comm*/
       NCCLCHECK(net->accept(listen->net.comm, recvComm, recvDevHandle));
   } while (!*sendComm || !*recvComm);
   return ncclSuccess;
@@ -641,6 +648,7 @@ static ncclResult_t sendToRoot(struct ncclBootstrapHandle* handle, struct ncclCo
   struct ncclSocket sock;
   NCCLCHECK(ncclSocketInit(&sock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, comm->abortFlag));
   NCCLCHECKGOTO(ncclSocketConnect(&sock), ret, fail);
+  /*发送info*/
   NCCLCHECKGOTO(socketSend(&sock, info, sizeof(struct extInfo)), ret, fail);
   NCCLCHECK(ncclSocketClose(&sock));
   return ret;
@@ -669,8 +677,9 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
 
   uint64_t timers[BOOTSTRAP_INIT_TIME_N] = {0};
 
+  /*创建state*/
   NCCLCHECK(ncclCalloc(&state, 1));
-  state->rank = rank;
+  state->rank = rank;/*自身rank*/
   state->nranks = nranks;
   state->cudaDev = comm->cudaDev;
   state->abortFlag = comm->abortFlag;
@@ -690,7 +699,9 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   if (ncclParamBootstrapNetEnable()) {
     // Create net interface for other ranks to contact me (all gather)
     NCCLCHECK(netGetDevice(rank, comm, &STATE_LISTEN(state, net.dev)));
+    /*执行listen*/
     NCCLCHECK(state->net->listen(comm->netContext, STATE_LISTEN(state, net.dev), STATE_LISTEN(state, net.handle), &STATE_LISTEN(state, net.comm)));
+    /*指明连接本端的地址信息*/
     memcpy(info.connectInfo.handle, STATE_LISTEN(state, net.handle), NCCL_NET_HANDLE_MAXSIZE);
   } else {
     // create socket for ring neightbor to contact mee
@@ -736,7 +747,9 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   // get info on my "next" rank in the bootstrap ring from root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_RECV]);
   NCCLCHECK(ncclSocketInit(&sock));
+  /*接入新socket*/
   NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
+  /*读取nextPeer（即我们要发送的对端）*/
   NCCLCHECK(socketRecv(&sock, &nextPeer, sizeof(nextPeer)));
   NCCLCHECK(ncclSocketClose(&sock));
   NCCLCHECK(ncclSocketClose(&listenSockRoot));
@@ -744,9 +757,10 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
 
   // accept and connect the ring network
   if (ncclParamBootstrapNetEnable()) {
-    NCCLCHECK(netRingConnect(comm->netContext, state->net, &state->listen, nextPeer.handle,
-                             &STATE_RING(state, net.sendComm), &STATE_RING(state, net.sendDevHandle),
-                             &STATE_RING(state, net.recvComm), &STATE_RING(state, net.recvDevHandle), state->abortFlag));
+	  /*连接发送comm,接受接收comm*/
+    NCCLCHECK(netRingConnect(comm->netContext, state->net, &state->listen, nextPeer.handle/*发送对应的对端地址*/,
+                             &STATE_RING(state, net.sendComm)/*发送*/, &STATE_RING(state, net.sendDevHandle),
+                             &STATE_RING(state, net.recvComm)/*接收*/, &STATE_RING(state, net.recvDevHandle), state->abortFlag));
   } else {
     NCCLCHECK(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket), &STATE_RING(state, socket.recv), comm->magic, state->abortFlag));
   }
@@ -1109,7 +1123,7 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   uint64_t time = 0;
   BOOTSTRAP_PROF_OPEN(time);
   if (ncclParamBootstrapNetEnable()) {
-    NCCLCHECKGOTO(netRingAllGather(state->net, STATE_RING(state, net.sendComm), STATE_RING(state, net.recvComm), rank/*所属的rank*/, nranks/*rank总数*/, (char*)allData, size, state->abortFlag), res, exit);
+    NCCLCHECKGOTO(netRingAllGather(state->net, STATE_RING(state, net.sendComm)/*发送*/, STATE_RING(state, net.recvComm)/*接收*/, rank/*所属的rank*/, nranks/*rank总数*/, (char*)allData, size, state->abortFlag), res, exit);
   } else {
     NCCLCHECKGOTO(socketRingAllGather(&STATE_RING(state, socket.send), &STATE_RING(state, socket.recv), rank, nranks, (char*)allData, size), res, exit);
   }

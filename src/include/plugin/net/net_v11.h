@@ -88,7 +88,7 @@ typedef struct {
   // should return successfully with recvComm == NULL with the expectation that
   // it will be called again until recvComm != NULL.
   // If *recvDevComm points to a valid object, then NCCL is requesting device offload for this connection
-  ncclResult_t (*accept)(void* listenComm/*listen产生的comm*/, void** recvComm/*出参，接收用comm*/, ncclNetDeviceHandle_v11_t** recvDevComm);
+  ncclResult_t (*accept)(void* listenComm/*listen产生的comm*/, void** recvComm/*出参，创建的接收用comm*/, ncclNetDeviceHandle_v11_t** recvDevComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
   // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
   ncclResult_t (*regMr)(void* comm, void* data, size_t size, int type, void** mhandle);
