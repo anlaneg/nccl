@@ -146,8 +146,9 @@ static ncclResult_t checkAbort(volatile uint32_t* flag, int* cntr) {
   return ncclSuccess;
 }
 // send/recv functions
-static ncclResult_t netReg(ncclNet_t* net, void* comm, void* data, int size, void** handle) {
-  NCCLCHECK(net->regMr(comm, data, size, NCCL_PTR_HOST, handle));
+static ncclResult_t netReg(ncclNet_t* net, void* comm/*关联的comm*/, void* data/*内存地址*/, int size/*内存长度*/, void** handle/*出参，注册得到的mr*/) {
+	/*注册mr*/
+  NCCLCHECK(net->regMr(comm, data/*内存*/, size/*大小*/, NCCL_PTR_HOST, handle));
   return ncclSuccess;
 }
 static ncclResult_t netDereg(ncclNet_t* net, void* comm, void** handle) {
@@ -159,9 +160,11 @@ static ncclResult_t netIsend(ncclNet_t* net, void* sendComm, void* data, int siz
                              int* done) {
   if (*done) return ncclSuccess;
   if (!*sendReq) {
+	/*处理发*/
     NCCLCHECK(net->isend(sendComm, data, (size_t)size, tag, dataHandle, NULL, sendReq));
   }
   if (*sendReq) {
+	/*检查请求是否完成*/
     NCCLCHECK(net->test(*sendReq, done, NULL));
     if (*done) {
       *sendReq = NULL;
@@ -173,6 +176,7 @@ static ncclResult_t netIrecv(ncclNet_t* net, void* recvComm, void* data, int siz
                              int* done) {
   if (*done) return ncclSuccess;
   if (!*recvReq) {
+	  /*收取*/
     size_t size64 = size;
     NCCLCHECK(net->irecv(recvComm, 1, &data, &size64, &tag, &dataHandle, NULL, recvReq));
   }
@@ -192,9 +196,11 @@ static ncclResult_t netSendRecv(ncclNet_t* net, void* sendComm, void* sendData, 
   do {
     NCCLCHECK(checkAbort(abortFlag, &abortCounter));
     if (!doneRecv) {
+    	/*收没有做完，处理收*/
       NCCLCHECK(netIrecv(net, recvComm, recvData, recvSize, recvDataHandle, tag, &recvReq, &doneRecv));
     }
     if (!doneSend) {
+    	/*发没有做完，处理发*/
       NCCLCHECK(netIsend(net, sendComm, sendData, sendSize, sendDataHandle, tag, &sendReq, &doneSend));
     }
   } while (!doneSend || !doneRecv);
@@ -394,7 +400,7 @@ out:
   return NULL;
 }
 
-ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv) {
+ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv/*是否来自于env*/) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket* listenSock = NULL;
   struct bootstrapRootArgs* args = NULL;
@@ -1005,12 +1011,13 @@ fail:
   return ret;
 }
 
-static ncclResult_t netRingAllGather(ncclNet_t* net, void* sendComm, void* recvComm, int rank, int nranks, char* data, int size, volatile uint32_t* abortFlag) {
+static ncclResult_t netRingAllGather(ncclNet_t* net, void* sendComm, void* recvComm, int rank, int nranks, char* data, int size/*每个rank片大小*/, volatile uint32_t* abortFlag) {
   ncclResult_t res;
   uint64_t tFirst = 0, tRest = 0;
   void* sendDataHandle = NULL;
   void* recvDataHandle = NULL;
-  NCCLCHECKGOTO(netReg(net, sendComm, data, nranks * size, &sendDataHandle), res, exit);
+  /*为sendComm,recvComm注册data做为mr*/
+  NCCLCHECKGOTO(netReg(net, sendComm, data, nranks * size/*注册大小*/, &sendDataHandle), res, exit);
   NCCLCHECKGOTO(netReg(net, recvComm, data, nranks * size, &recvDataHandle), res, exit);
   /* Simple ring based AllGather
    * At each step i receive data from (rank-i-1) from prev
@@ -1018,13 +1025,18 @@ static ncclResult_t netRingAllGather(ncclNet_t* net, void* sendComm, void* recvC
    */
   TRACE(NCCL_BOOTSTRAP, "NetRingAllGather started");
   BOOTSTRAP_PROF_OPEN(tFirst);
+  /*遍历每个rank*/
   for (int i = 0; i < nranks - 1; i++) {
     int tag = i;
+    /*对于当前rank来说，第i轮，其收rank-i-1号报文
+     * 发rank-i号报文
+     * */
     size_t rslice = (rank - i - 1 + nranks) % nranks;
     size_t sslice = (rank - i + nranks) % nranks;
-    void* recv_data = data + rslice * size;
-    void* send_data = data + sslice * size;
-    NCCLCHECKGOTO(netSendRecv(net, sendComm, send_data, size, sendDataHandle, recvComm, recv_data, size, recvDataHandle, tag, abortFlag), res, exit);
+    void* recv_data = data + rslice * size;/*取recv指针*/
+    void* send_data = data + sslice * size;/*取send指针*/
+    /*处理收与发*/
+    NCCLCHECKGOTO(netSendRecv(net, sendComm, send_data/*要发送的数据*/, size, sendDataHandle/*发送mr*/, recvComm, recv_data/*要接收的数据*/, size, recvDataHandle/*接收mr*/, tag, abortFlag), res, exit);
     if (i == 0) {
       BOOTSTRAP_PROF_CLOSE(tFirst);
       BOOTSTRAP_PROF_OPEN(tRest);
@@ -1034,7 +1046,7 @@ static ncclResult_t netRingAllGather(ncclNet_t* net, void* sendComm, void* recvC
   TRACE(NCCL_BOOTSTRAP | NCCL_PROFILE, "netRingAllGather first message in %f (%f MB/sec), rest in %f (%f MB/sec)", tFirst / 1e9, (size / 1e6) / (tFirst / 1e9), tRest / 1e9, (nranks - 1) * (size / 1e6) / (tRest / 1e9));
 exit:
   // do not fail in case of error, try to deregister as much as possible
-  if (sendDataHandle) netDereg(net, sendComm, &sendDataHandle);
+  if (sendDataHandle) netDereg(net, sendComm, &sendDataHandle);/*移除注册的mr*/
   if (recvDataHandle) netDereg(net, recvComm, &recvDataHandle);
   return res;
 }
@@ -1084,7 +1096,7 @@ exit:
 ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   ncclResult_t res = ncclSuccess;
   struct bootstrapState* state = (struct bootstrapState*)commState;
-  int rank = state->rank;
+  int rank = state->rank;/*自身对应的rank*/
   int nranks = state->nranks;
 
   TRACE(NCCL_BOOTSTRAP, "rank %d nranks %d size %d - AllGather", rank, nranks, size);
@@ -1092,7 +1104,7 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   uint64_t time = 0;
   BOOTSTRAP_PROF_OPEN(time);
   if (ncclParamBootstrapNetEnable()) {
-    NCCLCHECKGOTO(netRingAllGather(state->net, STATE_RING(state, net.sendComm), STATE_RING(state, net.recvComm), rank, nranks, (char*)allData, size, state->abortFlag), res, exit);
+    NCCLCHECKGOTO(netRingAllGather(state->net, STATE_RING(state, net.sendComm), STATE_RING(state, net.recvComm), rank/*所属的rank*/, nranks/*rank总数*/, (char*)allData, size, state->abortFlag), res, exit);
   } else {
     NCCLCHECKGOTO(socketRingAllGather(&STATE_RING(state, socket.send), &STATE_RING(state, socket.recv), rank, nranks, (char*)allData, size), res, exit);
   }

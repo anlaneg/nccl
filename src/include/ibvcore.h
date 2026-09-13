@@ -652,7 +652,7 @@ enum ibv_send_flags {
 };
 
 struct ibv_sge {
-	uint64_t		addr;
+	uint64_t		addr;/*va地址*/
 	uint32_t		length;
 	uint32_t		lkey;
 };

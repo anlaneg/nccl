@@ -307,16 +307,21 @@ finish:
 template <typename T>
 ncclResult_t ncclCudaCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {
   ncclResult_t result = ncclSuccess;
+  /* 宽松模式，允许在 Graph 捕获区间里调用主机侧内存分配函数
+   * 严格模式，**捕获过程中禁止 cudaMalloc /cudaFree**，一旦调用直接报错。*/
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   *ptr = nullptr;
+  //临时修改当前线程的 CUDA Graph 捕获模式，并且保存旧模式，函数退出前恢复
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   if (nelem > 0) {
     // Need a side stream so as not to interfere with graph capture.
     cudaStream_t stream;
     CUDACHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     if (ncclCuMemEnable()) {
+    	//底层调用 Driver API：`cuMemCreate` 创建物理显存块 + `cuMemMap` 映射到 GPU 虚拟地址；
       NCCLCHECKGOTO(ncclCuMemAlloc((void **)ptr, NULL, ncclCuMemHandleType, nelem*ncclSizeOfT<T>()), result, finish);
     } else {
+    	//分配出来的显存**不能导出 Fabric handle**，无法走 Fabric 内存路径；NCCL 只能 fallback 到传统拷贝通信。
       CUDACHECKGOTO(cudaMalloc(ptr, nelem*ncclSizeOfT<T>()), result, finish);
     }
     CUDACHECKGOTO(cudaMemsetAsync(*ptr, 0, nelem*ncclSizeOfT<T>(), stream), result, finish);
@@ -399,18 +404,18 @@ finish:
 // Allocate memory to be potentially ibv_reg_mr'd. This needs to be
 // allocated on separate pages as those pages will be marked DONTFORK
 // and if they are shared, that could cause a crash in a child process
-inline ncclResult_t ncclIbMallocDebug(void** ptr, size_t size, const char *filefunc, int line) {
+inline ncclResult_t ncclIbMallocDebug(void** ptr/*出参，申请到的内容*/, size_t size, const char *filefunc, int line) {
   if (size > 0) {
-    long page_size = sysconf(_SC_PAGESIZE);
+    long page_size = sysconf(_SC_PAGESIZE);/*取页大小*/
     if (page_size < 0) return ncclSystemError;
     void* p;
-    int size_aligned = ROUNDUP(size, page_size);
-    int ret = posix_memalign(&p, page_size, size_aligned);
+    int size_aligned = ROUNDUP(size, page_size);/*按页对齐*/
+    int ret = posix_memalign(&p/*出参，申请到的内容*/, page_size, size_aligned);/*按页对齐申请内容*/
     if (ret != 0) return ncclSystemError;
-    memset(p, 0, size);
+    memset(p, 0, size);/*初始化为0*/
     *ptr = p;
   } else {
-    *ptr = NULL;
+    *ptr = NULL;/*申请失败*/
   }
   INFO(NCCL_ALLOC, "%s:%d Ib Alloc Size %ld pointer %p", filefunc, line, size, *ptr);
   return ncclSuccess;

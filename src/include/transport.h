@@ -37,20 +37,20 @@ struct ncclConnector;
 struct ncclComm;
 
 struct ncclPeerInfo {
-  int rank;
+  int rank;/*当前rank*/
   int cudaDev;
   int nvmlDev;
-  int gdrSupport;
+  int gdrSupport;/*是否支持gdr*/
   uint64_t hostHash;
   uint64_t pidHash;
-  dev_t shmDev;
+  dev_t shmDev;/*share memory对应的dev_t*/
   int64_t busId;
   struct ncclComm* comm;
   int cudaCompCap;
   size_t totalGlobalMem;
   // MNNVL support
   nvmlGpuFabricInfoV_t fabricInfo;
-  int cuMemSupport;
+  int cuMemSupport;/*cuda是否支持'虚拟内存管理'*/
   int version;
 };
 

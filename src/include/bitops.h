@@ -471,6 +471,7 @@ static __host__ __device__ uint64_t digestHash(uint64_t const acc[2]) {
   return h;
 }
 
+/*算hash值*/
 static __host__ __device__ uint64_t getHash(const void* bytes, size_t size) {
   uint64_t acc[2] = {1, 1};
   eatHash(acc, bytes, size);

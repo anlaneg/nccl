@@ -428,6 +428,7 @@ inline T* ncclIntruQueueTryDequeue(ncclIntruQueue<T,next> *me) {
   return ans;
 }
 
+/*将src中的内容转移到dst中*/
 template<typename T, T *T::*next>
 void ncclIntruQueueTransfer(ncclIntruQueue<T,next> *dst, ncclIntruQueue<T,next> *src) {
   (dst->tail ? dst->tail->next : dst->head) = src->head;

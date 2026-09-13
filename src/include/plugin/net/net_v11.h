@@ -70,25 +70,25 @@ typedef struct {
   // Initialize the network.
   ncclResult_t (*init/*网络插件初始化时调用*/)(void** ctx, uint64_t commId, ncclNetCommConfig_v11_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction);
   // Return the number of adapters.
-  ncclResult_t (*devices)(int* ndev/*出参*/);
+  ncclResult_t (*devices/*获取有多少设备（设备编号从0开始编号）*/)(int* ndev/*出参*/);
   // Get various device properties.
-  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v11_t* props);
+  ncclResult_t (*getProperties/*取指定设备的属性*/)(int dev/*设备编号*/, ncclNetProperties_v11_t* props);
   // Create a receiving object and provide a handle to connect to it. The
   // handle can be up to NCCL_NET_HANDLE_MAXSIZE bytes and will be exchanged
   // between ranks to create a connection.
-  ncclResult_t (*listen)(void* ctx, int dev, void* handle, void** listenComm);
+  ncclResult_t (*listen/*执行listen*/)(void* ctx, int dev, void* handle/*出参，产生可连接的handle*/, void** listenComm/*出参，accept用的comm*/);
   // Connect to a handle and return a sending comm object for that peer.
   // This call must not block for the connection to be established, and instead
   // should return successfully with sendComm == NULL with the expectation that
   // it will be called again until sendComm != NULL.
   // If *sendDevComm points to a valid object, then NCCL is requesting device offload for this connection
-  ncclResult_t (*connect)(void* ctx, int dev, void* handle, void** sendComm, ncclNetDeviceHandle_v11_t** sendDevComm);
+  ncclResult_t (*connect/*建立连接*/)(void* ctx, int dev, void* handle/*连接用handle*/, void** sendComm/*出参，发送用comm*/, ncclNetDeviceHandle_v11_t** sendDevComm);
   // Finalize connection establishment after remote peer has called connect.
   // This call must not block for the connection to be established, and instead
   // should return successfully with recvComm == NULL with the expectation that
   // it will be called again until recvComm != NULL.
   // If *recvDevComm points to a valid object, then NCCL is requesting device offload for this connection
-  ncclResult_t (*accept)(void* listenComm, void** recvComm, ncclNetDeviceHandle_v11_t** recvDevComm);
+  ncclResult_t (*accept)(void* listenComm/*listen产生的comm*/, void** recvComm/*出参，接收用comm*/, ncclNetDeviceHandle_v11_t** recvDevComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
   // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
   ncclResult_t (*regMr)(void* comm, void* data, size_t size, int type, void** mhandle);
@@ -97,16 +97,16 @@ typedef struct {
   ncclResult_t (*deregMr)(void* comm, void* mhandle);
   // Asynchronous send to a peer.
   // May return request == NULL if the call cannot be performed (or would block)
-  ncclResult_t (*isend)(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request);
+  ncclResult_t (*isend/*发送*/)(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request/*出参，对应的请求结构体*/);
   // Asynchronous recv from a peer.
   // May return request == NULL if the call cannot be performed (or would block)
-  ncclResult_t (*irecv)(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request);
+  ncclResult_t (*irecv/*收取*/)(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request);
   // Test whether a request is complete. If size is not NULL, it returns the
   // number of bytes sent/received.
-  ncclResult_t (*test)(void* request, int* done, int* sizes);
+  ncclResult_t (*test/*检查请求是否已完成*/)(void* request, int* done, int* sizes);
   // Close and free send/recv comm objects
   ncclResult_t (*closeSend)(void* sendComm);
   ncclResult_t (*closeRecv)(void* recvComm);

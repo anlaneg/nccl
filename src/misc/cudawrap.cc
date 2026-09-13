@@ -29,12 +29,13 @@ int ncclIsCuMemSupported() {
   int cudaDriverVersion;
   int flag = 0;
   ncclResult_t ret = ncclSuccess;
-  CUDACHECKGOTO(cudaDriverGetVersion(&cudaDriverVersion), ret, error);
-  if (cudaDriverVersion < 12000) return 0;  // Need CUDA_VISIBLE_DEVICES support
-  CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, error);
+  CUDACHECKGOTO(cudaDriverGetVersion(&cudaDriverVersion), ret, error);/*取驱动版本*/
+  if (cudaDriverVersion < 12000) return 0/*不支持*/;  // Need CUDA_VISIBLE_DEVICES support
+  CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, error);/*取gpu设备*/
   if (CUPFN(cuMemCreate) == NULL) return 0;
   CUCHECKGOTO(cuDeviceGet(&currentDev, cudaDev), ret, error);
   // Query device to see if CUMEM VMM support is available
+  //用来探测 GPU 是否支持VMM（Virtual Memory Management，CUDA 虚拟内存管理)
   CUCHECKGOTO(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, currentDev), ret, error);
   if (!flag) return 0;
 error:

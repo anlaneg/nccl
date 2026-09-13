@@ -17,6 +17,7 @@ all_algos =  ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE",
 gensrc = sys.argv[1]
 
 if os.path.exists(gensrc):
+  # 移除gensrc目录下的所有文件与目录
   for name in os.listdir(gensrc):
     path = os.path.join(gensrc, name)
     if os.path.isfile(path):

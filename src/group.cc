@@ -17,28 +17,42 @@
 
 #define GROUP_MAX_RECLAIM_STEPS 10
 
+/*标记当前线程所在的group depth*/
 __thread int ncclGroupDepth = 0; // depth of ncclGroupStart nesting
-__thread ncclResult_t ncclGroupError = ncclSuccess;
+/*以下几个变量用于支持group实现，groupdepth被start调用,以实现增加
+ * 当group被增加后，容许嵌套增加，而end调用会使groupdepth减少。直到group depth
+ * 被减少到0时，end函数才整整的收集下列变量保存的内容，用于执行
+ * groupLocalResetJobState负责以下变量的重置问题
+ * */
+__thread ncclResult_t ncclGroupError = ncclSuccess;/*用于记录错误码*/
+/*用于记录当前线程在一个group内保存的comm head列表（会在group end时被处理）
+ * ncclGroupCommJoin负责向此变量中增加元素
+ * */
 __thread struct ncclComm* ncclGroupCommHead[ncclGroupTaskTypeNum] = {nullptr};
+/*用于记录设置的preconnectHead，ncclGroupCommPreconnect用于增加元素*/
 __thread struct ncclComm* ncclGroupCommPreconnectHead = nullptr;
+/*用于存放异步job，ncclAsyncLaunch用于增加元素*/
 __thread struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> ncclAsyncJobs;
 __thread int ncclGroupBlocking = -1; /* default mode */
 void* ncclAsyncJobMain(void* arg);
 
+/*如果当前ncclGroupDepth为0，则直接调用，否则创建初始化job并入队到ncclAsyncJobs*/
 ncclResult_t ncclAsyncLaunch(
     struct ncclAsyncJob* job,
-    ncclResult_t(*func)(struct ncclAsyncJob*),
-    void(*undo)(struct ncclAsyncJob*),
-    void(*destructor)(void*), ncclComm_t comm
+    ncclResult_t(*func/*完成job必须函数*/)(struct ncclAsyncJob*),
+    void(*undo/*job执行失败后，用于回退，可选*/)(struct ncclAsyncJob*),
+    void(*destructor/*job未执行/job执行完成/undo执行完后后，用于清理，可选*/)(void*), ncclComm_t comm
   ) {
   ncclResult_t ret = ncclSuccess;
 
   job->destroyFlag = comm->destroyFlag;
   if (ncclGroupDepth == 0) {
+	  /*depth为0，直接调用func*/
     ret = func(job);
-    if (ret != ncclSuccess && undo) undo(job);
-    if (destructor) destructor(job);
+    if (ret != ncclSuccess && undo) undo(job);/*如果失败执行undo*/
+    if (destructor) destructor(job);/*执行销毁*/
   } else {
+	  /*初始化job*/
     job->func = func;
     job->undo = undo;
     job->destructor = destructor;
@@ -46,19 +60,20 @@ ncclResult_t ncclAsyncLaunch(
     job->abortFlagDev = comm->abortFlagDev;
     job->childAbortFlag = comm->childAbortFlag;
     job->childAbortFlagDev = comm->childAbortFlagDev;
-    job->state = ncclGroupJobRunning;
+    job->state = ncclGroupJobRunning;/*置为running*/
     job->comm = comm;
     /* check if there are blocking and nonblocking comms at the same time in group. */
     if (comm->destroyFlag) {
-      ncclGroupBlocking = 1;
+      ncclGroupBlocking = 1;/*阻塞方式*/
     } else if (ncclGroupBlocking == -1) {
       /* first met communicator */
       ncclGroupBlocking = comm->config.blocking;
     } else if (ncclGroupBlocking != comm->config.blocking) {
       WARN("Blocking and nonblocking communicators are not allowed in the same group.");
-      ret = ncclInvalidArgument;
+      ret = ncclInvalidArgument;/*配置冲突（阻塞与非阻塞冲突）*/
     }
     if (ret == ncclSuccess) {
+    	/*异步job入队*/
       ncclIntruQueueEnqueue(&ncclAsyncJobs, job);
     } else {
       // no need to undo, the job hasn't run
@@ -124,7 +139,7 @@ exit:
 
 struct ncclPreconnectJob {
   struct ncclAsyncJob base;
-  struct ncclComm* comm;
+  struct ncclComm* comm;/*指向其从属的comm*/
   bool* algoNeedConnect;
 };
 
@@ -220,7 +235,7 @@ fail:
 
 struct ncclGroupSymmetricJob {
   struct ncclAsyncJob base;
-  struct ncclComm* comm;
+  struct ncclComm* comm;/*指明从属的comm*/
 };
 
 ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
@@ -333,9 +348,11 @@ failure:
 
 static inline void groupLocalResetJobState() {
   ncclGroupError = ncclSuccess;
+  /*重置group comm head列表*/
   for (int type = 0; type < ncclGroupTaskTypeNum; ++type) ncclGroupCommHead[type] = NULL;
-  ncclGroupCommPreconnectHead = NULL;
+  ncclGroupCommPreconnectHead = NULL;/*重置comm preconnected列表*/
   ncclGroupBlocking = -1;
+  /*重置ncclAsyncJobs*/
   ncclIntruQueueConstruct(&ncclAsyncJobs);
   return;
 }
@@ -399,7 +416,10 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQue
   return;
 }
 
-/*由于多个job是通过job的next指针串起来的，因此当有多个job时，asyncJobLanch函数实际上是创建多个线程同时处理多个job,并阻塞等待所有线程完成任务*/
+/*由于多个job是通过job的next指针串起来的，
+ * 因此当有多个job时，
+ * asyncJobLanch函数实际上是创建多个线程同时处理多个job,
+ * 并阻塞等待所有线程完成任务*/
 static ncclResult_t asyncJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsMain, volatile bool *groupAbortFlag/**出参，用于记录是否有job被aborted */) {
   ncclResult_t ret = ncclSuccess;
   bool jobsDone = false;
@@ -416,7 +436,7 @@ static ncclResult_t asyncJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &n
       return job->result;
     }
     do {
-      /**有多个job，对job->next不为空的情况，创建线程，每个job一个线程 */
+      /**有多个job时，每个job创建一个线程跑job->func*/
       PTHREADCHECKGOTO(pthread_create(&job->thread, nullptr, ncclAsyncJobMain/**在线程中调此函数，处理job */, job), "pthread_create", ret, fail);
       job = job->next;
     } while (job != nullptr);
@@ -447,7 +467,7 @@ static ncclResult_t asyncJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &n
         }
 
         if (!job->destroyFlag && (__atomic_load_n(groupAbortFlag, __ATOMIC_ACQUIRE) || errorJobAbortFlag == true)) {
-          __atomic_store_n(job->abortFlag, 1, __ATOMIC_RELEASE);
+          __atomic_store_n(job->abortFlag, 1, __ATOMIC_RELEASE);/*标记此job被abort*/
           __atomic_store_n(job->abortFlagDev, 1, __ATOMIC_RELEASE);
           if (job->childAbortFlag) {
             __atomic_store_n(job->childAbortFlag, 1, __ATOMIC_RELEASE);
@@ -476,7 +496,7 @@ static ncclResult_t ncclPrepareTasksAndCollPreconnect(struct ncclComm* comm, ncc
   if (ncclParamSingleProcMemRegEnable()) {
     struct ncclPrepareTasksAndCollPreconnectJob* job;
     NCCLCHECK(ncclCalloc(&job, 1));
-    job->base.func = ncclPrepareTasksAndCollPreconnectFunc;
+    job->base.func = ncclPrepareTasksAndCollPreconnectFunc;/*指明job函数*/
     job->base.undo = nullptr;
     job->base.destructor = free;
     job->base.state = ncclGroupJobRunning;
@@ -518,35 +538,38 @@ static ncclResult_t ncclPrepareTasksAndCollPreconnect(struct ncclComm* comm, ncc
 /** 按阶段创建job,并发跑并回收 */
 static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInfo = NULL) {
   ncclResult_t ret = ncclSuccess;
-  struct ncclGroupJob *gjob = (struct ncclGroupJob*) job_;
+  struct ncclGroupJob *gjob = (struct ncclGroupJob*) job_;/*此group对应的job*/
+  /*取这三种待执行内容*/
   struct ncclComm **groupCommHeadMain = gjob->groupCommHead;
   struct ncclComm *groupCommPreconnectHeadMain = gjob->groupCommPreconnectHead;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsMain = &gjob->asyncJobs;
   bool *groupAbortFlag = &gjob->abortFlag;
 
   if (!simInfo && groupCommPreconnectHeadMain != nullptr) {
-    /**preConnect链表不空，生成job挂在asyncJobsMain中 */
+    /**preConnect链表不空时，按顺序生成ncclPreconnectJob挂在asyncJobsMain中 */
     struct ncclComm* comm = groupCommPreconnectHeadMain;
     do {
       struct ncclPreconnectJob* job;/**preConnect任务的job */
       NCCLCHECKGOTO(ncclCalloc(&job, 1), ret, fail);
       job->base.func = ncclP2PPreconnectFunc;/**指明此类job的处理函数 */
-      job->base.undo = nullptr;
-      job->base.destructor = free;
-      job->base.state = ncclGroupJobRunning;
+      job->base.undo = nullptr;/*不回退*/
+      job->base.destructor = free;/*仅释放内存*/
+      job->base.state = ncclGroupJobRunning;/*状态指为running*/
       job->base.abortFlag = comm->abortFlag;
       job->base.abortFlagDev = comm->abortFlagDev;
       job->comm = comm;
-      ncclIntruQueueEnqueue(asyncJobsMain,  (struct ncclAsyncJob*)job);/**将此任务添加到异步任务队列中（多个job是通过job的next指针串起来的） */
+      /**将此任务添加到异步任务队列中（多个job是通过job的next指针串起来的)*/
+      ncclIntruQueueEnqueue(asyncJobsMain,  (struct ncclAsyncJob*)job);
 
-      struct ncclComm* next = comm->preconnectNext;
-      comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
-      comm = next;
+      struct ncclComm* next = comm->preconnectNext;/*取下一个*/
+      comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);/*断开链，并标记*/
+      comm = next;/*继续循环*/
     } while (comm != nullptr);
   }
 
-  /**启动异步任务队列asyncJobsMain中的任务,完成跑preConnect
-  由于多个job是通过job的next指针串起来的，因此当有多个job时，asyncJobLanch函数实际上是创建多个线程同时处理多个job,并阻塞等待所有线程完成任务
+  /**启动异步任务队列asyncJobsMain中的任务,完成跑preConnect（在加入preConnect之前其内部可能已有其它job)
+  由于多个job是通过job的next指针串起来的，因此当有多个job时，
+  asyncJobLanch函数实际上是创建多个线程同时处理多个job,并阻塞等待所有线程完成任务
    */
   NCCLCHECKGOTO(asyncJobLaunch(asyncJobsMain, groupAbortFlag), ret, fail);
 
@@ -564,17 +587,19 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
           struct ncclGroupSymmetricJob* job;
           NCCLCHECKGOTO(ncclCalloc(&job, 1), ret, fail);
           job->base.func = ncclCommGroupRegisterSymmetric;/**指明此类job的处理函数 */
-          job->base.undo = nullptr;
-          job->base.destructor = free;
-          job->base.state = ncclGroupJobRunning;
+          job->base.undo = nullptr;/*不回退*/
+          job->base.destructor = free;/*仅释放内存*/
+          job->base.state = ncclGroupJobRunning;/*指明running*/
           job->base.abortFlag = comm->abortFlag;
           job->base.abortFlagDev = comm->abortFlagDev;
           job->comm = comm;
           ncclIntruQueueEnqueue(&asyncSymJobs, (struct ncclAsyncJob*)job);/**将符号申请与注册任务添加到异步任务队列中 */
-          comm = comm->groupNext[type];/**取同一类型的下一个communicator */
-        } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
-        NCCLCHECKGOTO(asyncJobLaunch(&asyncSymJobs, groupAbortFlag), ret, fail);/**启动异步任务队列中的任务,跑完符号申请与注册任务 */
-        /**在asyncJobLaunch中，我们已经完成了所有job的处理，但并没有自动列中移除这些job，这里遍历一次，并调用其destructor回调函数，释放内存 */
+          comm = comm->groupNext[type];/**取同一类型的下一个communicator,进行入队*/
+        } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*？？？*/);
+        /**启动异步任务队列中的任务,跑完符号申请与注册任务（这一类型的将并行被执行，同一类型如果intraComm0不同也不并行执行） */
+        NCCLCHECKGOTO(asyncJobLaunch(&asyncSymJobs, groupAbortFlag), ret, fail);
+        /**在asyncJobLaunch中，我们已经完成了所有job的处理，
+         * 但并没有自动列中移除这些job，这里遍历一次，并调用其destructor回调函数，释放内存 */
         while (!ncclIntruQueueEmpty(&asyncSymJobs)) {
           struct ncclAsyncJob* job = ncclIntruQueueDequeue(&asyncSymJobs);/**从异步任务队列中取一个任务 */
           if (job->destructor) job->destructor((void*)job);/**释放此任务的内存 */
@@ -597,11 +622,13 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
       // at the same time.
       comm = cliqueHead;
       do {
+    	  /*入队列asyncCollJobs中*/
         NCCLCHECKGOTO(ncclPrepareTasksAndCollPreconnect(comm, simInfo, &asyncCollJobs), ret, fail);
         comm = comm->groupNext[ncclGroupTaskTypeCollective];
-      } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
+      } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*同一类型，也会阶段*/);
+      /**启动异步任务队列中的任务,执行collective job*/
       // connect
-      NCCLCHECKGOTO(asyncJobLaunch(&asyncCollJobs, groupAbortFlag), ret, fail);/**启动异步任务队列中的任务,跑完collective任务的preconnect */
+      NCCLCHECKGOTO(asyncJobLaunch(&asyncCollJobs, groupAbortFlag), ret, fail);
       while (!ncclIntruQueueEmpty(&asyncCollJobs)) {
         struct ncclAsyncJob* job = ncclIntruQueueDequeue(&asyncCollJobs);
         if (job->destructor) job->destructor((void*)job);
@@ -658,6 +685,7 @@ fail:
   goto exit;
 }
 
+/*非阻塞型按线程处理的groupLaunch*/
 static ncclResult_t groupLaunchNonBlocking(struct ncclAsyncJob *job_) {
   return groupLaunch(job_ /* estimatedTime = NULL */);
 }
@@ -705,7 +733,7 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
 
   for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
     if (ncclGroupCommHead[type]) {
-      hasCommHead = true;/**存在任务 */
+      hasCommHead = true;/**groupCommHead存在任务 */
       break;
     }
   }
@@ -715,31 +743,38 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
   ncclIntruQueueConstruct(&groupJob->asyncJobs);
   groupJob->groupRefCount = 0;
   groupJob->nonBlockingInit = false;
+  /*复制commHead到groupJob中*/
   memcpy(groupJob->groupCommHead, ncclGroupCommHead, sizeof(ncclGroupCommHead));
+  /*设置commpreconnectHead到groupJob*/
   groupJob->groupCommPreconnectHead = ncclGroupCommPreconnectHead;
   groupJob->groupError = ncclSuccess;
   groupJob->abortFlag = false;
   groupJob->joined = false;
+  /*转移ncclAsyncJobs中的内容到groupJob*/
   ncclIntruQueueTransfer(&groupJob->asyncJobs, &ncclAsyncJobs);
 
   if (hasCommHead || !ncclIntruQueueEmpty(&groupJob->asyncJobs) || ncclGroupCommPreconnectHead != nullptr) {
+	  /*以上三者有任意一个有内容，则进入*/
     /* make sure ncclGroupBlocking has been set. */
-    assert(ncclGroupBlocking == 0 || ncclGroupBlocking == 1);
+    assert(ncclGroupBlocking == 0 || ncclGroupBlocking == 1);/*阻塞方式/非阻塞方式必须指明*/
     if (ncclGroupBlocking == 0) {
       /**要求以非阻塞模式执行 */
       /* nonblocking group */
       if (!ncclIntruQueueEmpty(&groupJob->asyncJobs)) {
+    	  /*asyncJobs中有job需要执行，取首个job*/
         ncclAsyncJob* job = ncclIntruQueueHead(&groupJob->asyncJobs);
+        /*将此组job指定为InProgress状态，为其job->comm关联groupJob*/
         do {
           NCCLCHECKGOTO(ncclCommSetAsyncError(job->comm, ncclInProgress), ret, fail);
           if (job->comm->groupJob == NULL) {
             job->comm->groupJob = groupJob;
-            groupJob->groupRefCount++;
+            groupJob->groupRefCount++;/*增加此groupJob计数*/
           }
           job = job->next;
         } while (job);
       }
 
+      /*将此组ncclGroupCommHead指定为InProgress状态，为其comm关联groupJob*/
       for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
         if (ncclGroupCommHead[type]) {
           ncclComm_t comm = ncclGroupCommHead[type];
@@ -748,7 +783,7 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
             /* link group job to communicators. */
             if (comm->groupJob == NULL) {
               comm->groupJob = groupJob;
-              groupJob->groupRefCount++;
+              groupJob->groupRefCount++;/*增加引用计数*/
             }
             comm = comm->groupNext[type];
           } while (comm);
@@ -756,23 +791,24 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
       }
 
       /**要求非阻塞，创建线程,将groupLaunch放在线程中执行 */
-      groupJob->base.func = groupLaunchNonBlocking;
-      PTHREADCHECKGOTO(pthread_create(&groupJob->base.thread, NULL, ncclAsyncJobMain, (void*)&groupJob->base), "pthread_create", ret, fail);
-      groupJob->nonBlockingInit = true;
-      ret = ncclInProgress;
+      groupJob->base.func = groupLaunchNonBlocking;/*指明job的处理函数*/
+      PTHREADCHECKGOTO(pthread_create(&groupJob->base.thread, NULL, ncclAsyncJobMain, (void*)&groupJob->base/*传参（异步时无simInfo参数）*/), "pthread_create", ret, fail);
+      groupJob->nonBlockingInit = true;/*指明为非阻塞初始化*/
+      ret = ncclInProgress;/*指明处理中*/
     } else {
       /* blocking group */
-      /**要求塞塞，直接执行groupLaunch */
+      /**要求以阻塞方式执行，直接执行groupLaunch */
       int savedDev;
-      CUDACHECKGOTO(cudaGetDevice(&savedDev), ret, fail);
-      NCCLCHECKGOTO(groupLaunch(&groupJob->base, internalSimInfoPtr), ret, fail);/**直接调用groupLaunch函数,完成所有任务 */
-      CUDACHECKGOTO(cudaSetDevice(savedDev), ret, fail);
-      if (simInfo) memcpy((void*)simInfo, (void*)internalSimInfoPtr, realSize);
+      CUDACHECKGOTO(cudaGetDevice(&savedDev), ret, fail);/*保存当前cuda设备*/
+      /**直接调用groupLaunch函数,完成所有任务 */
+      NCCLCHECKGOTO(groupLaunch(&groupJob->base, internalSimInfoPtr/*同步时有此参数*/), ret, fail);
+      CUDACHECKGOTO(cudaSetDevice(savedDev), ret, fail);/*回复保存的cuda设备*/
+      if (simInfo) memcpy((void*)simInfo, (void*)internalSimInfoPtr, realSize);/*填充simInfo*/
       free(groupJob);
     }
   }
   /* Reset the job state for the next group call. */
-  groupLocalResetJobState();
+  groupLocalResetJobState();/*重置以便支持next group*/
 
 exit:
   // Profiler group API start is called inside taskAppend to get graph capture information for the event
@@ -783,6 +819,7 @@ fail:
     groupCleanup(groupJob->groupCommHead, &groupJob->asyncJobs, ret);
     free(groupJob);
   } else {
+	  /*将groupCommHead清零（使其在每个group范围内有效）*/
     groupCleanup(ncclGroupCommHead, &ncclAsyncJobs, ret);
   }
   groupLocalResetJobState();

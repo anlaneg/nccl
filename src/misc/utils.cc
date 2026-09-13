@@ -57,12 +57,14 @@ ncclResult_t getBusId(int cudaDev, int64_t *busId) {
 
 ncclResult_t getHostName(char* hostname, int maxlen, const char delim) {
   if (gethostname(hostname, maxlen) != 0) {
+	  /*取hostname失败*/
     strncpy(hostname, "unknown", maxlen);
     return ncclSystemError;
   }
   int i = 0;
+  /*取满足函数指定的长度*/
   while ((hostname[i] != delim) && (hostname[i] != '\0') && (i < maxlen-1)) i++;
-  hostname[i] = '\0';
+  hostname[i] = '\0';/*断开*/
   return ncclSuccess;
 }
 
@@ -81,10 +83,11 @@ static void getHostHashOnce() {
   const char *hostId;
 
   // Fall back is the full hostname if something fails
-  (void) getHostName(hostHash, sizeof(hostHash), '\0');
+  (void) getHostName(hostHash, sizeof(hostHash), '\0');/*默认取hostname*/
   int offset = strlen(hostHash);
 
   if ((hostId = ncclGetEnv("NCCL_HOSTID")) != NULL) {
+	  /*使用evn做为hostHash*/
     INFO(NCCL_ENV, "NCCL_HOSTID set by environment to %s", hostId);
     strncpy(hostHash, hostId, sizeof(hostHash)-1);
     hostHash[sizeof(hostHash)-1] = '\0';
@@ -93,6 +96,7 @@ static void getHostHashOnce() {
     if (file != NULL) {
       char *p;
       if (fscanf(file, "%ms", &p) == 1) {
+    	  /*设置HOSTID_FILE中的内容到hostHash*/
         strncpy(hostHash+offset, p, sizeof(hostHash)-offset-1);
         free(p);
       }
@@ -105,12 +109,12 @@ static void getHostHashOnce() {
 
   TRACE(NCCL_INIT,"unique hostname '%s'", hostHash);
 
-  hostHashValue = getHash(hostHash, strlen(hostHash));
+  hostHashValue = getHash(hostHash, strlen(hostHash));/*利用hostname算hash值*/
 }
 uint64_t getHostHash(void) {
   static std::once_flag once;
   std::call_once(once, getHostHashOnce);
-  return hostHashValue;
+  return hostHashValue;/*取此主机对应的hash值*/
 }
 
 /* Generate a hash of the unique identifying string for this process
@@ -122,15 +126,16 @@ uint64_t getHostHash(void) {
 uint64_t getPidHash(void) {
   char pname[1024];
   // Start off with our pid ($$)
-  sprintf(pname, "%ld", (long) getpid());
+  sprintf(pname, "%ld", (long) getpid());/*取进程id*/
   int plen = strlen(pname);
+  /*取此进程对应的进程命名空间id*/
   int len = readlink("/proc/self/ns/pid", pname+plen, sizeof(pname)-1-plen);
   if (len < 0) len = 0;
 
   pname[plen+len]='\0';
   TRACE(NCCL_INIT,"unique PID '%s'", pname);
 
-  return getHash(pname, strlen(pname));
+  return getHash(pname, strlen(pname));/*以此计算hash*/
 }
 
 /**格式：前缀:端口号,前缀:端口号,...,前缀:端口号，解析串填充ifList的prefix和port */

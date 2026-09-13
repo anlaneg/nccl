@@ -41,20 +41,23 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
     int* krequires = sym==0 ? ncclDevKernelRequirements : ncclSymkKernelRequirements;
     for (int k=0; k < kcount; k++) {
       if (kptrs[k] != nullptr && driverVersion < krequires[k]) {
+    	  /*驱动版本过小，移除此符号*/
         INFO(NCCL_INIT, "Skipping %skernel %d which requires driver %d",
              sym ? "symmetric " : "", k, krequires[k]);
         kptrs[k] = nullptr;
       }
       void* fn = kptrs[k];
       cudaFuncAttributes attr = {0};
-      if (fn == nullptr) continue;
+      if (fn == nullptr) continue;/*跳过空的符号*/
 
+      /*查询一个 `__global__ Kernel` 的编译期 / 设备相关属性*/
       cudaError_t errcode = cudaFuncGetAttributes(&attr, fn);
       if (errcode != cudaSuccess) {
 		  cudaGetLastError(); // Drain error code
 		  continue; // Silently ignore failures
 	  }
       if (maxStackSize) {
+    	  /*attr.localSizeBytes 每个线程使用的local memory（寄存器溢出会落到这里）*/
         if (attr.localSizeBytes > *maxStackSize) *maxStackSize = attr.localSizeBytes;
       }
       if (carveout) {

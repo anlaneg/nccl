@@ -133,6 +133,7 @@ static void initOnceFunc() {
 exit:;
 }
 
+/*nccl初始化*/
 static ncclResult_t ncclInit() {
   std::call_once(initOnceFlag, initOnceFunc);
   return initResult;
@@ -610,6 +611,7 @@ fail:
 // Pre-process the string so that running "strings" on the lib can quickly reveal the version.
 #define VERSION_STRING "NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX "+cuda" STR(CUDA_MAJOR) "." STR(CUDA_MINOR)
 static void showVersion() {
+	/*显示版本*/
   if (ncclDebugLevel == NCCL_LOG_VERSION || ncclDebugLevel == NCCL_LOG_WARN) {
     VERSION("%s", VERSION_STRING);
   } else {
@@ -626,8 +628,8 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->cudaDev = comm->cudaDev;
   info->nvmlDev = comm->nvmlDev;
   NCCLCHECK(ncclGetVersion(&info->version));
-  info->hostHash=getHostHash()+commHash;
-  info->pidHash=getPidHash()+commHash;
+  info->hostHash=getHostHash()+commHash;/*host-hash合上commHash*/
+  info->pidHash=getPidHash()+commHash;/*pid对应的hash*/
   info->cuMemSupport = ncclCuMemEnable();
   CUDACHECK(cudaGetDeviceProperties(&prop, comm->cudaDev));
   info->totalGlobalMem = ROUNDUP(prop.totalGlobalMem, (1L << 32));
@@ -894,7 +896,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   timers[TIMER_INIT_ALLGATHER] = clockNano();
   // AllGather1 - begin
   NCCLCHECKGOTO(ncclCalloc(&comm->peerInfo, nranks+1), ret, fail); // Extra rank to represent CollNet root
-  NCCLCHECKGOTO(fillInfo(comm, comm->peerInfo+rank, comm->commHash), ret, fail);
+  NCCLCHECKGOTO(fillInfo(comm, comm->peerInfo+rank/*当前rank*/, comm->commHash), ret, fail);
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, comm->peerInfo, sizeof(struct ncclPeerInfo)), ret, fail);
   __atomic_store_n(&comm->peerInfoValid, true, __ATOMIC_RELEASE);
 
@@ -1434,9 +1436,9 @@ struct ncclCommInitRankAsyncJob {
   struct ncclAsyncJob base;
   struct ncclComm* comm;
   struct ncclComm** newcomm;
-  int cudaDev;
+  int cudaDev;/*自身对应gpu编号*/
   // For ncclCommInitRank
-  int nranks, myrank, nId;
+  int nranks/*总数*/, myrank/*自身索引*/, nId/*commId数目*/;
   ncclUniqueId* commId;
   // for ncclCommSplit
   struct ncclComm* parent;
@@ -1446,7 +1448,7 @@ struct ncclCommInitRankAsyncJob {
   int* excludeRanksList;
   int excludeRanksCount;
   // name of the function calling
-  char funcName[NCCL_COMMINIT_FUNCNAME_LEN];
+  char funcName[NCCL_COMMINIT_FUNCNAME_LEN];/*调用方函数名称*/
 };
 
 struct ncclCommFinalizeAsyncJob {
@@ -1518,6 +1520,7 @@ static ncclResult_t getParentRanks(int parentRanks, int parentRank, int* exclude
   return ncclSuccess;
 }
 
+/*rank初始化job执行函数*/
 static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   struct ncclCommInitRankAsyncJob* job = (struct ncclCommInitRankAsyncJob*)job_;
   ncclComm_t comm = job->comm;
@@ -1533,7 +1536,12 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   unsigned long long commIdHash;
 
   timers[TIMER_INIT_TOTAL] = clockNano();
-  CUDACHECKGOTO(cudaSetDevice(cudaDev), res, fail);
+  CUDACHECKGOTO(cudaSetDevice(cudaDev), res, fail);/*设置当前cuda设备*/
+  /*取此cuda设备的属性
+   * 1。查询该 GPU 每个线程 Block 可以 opt-in 申请的最大动态 Shared Memory
+   * 2。查询**计算能力主版本号**
+   * 3。查询**计算能力次版本号**
+   * */
   CUDACHECKGOTO(cudaDeviceGetAttribute(&maxSharedMem, cudaDevAttrMaxSharedMemoryPerBlockOptin, cudaDev), res, fail);
   CUDACHECKGOTO(cudaDeviceGetAttribute(&archMajor, cudaDevAttrComputeCapabilityMajor, cudaDev), res, fail);
   CUDACHECKGOTO(cudaDeviceGetAttribute(&archMinor, cudaDevAttrComputeCapabilityMinor, cudaDev), res, fail);
@@ -1629,8 +1637,9 @@ fail:
   goto exit;
 }
 
-#define NCCL_CONFIG_DEFAULT(config, field, undef, defvalue, fieldStr, format) \
+#define NCCL_CONFIG_DEFAULT(config, field/*字段名称*/, undef/*未初始化值*/, defvalue/*默认值*/, fieldStr/*字段字符形式*/, format/*字段格式化字符串*/) \
   if (config->field == undef) { \
+	  /*未初始化，则使用默认值*/\
     config->field = defvalue; \
   } else { \
     INFO(NCCL_ENV, "Comm config " fieldStr " set to " format, config->field); \
@@ -1810,6 +1819,7 @@ static ncclResult_t copyCommConfig(ncclComm_t childComm, ncclComm_t parnet) {
   return ncclSuccess;
 }
 
+/*设置comm->config*/
 static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
   ncclResult_t ret = ncclSuccess;
   /* config must not be NULL in this function */
@@ -1821,15 +1831,19 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
   internalConfig.magic = 0;
   internalConfigPtr = &internalConfig;
   if (config) {
-    memcpy((void*)&realSize, (void*)config, sizeof(size_t));
+    memcpy((void*)&realSize, (void*)config, sizeof(size_t));/*config第一个位置为size*/
+    /*根据当前结构决定实际大小*/
     realSize = realSize > sizeof(ncclConfig_t) ? sizeof(ncclConfig_t) : realSize;
+    /*复制到internalConfig*/
     memcpy((void*)internalConfigPtr, (void*)config, realSize);
     if (internalConfigPtr->magic != 0xcafebeef) {
+    	/*magic有误*/
       WARN("ncclConfig_t argument not initialized via NCCL_CONFIG_INITIALIZER");
       ret = ncclInvalidArgument;
       goto fail;
     }
 
+    /*版本新增字段处理*/
     /* check version. */
     if (internalConfigPtr->version < NCCL_VERSION(2, 14, 0)) {
       internalConfigPtr->blocking = defaultConfig.blocking;
@@ -1860,12 +1874,14 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
 
   /* check input config attributes, -1 means user-undefined and we should use default value from NCCL. */
   if (internalConfigPtr->blocking != NCCL_CONFIG_UNDEF_INT && internalConfigPtr->blocking != 0 && internalConfigPtr->blocking != 1) {
-    WARN("Invalid config blocking attribute value %d", internalConfigPtr->blocking);
+	  /*阻塞非阻塞标记设置有误（只容许三种）*/
+	  WARN("Invalid config blocking attribute value %d", internalConfigPtr->blocking);
     ret = ncclInvalidArgument;
     goto fail;
   }
 
   if (internalConfigPtr->cgaClusterSize != NCCL_CONFIG_UNDEF_INT && internalConfigPtr->cgaClusterSize < 0) {
+	  /*cgaClusterSize值有误*/
     WARN("Invalid config cgaClusterSize attribute value %d", internalConfigPtr->cgaClusterSize);
     ret = ncclInvalidArgument;
     goto fail;
@@ -1925,7 +1941,7 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
   }
 
   /* default config value can be tuned on different platform. */
-  NCCL_CONFIG_DEFAULT(internalConfigPtr, blocking, NCCL_CONFIG_UNDEF_INT, 1, "Blocking", "%d");
+  NCCL_CONFIG_DEFAULT(internalConfigPtr, blocking, NCCL_CONFIG_UNDEF_INT, 1, "Blocking", "%d");/*默认阻塞*/
   NCCL_CONFIG_DEFAULT(internalConfigPtr, cgaClusterSize, NCCL_CONFIG_UNDEF_INT, 4, "CGA cluster size", "%d");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, minCTAs, NCCL_CONFIG_UNDEF_INT, 1, "Min CTAs", "%d");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, maxCTAs, NCCL_CONFIG_UNDEF_INT, MAXCHANNELS, "Max CTAs", "%d");
@@ -1941,6 +1957,7 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
                       NCCL_CONFIG_UNDEF_INT, "nChannelsPerNetPeer", "%d");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, nvlinkCentricSched, NCCL_CONFIG_UNDEF_INT, 0, "nvlinkCentricSched", "%d");
 
+  /*为comm设置config*/
   /* assign config to communicator */
   comm->config.blocking = internalConfigPtr->blocking;
   comm->config.cgaClusterSize = internalConfigPtr->cgaClusterSize;
@@ -1970,7 +1987,7 @@ static void ncclCommInitJobFree(void* _job) {
   free(_job);
 }
 
-static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks/*gpu总数*/, int nId, ncclUniqueId* commId, int myrank, int cudaDev, ncclConfig_t *config, const char funcName[]) {
+static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*gpu总数*/, int nId/*commId数目*/, ncclUniqueId* commId, int myrank/*自身rank编号*/, int cudaDev/*自身gpu编号*/, ncclConfig_t *config/*配置*/, const char funcName[]/*调用方函数名称*/) {
   if (nId <= 0 || nId > nranks) {
     WARN("improper usage of ncclCommInitRank: nId = %d, nranks=%d", nId, nranks);
     return ncclInvalidArgument;
@@ -1988,6 +2005,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks/*gpu总�
     std::call_once(once, showVersion);
   }
   // Make sure the CUDA runtime is initialized.
+  /*传入NULL,按约定无条件成功，用于校验cuda是否已初始化*/
   CUDACHECKGOTO(cudaFree(NULL), res, fail);
 
   NCCLCHECKGOTO(PtrCheck(newcomm, "CommInitRank", "newcomm"), res, fail);
@@ -1999,12 +2017,12 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks/*gpu总�
   }
 
   NCCLCHECKGOTO(ncclCalloc(&comm, 1), res, fail);
-  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);
+  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);/*申请abort标记*/
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->abortFlagDev, 1), res, fail);
   NCCLCHECKGOTO(ncclCalloc(&comm->abortFlagRefCount, 1), res, fail);
   comm->startMagic = comm->endMagic = NCCL_MAGIC; // Used to detect comm corruption.
-  *comm->abortFlagRefCount = 1;
-  NCCLCHECKGOTO(parseCommConfig(comm, config), res, fail);
+  *comm->abortFlagRefCount = 1;/*初始化引用计数为1*/
+  NCCLCHECKGOTO(parseCommConfig(comm, config), res, fail);/*设置配置*/
   /* start with ncclInProgress and will be changed to ncclSuccess if init succeeds. */
   comm->initState = ncclInProgress;
   *newcomm = comm;
@@ -2021,18 +2039,21 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks/*gpu总�
   // Therefore the array of Ids coming from the user might not be properly aligned to be cast into a ncclBootstrapHandle
   // copying into allocated memory guarantees that the memory is properly aligned for any objects, removing that issue
   NCCLCHECKGOTO(ncclCalloc(&job->commId, nId), res, fail);
-  memcpy(job->commId, commId, nId * NCCL_UNIQUE_ID_BYTES);
+  memcpy(job->commId, commId, nId * NCCL_UNIQUE_ID_BYTES);/*复制commId*/
 
   commIdEnv = ncclGetEnv("NCCL_COMM_ID");
   if (commIdEnv && myrank == 0) {
+	  /*自身是第0号*/
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commIdEnv);
     if (nId > 1) {
       INFO(NCCL_INIT | NCCL_ENV, "NCCL_COMM_ID cannot be used with more than one ncclUniqueId");
-      job->nId = 1;
+      job->nId = 1;/*仅使用一个*/
     }
     // start the bootstrap root before bootstrapping, use only the first handle
+    /*启动bootstrap线程*/
     NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&job->commId[0], true), res, fail);
   }
+  /*初始化此job,并入队*/
   launchedJob = true;
   NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, ncclCommInitRankFunc, NULL, ncclCommInitJobFree, comm), res, fail);
 
@@ -2131,7 +2152,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev/**gpu数量*/, const in
     CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);/*设置当前gpu设备*/
     ncclCommInitRankDev(comms+i/*i号gpu对应的comms*/, ndev/*gpu总数*/,1, &uniqueId, i/*索引*/, dev/*gpu编号*/, &config, __func__);
   }
-  NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);
+  NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);/*结束group*/
 
   NVTX3_RANGE_ADD_PAYLOAD(CommInitAll, NcclNvtxParamsCommInitAllSchema,
     NVTX3_PAYLOAD(comms[0]->commHash, ndev));
@@ -2146,10 +2167,12 @@ fail:
 
 ncclResult_t ncclCommSetAsyncError(ncclComm_t comm, ncclResult_t nextState) {
   if (nextState < 0 || nextState >= ncclNumResults || comm == NULL) {
+	  /*检查指定的状态，必须有效*/
     WARN("ncclCommSetAsyncError: error comm %p sets state %d", comm, nextState);
     return ncclInvalidArgument;
   }
 
+  /*将状态保存在asyncResult中*/
   __atomic_store_n(&comm->asyncResult, nextState, __ATOMIC_RELEASE);
   return ncclSuccess;
 }
@@ -2301,6 +2324,7 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
   /* launch async thread to finalize comm. */
   NCCLCHECKGOTO(ncclCalloc(&job, 1), ret, fail);
   job->comm = comm;
+  /*要求在GroupEnd时执行此job*/
   NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, commDestroySync, NULL, free, comm), ret, fail);
 
 exit:

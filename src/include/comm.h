@@ -134,7 +134,11 @@ struct ncclSharedResources {
   // top parent rank to localRank translation table
   int* tpRankToLocalRank;
   // Internal streams
-  struct ncclStrongStream deviceStream, hostStream;
+  /*主机侧编排流：
+   * NCCL proxy 线程在 host 端提交的 CUDA 操作（如 proxy 线程触发的 cudaMemcpyAsync、事件记录等）走这条流
+   * 设备侧执行流：
+   * NCCL 集体通信 kernel、P2P send/recv kernel 等 GPU 端计算工作走这条流*/
+  struct ncclStrongStream deviceStream/*设备侧执行流*/, hostStream/*主机侧编排流*/;
   int persistentRefs;
   cudaEvent_t launchEvent, scratchEvent;
 
@@ -450,7 +454,7 @@ struct ncclComm {
   int* topParentRanks;
   int* topParentLocalRanks;
   struct ncclChannel channels[MAXCHANNELS];
-  struct ncclPeerInfo* peerInfo;
+  struct ncclPeerInfo* peerInfo;/*nRanks+1个peerInfo结构*/
   struct ncclTopoSystem* topo;/*拓扑*/
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
@@ -489,6 +493,7 @@ struct ncclComm {
   int64_t busId;   // my PCI bus ID in int format
   /*线程指明的亲和cpu*/
   cpu_set_t cpuAffinity; // CPU affinity of the GPU
+  /*由算力（Compute Capability，主版本/次版本）转成的一个整数编码*/
   int cudaArch; // matches __CUDA_ARCH__ of device
 
   int cpuArch;   // architecture - As defined in src/include/graph.h, e.g. x86/arm/ppc/mixed
@@ -549,10 +554,10 @@ struct ncclComm {
 
   /* This attribute can indicate the states of communicators and return code of
    * asynchronous NCCL operations. */
-  ncclResult_t asyncResult;
+  ncclResult_t asyncResult;/*指明执行状态*/
 
   // Flag to ask NCCL kernels to abort
-  uint32_t* abortFlag;
+  uint32_t* abortFlag;/*指明abort标记*/
   uint32_t* abortFlagDev;
   int* abortFlagRefCount;
   uint32_t* childAbortFlag;
@@ -575,6 +580,7 @@ struct ncclComm {
   uint32_t workFifoConsumed;
 
   // Intra-process sync
+  /*同一类型并行指行时，如果此值不同也不一组并行执行（见groupLaunch）*/
   struct ncclComm* intraComm0; // leader of intra-process comms (self possible)
   struct ncclComm* intraNext; // next of intra-process comms, intraComm0 is head
   int intraRank;
@@ -613,7 +619,7 @@ struct ncclComm {
   // this comm is not yet in a group.
   struct ncclComm* groupNext[ncclGroupTaskTypeNum];/** 下一个任务的communicator (按任务类型分组)*/
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
-  struct ncclComm* preconnectNext;
+  struct ncclComm* preconnectNext;/*用于将自已串连到preconnect*/
   int localPersistentRefs; // number of persistent plan-lists capturing this comm
   struct P2pSchedulePair { int sendRank/**发给谁 */; int recvRank/**收自谁 */; } *p2pSchedule;
 
@@ -634,7 +640,7 @@ struct ncclComm {
   int reclaimSteps;
   struct ncclIntruQueueMpsc<struct ncclCommCallback, &ncclCommCallback::next> callbackQueue;
 
-  ncclConfig_t config;
+  ncclConfig_t config;/*配置*/
   // initState is to more conveniently reclaim resources when errors happen.
   ncclResult_t initState;
   // flag to indicate if ncclCommFinalize() is called
@@ -642,7 +648,7 @@ struct ncclComm {
   // shared structures for finalization
   int finalizeRankCnt;
   // group job to support multi-thread FT
-  struct ncclGroupJob *groupJob;
+  struct ncclGroupJob *groupJob;/*指向所属的groupJob*/
 
   // Flag indicating if this communicator shares resources with parent or children
   bool shareResources;

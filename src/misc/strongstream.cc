@@ -398,6 +398,7 @@ ncclResult_t ncclStreamAdvanceToEvent(struct ncclCudaGraph g, cudaStream_t s, cu
 }
 
 ncclResult_t ncclStrongStreamSynchronize(struct ncclStrongStream* ss) {
+	//先搭好 GPU 异步执行的先后顺序，再阻塞 Host，确认整套 Graph+liveStream 的 GPU 工作全部落盘。
   #if CUDART_VERSION >= 11030
     CUDACHECK(cudaStreamWaitEvent(ss->liveStream, ss->serialEvent, 0));
   #endif

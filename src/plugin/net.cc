@@ -498,7 +498,8 @@ fail:
   return ncclInternalError;
 }
 
-ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
+/*检查是否支持gdr*/
+ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport/*是否支持gdr*/) {
   constexpr int GPU_BUF_SIZE = 2*1024*1024;
 #if CUDART_VERSION >= 11030
   // In CUDA 11.3 and later we can now query the cudaDevAttrGPUDirectRDMASupported attribute
@@ -507,7 +508,7 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
   if (driverVersion >= 11030) {
     int cudaDev, attr = 0;
     CUDACHECK(cudaGetDevice(&cudaDev));
-    CUDACHECK(cudaDeviceGetAttribute(&attr, cudaDevAttrGPUDirectRDMASupported, cudaDev));
+    CUDACHECK(cudaDeviceGetAttribute(&attr, cudaDevAttrGPUDirectRDMASupported, cudaDev));/*是否支持gdr*/
     *gdrSupport = attr;
     return ncclSuccess;
   }
@@ -519,11 +520,12 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
     int netDevs;
     NCCLCHECK(comm->ncclNet->devices(&netDevs));
     gdrSupportMatrix[comm->cudaDev] = 0;
+    /*遍历检查每一个设备*/
     for (int dev=0; dev<netDevs; dev++) {
       // Find a net device which is GDR-capable
       ncclNetProperties_t props;
-      NCCLCHECK(comm->ncclNet->getProperties(dev, &props));
-      if ((props.ptrSupport & NCCL_PTR_CUDA) == 0) continue;
+      NCCLCHECK(comm->ncclNet->getProperties(dev, &props));/*取设备属性*/
+      if ((props.ptrSupport & NCCL_PTR_CUDA) == 0) continue;/*不支持cuda也不行*/
 
     // Allocate memory on the GPU and try to register it on the NIC.
     void *lComm = NULL, *sComm = NULL, *rComm = NULL;
@@ -531,6 +533,7 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
     char* gpuPtr = NULL;
     void* mHandle = NULL;
     ncclResult_t ret;
+    /*执行监听*/
     NCCLCHECKGOTONOWARN(comm->ncclNet->listen(comm->netContext, dev, &handle, &lComm), ret, cleanup1, NCCL_NET);
 
     bool connected;
@@ -543,21 +546,27 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
       }
 
       if (sComm == NULL)
+    	  /*建立连接*/
         NCCLCHECKGOTONOWARN(comm->ncclNet->connect(comm->netContext, dev, &handle, &sComm, NULL), ret, cleanup2, NCCL_NET);
 
       if (rComm == NULL)
+    	  /*连受连接*/
         NCCLCHECKGOTONOWARN(comm->ncclNet->accept(lComm, &rComm, NULL), ret, cleanup2, NCCL_NET);
 
-      connected = (rComm != NULL) && (sComm != NULL);
+      connected = (rComm != NULL) && (sComm != NULL);/*连接是否完成*/
     }
 
+    /*申请gpu内存*/
     NCCLCHECKGOTONOWARN(ncclCudaMalloc(&gpuPtr, GPU_BUF_SIZE), ret, cleanup2, NCCL_NET);
+    /*sComm注册mr*/
     NOWARN(ret = comm->ncclNet->regMr(sComm, gpuPtr, GPU_BUF_SIZE, NCCL_PTR_CUDA, &mHandle), NCCL_NET);
     if (ret == ncclSuccess) {
+    	/*注册mr成功，执行deregmr*/
       NCCLCHECKNOWARN(comm->ncclNet->deregMr(sComm, mHandle), NCCL_NET);
+      /*rComm注册mr*/
       NCCLCHECKNOWARN(comm->ncclNet->regMr(rComm, gpuPtr, GPU_BUF_SIZE, NCCL_PTR_CUDA, &mHandle), NCCL_NET);
       NCCLCHECKNOWARN(comm->ncclNet->deregMr(rComm, mHandle), NCCL_NET);
-      gdrSupportMatrix[comm->cudaDev] = 1;
+      gdrSupportMatrix[comm->cudaDev] = 1;/*当前cuda设备支持*/
     }
     NCCLCHECK(ncclCudaFree(gpuPtr));
 cleanup2:
