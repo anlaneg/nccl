@@ -273,9 +273,12 @@ struct extInfo {
 #include <sys/resource.h>
 
 static ncclResult_t setFilesLimit() {
+  /*读取file limit*/
   struct rlimit filesLimit;
   SYSCHECK(getrlimit(RLIMIT_NOFILE, &filesLimit), "getrlimit");
+  /*调整成最大值*/
   filesLimit.rlim_cur = filesLimit.rlim_max;
+  /*使之生效*/
   SYSCHECK(setrlimit(RLIMIT_NOFILE, &filesLimit), "setrlimit");
   return ncclSuccess;
 }
@@ -1011,32 +1014,34 @@ fail:
   return ret;
 }
 
-static ncclResult_t netRingAllGather(ncclNet_t* net, void* sendComm, void* recvComm, int rank, int nranks, char* data, int size/*每个rank片大小*/, volatile uint32_t* abortFlag) {
+static ncclResult_t netRingAllGather(ncclNet_t* net, void* sendComm/*发送侧comm */, void* recvComm/*接收侧comm*/, int rank/*自身rank */, int nranks/*总rank数 */, char* data, int size/*每个rank片大小*/, volatile uint32_t* abortFlag) {
   ncclResult_t res;
   uint64_t tFirst = 0, tRest = 0;
   void* sendDataHandle = NULL;
   void* recvDataHandle = NULL;
   /*为sendComm,recvComm注册data做为mr*/
   NCCLCHECKGOTO(netReg(net, sendComm, data, nranks * size/*注册大小*/, &sendDataHandle), res, exit);
-  NCCLCHECKGOTO(netReg(net, recvComm, data, nranks * size, &recvDataHandle), res, exit);
+  NCCLCHECKGOTO(netReg(net, recvComm, data, nranks * size/*注册整块数据 */, &recvDataHandle), res, exit);
   /* Simple ring based AllGather
    * At each step i receive data from (rank-i-1) from prev
    * and send previous step's data from (rank-i) to next
    */
   TRACE(NCCL_BOOTSTRAP, "NetRingAllGather started");
   BOOTSTRAP_PROF_OPEN(tFirst);
-  /*遍历每个rank*/
+  /*遍历每个rank通信拿到所有rank的数据*/
   for (int i = 0; i < nranks - 1; i++) {
     int tag = i;
     /*对于当前rank来说，第i轮，其收rank-i-1号报文
      * 发rank-i号报文
+     * 即首次循环发送自已的那一块，下次发送自已从上家收到的那一块...
+     * 接收，先收上家那一块，再收上家的上家那一块
      * */
     size_t rslice = (rank - i - 1 + nranks) % nranks;
     size_t sslice = (rank - i + nranks) % nranks;
     void* recv_data = data + rslice * size;/*取recv指针*/
     void* send_data = data + sslice * size;/*取send指针*/
     /*处理收与发*/
-    NCCLCHECKGOTO(netSendRecv(net, sendComm, send_data/*要发送的数据*/, size, sendDataHandle/*发送mr*/, recvComm, recv_data/*要接收的数据*/, size, recvDataHandle/*接收mr*/, tag, abortFlag), res, exit);
+    NCCLCHECKGOTO(netSendRecv(net, sendComm, send_data/*要发送的数据*/, size, sendDataHandle/*发送mr*/, recvComm, recv_data/*要接收的数据块*/, size, recvDataHandle/*接收mr*/, tag, abortFlag), res, exit);
     if (i == 0) {
       BOOTSTRAP_PROF_CLOSE(tFirst);
       BOOTSTRAP_PROF_OPEN(tRest);
