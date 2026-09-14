@@ -143,7 +143,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), ret, fail);
   // First time initialization
   for (int i=1; i<comm->nRanks; i++) {
-    int bootstrapTag = (i<<8) + (graph ? graph->id+1 : 0);
+    int bootstrapTag = (i<<8) + (graph ? graph->id+1 : 0);/**生成tag,这个tag可用于控制同步 */
     int recvPeer = (comm->rank - i + comm->nRanks) % comm->nRanks;/*从前一个收取*/
     int sendPeer = (comm->rank + i) % comm->nRanks;/*向后一个发送（这样就构成了一个ring)*/
     uint64_t recvMask = comm->connectRecv[recvPeer];

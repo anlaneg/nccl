@@ -1987,7 +1987,7 @@ static void ncclCommInitJobFree(void* _job) {
   free(_job);
 }
 
-static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*gpu总数*/, int nId/*commId数目*/, ncclUniqueId* commId, int myrank/*自身rank编号*/, int cudaDev/*自身gpu编号*/, ncclConfig_t *config/*配置*/, const char funcName[]/*调用方函数名称*/) {
+static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*rank总数*/, int nId/*commId数目*/, ncclUniqueId* commId, int myrank/*自身rank编号*/, int cudaDev/*自身gpu编号*/, ncclConfig_t *config/*配置*/, const char funcName[]/*调用方函数名称*/) {
   if (nId <= 0 || nId > nranks) {
     WARN("improper usage of ncclCommInitRank: nId = %d, nranks=%d", nId, nranks);
     return ncclInvalidArgument;
@@ -2072,7 +2072,7 @@ fail:
 }
 
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank);
-ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {
+ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks/*rank总数*/, ncclUniqueId commId, int myrank/*自身rank id*/) {
   NCCLCHECK(ncclInitEnv());
   NVTX3_RANGE(NcclNvtxParamsCommInitRank)
   // Load the CUDA driver and dlsym hooks (can fail on old drivers)

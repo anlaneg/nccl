@@ -625,6 +625,7 @@ ncclResult_t ncclDevrWindowRegisterInGroup(
 
   CUDACHECKGOTO(cudaStreamSynchronize(stream), ret, fail_locReg_memHandle_mem_stream_win);
 
+  /**执行barrier, 确保所有rank都到达此位置 */
   // symWindowCreate needs barrier.
   NCCLCHECKGOTO(bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xbeef), ret, fail_locReg_memHandle_mem_stream_win);
 
@@ -862,6 +863,7 @@ ncclResult_t ncclDevrCommCreateInternal(
 
   CUDACHECKGOTO(cudaStreamSynchronize(stream), ret, fail_stream_mem_win_signals);
 
+  /**执行barrier, 确保所有rank都到达此位置（另一个位置也用了0xbeef,两者不会冲突) */
   NCCLCHECKGOTO(bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xbeef), ret, fail_stream_mem_win_signals);
   CUDACHECKGOTO(cudaStreamDestroy(stream), ret, fail_stream_mem_win_signals);
   return ret;

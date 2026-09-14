@@ -494,7 +494,7 @@ struct bootstrapState {
   uint64_t* peerProxyAddressesUDS;
   union ncclSocketAddress* peerProxyAddresses;
   union ncclSocketAddress* peerP2pAddresses;
-  struct unexConn* unexpectedConnections;
+  struct unexConn* unexpectedConnections;/**挂接非预期的连接 */
   int cudaDev;
   int rank;
   int nranks;/*rank总数*/
@@ -928,8 +928,8 @@ ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int s
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket sock;
   TRACE(NCCL_BOOTSTRAP, "Sending to peer=%d tag=%d size=%d", peer, tag, size);
-  NCCLCHECK(socketConnect(commState, peer, tag, &sock));
-  NCCLCHECKGOTO(socketSend(&sock, data, size), ret, fail);
+  NCCLCHECK(socketConnect(commState, peer, tag, &sock));/*连接到对端peer，并发送socketAckInfo*/
+  NCCLCHECKGOTO(socketSend(&sock, data, size), ret, fail);/*发送data */
   TRACE(NCCL_BOOTSTRAP, "Sent to peer=%d tag=%d size=%d", peer, tag, size);
   NCCLCHECK(ncclSocketClose(&sock));
   return ret;
@@ -949,11 +949,11 @@ static ncclResult_t unexpectedEnqueue(struct bootstrapState* state, int peer, in
   // Enqueue
   struct unexConn* list = state->unexpectedConnections;
   if (list == NULL) {
-    state->unexpectedConnections = unex;
+    state->unexpectedConnections = unex;/*第一个连接，直接挂接在链表头 */
     return ncclSuccess;
   }
-  while (list->next) list = list->next;
-  list->next = unex;
+  while (list->next) list = list->next;/*找到链表尾 */
+  list->next = unex;/*挂接新连接 */
   return ncclSuccess;
 }
 static ncclResult_t unexpectedDequeue(struct bootstrapState* state, int peer, int tag, struct ncclSocket* sock, int* found) {
@@ -997,6 +997,7 @@ static ncclResult_t socketAccept(void* commState, int peer, int tag, struct nccl
 
   // Search unexpected connections first
   int found;
+  /*在非预期队列中查找peer,tag对应的连接 */
   NCCLCHECK(unexpectedDequeue(state, peer, tag, sock, &found));
   if (found) return ncclSuccess;
 
@@ -1005,8 +1006,10 @@ static ncclResult_t socketAccept(void* commState, int peer, int tag, struct nccl
     struct socketAckInfo ack = {0};
     NCCLCHECKGOTO(ncclSocketInit(sock), ret, fail);
     NCCLCHECKGOTO(ncclSocketAccept(sock, &STATE_LISTEN(state, peerSocket)), ret, fail);
+    /*接收socketAckInfo*/
     NCCLCHECKGOTO(socketRecv(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
     if (ack.rank == peer && ack.tag == tag) return ncclSuccess;
+    /*将ackInfo放在非预期队列 */
     NCCLCHECKGOTO(unexpectedEnqueue(state, ack.rank, ack.tag, sock), ret, fail);
   }
   return ncclSuccess;
@@ -1018,8 +1021,10 @@ fail:
 ncclResult_t bootstrapRecv(void* commState, int peer, int tag, void* data, int size) {
   ncclResult_t ret;
   struct ncclSocket sock;
+  /**等待指定peer,tag的连接（否则不返回）*/
   NCCLCHECK(socketAccept(commState, peer, tag, &sock));
   TRACE(NCCL_BOOTSTRAP, "Receiving tag=%d peer=%d size=%d", tag, peer, size);
+  /**接收数据 */
   NCCLCHECKGOTO(socketRecv(&sock, ((char*)data), size), ret, fail);
   NCCLCHECKGOTO(ncclSocketClose(&sock, /*wait*/true), ret, fail);
   return ret;
@@ -1134,27 +1139,41 @@ exit:
   return res;
 }
 
-static ncclResult_t bootstrapP2PBarrier(void* commState, int* ranks, int rank, int nranks, int tag) {
+static ncclResult_t bootstrapP2PBarrier(void* commState, int* ranks, int rank/*自身rank */, int nranks/*总rank数 */, int tag) {
   if (nranks == 1)
-    return ncclSuccess;
+    return ncclSuccess;/*单rank，无需同步*/
   /* Simple [intra] process barrier
    *
    * Based on the dissemination algorithm by Debra Hensgen, Raphael Finkel, and Udi Manbet,
    * "Two Algorithms for Barrier Synchronization," International Journal of Parallel Programming, 17(1):1-17, 1988"
    */
-  int data[1] = {0};
+  int data[1] = {0};/**仅用于标记发收动作，数据本身无意义 */
+  /*
+  轮 0:mask = 1,和距离 1 的邻居互通;
+  轮 1:mask = 2,和距离 2 的邻居互通;
+  轮 2:mask = 4,和距离 4 的邻居互通;
+  轮 k:mask = 2^k,和距离 2^k 的邻居互通;
+  直到 mask >= nranks 退出,共 ⌈log2(N)⌉ 轮。
+  轮 0 结束:我从 rank-1 收到消息 ⇒ 我知道 rank-1 已经到了 barrier;
+  轮 1 结束:我从 rank-2 收到消息,而 rank-2 在轮 0 已经知道 rank-3 到了,所以我此时间接地知道 rank-1、rank-2、rank-3 都到了;
+  轮 2 结束:我从 rank-4 收到消息,rank-4 在前两轮已经知道 rank-5,6,7 到了,所以我知道 rank-1..7 都到了;
+  轮 k 结束:我掌握了 rank-1..(2^{k+1}-1) 到达的间接见证;
+  当 2^k ≥ N 时,全网都被覆盖 ⇒ barrier 完成。
+   */
   for (int mask = 1; mask < nranks; mask <<= 1) {
     int src = (rank - mask + nranks) % nranks;
     int dst = (rank + mask) % nranks;
-    NCCLCHECK(bootstrapSend(commState, ranks ? ranks[dst] : dst, tag, data, sizeof(data)));
-    NCCLCHECK(bootstrapRecv(commState, ranks ? ranks[src] : src, tag, data, sizeof(data)));
+    NCCLCHECK(bootstrapSend(commState, ranks ? ranks[dst]/**dst是索引，发送目标需要从ranks中获取 */ : dst/*发送目标 */, tag, data, sizeof(data)));
+    NCCLCHECK(bootstrapRecv(commState, ranks ? ranks[src] : src/*接收目标 */, tag, data, sizeof(data)));
   }
   return ncclSuccess;
 }
 
+/**节点内同步barrier（同一物理节点上的多进程仍然是分布式系统） */
 ncclResult_t bootstrapIntraNodeBarrier(void* commState, int* ranks, int rank, int nranks, int tag) {
   uint64_t time = 0;
   BOOTSTRAP_PROF_OPEN(time);
+  /**自身为rank,在nranks中同步等待所有rank达到tag位置（这一版本要求算出的rank需要在ranks数组中再映射一次）*/
   NCCLCHECK(bootstrapP2PBarrier(commState, ranks, rank, nranks, tag));
   BOOTSTRAP_PROF_CLOSE(time);
   TRACE(NCCL_BOOTSTRAP | NCCL_PROFILE, "bootstrapIntraNodeBarrier done in %f sec", time / 1e9);
@@ -1164,8 +1183,10 @@ ncclResult_t bootstrapIntraNodeBarrier(void* commState, int* ranks, int rank, in
 ncclResult_t bootstrapBarrier(void* commState, int rank, int nranks, int tag) {
   uint64_t time = 0;
   BOOTSTRAP_PROF_OPEN(time);
+  /**自身为rank,在nranks中同步等待所有rank达到tag位置*/
   NCCLCHECK(bootstrapP2PBarrier(commState, NULL, rank, nranks, tag));
   BOOTSTRAP_PROF_CLOSE(time);
+  /**指明此barrier用时多久 */
   TRACE(NCCL_BOOTSTRAP | NCCL_PROFILE, "bootstrapBarrier done in %f sec", time / 1e9);
   return ncclSuccess;
 }
@@ -1174,8 +1195,8 @@ ncclResult_t bootstrapIntraNodeAllGather(void* commState, int* ranks, int rank, 
   if (nranks == 1) return ncclSuccess;
   TRACE(NCCL_INIT, "rank %d nranks %d size %d - ENTER", rank, nranks, size);
 
-  int prevRank = ranks[(rank - 1 + nranks) % nranks];
-  int nextRank = ranks[(rank + 1) % nranks];
+  int prevRank = ranks[(rank - 1 + nranks) % nranks];/*前一个rank */
+  int nextRank = ranks[(rank + 1) % nranks];/*后一个rank */
   // intraNode bootstrap is done defacto using the socket-based implementation
   struct ncclSocket recvSocket, sendSocket;
   NCCLCHECK(socketConnect(commState, nextRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER, &sendSocket));
