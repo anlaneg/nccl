@@ -52,8 +52,8 @@ enum ncclSocketType {
 };
 
 struct ncclSocket {
-  int fd;
-  int acceptFd;
+  int fd;/*client fd*/
+  int acceptFd;/*自此fd接入client*/
   int errorRetries;
   union ncclSocketAddress addr;
   volatile uint32_t* abortFlag;

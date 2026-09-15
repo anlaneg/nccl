@@ -25,10 +25,11 @@ struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
 
 template <int type/*type为1时为发送*/>
 static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclConnect* connect, int channelId, int peer, int connIndex, int* transportType) {
-  struct ncclPeerInfo* myInfo = comm->peerInfo+comm->rank;
-  struct ncclPeerInfo* peerInfo = comm->peerInfo+peer;
+  struct ncclPeerInfo* myInfo = comm->peerInfo+comm->rank;/*自身信息*/
+  struct ncclPeerInfo* peerInfo = comm->peerInfo+peer;/*对端信息*/
   struct ncclConnector* connector = (type == 1) ? comm->channels[channelId].peers[peer]->send + connIndex :
                                                   comm->channels[channelId].peers[peer]->recv + connIndex;
+  /*按顺序遍历所有transport,对首个可连接的transport，执行setup*/
   for (int t=0; t<NTRANSPORTS; t++) {
     struct ncclTransport *transport = ncclTransports[t];
     struct ncclTransportComm* transportComm = type == 1 ? &transport->send : &transport->recv;
@@ -36,7 +37,7 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
     /**检查此transport是否可以连接 */
     NCCLCHECK(transport->canConnect(&ret/*出参，可连接时为真*/, comm, graph, myInfo, peerInfo));
     if (ret) {
-    	/*可连接*/
+      /*可连接*/
       connector->transportComm = transportComm;
       NCCLCHECK(transportComm->setup(comm, graph, myInfo, peerInfo, connect, connector, channelId, connIndex));
       if (transportType) *transportType = t;

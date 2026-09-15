@@ -37,7 +37,7 @@ struct ncclConnector;
 struct ncclComm;
 
 struct ncclPeerInfo {
-  int rank;/*当前rank*/
+  int rank;/*节点当前rank*/
   int cudaDev;
   int nvmlDev;
   int gdrSupport;/*是否支持gdr*/
@@ -130,7 +130,7 @@ struct ncclTransportComm {
 struct ncclTransport {
   const char name[8];
   /**判断两个peer是否可以使用该transport通信 */
-  ncclResult_t (*canConnect)(int*, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*);
+  ncclResult_t (*canConnect)(int*/*出参，可连接时置为非零*/, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo*/*源信息*/, struct ncclPeerInfo*/*对端信息*/);
   struct ncclTransportComm send;
   struct ncclTransportComm recv;
 };

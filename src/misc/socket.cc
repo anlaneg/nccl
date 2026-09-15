@@ -64,7 +64,7 @@ static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr
 }
 
 /*按op操作socket,执行收/发*/
-static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, int size/*内容长度*/, int* offset/*出参，偏移量*/, int* pclosed = NULL) {
+static ncclResult_t socketProgress(int op/*收或者发*/, struct ncclSocket* sock, void* ptr, int size/*内容长度*/, int* offset/*出参，偏移量*/, int* pclosed = NULL) {
   int closed;
   /*按op操作*/
   NCCLCHECK(socketProgressOpt(op, sock, ptr, size, offset, 0 /*block*/, &closed));
@@ -464,6 +464,7 @@ ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress*
 
 static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
   socklen_t socklen = sizeof(union ncclSocketAddress);
+  /*接收client*/
   sock->fd = accept(sock->acceptFd, (struct sockaddr*)&sock->addr, &socklen);
   if (sock->fd != -1) {
 	  /*接入成功，置accepted状态*/
@@ -887,7 +888,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int* closed) {
+ncclResult_t ncclSocketProgress(int op/*执行收或者发操作*/, struct ncclSocket* sock, void* ptr, int size, int* offset/*出参，偏移量*/, int* closed) {
   if (sock == NULL) {
     WARN("ncclSocketProgress: pass NULL socket");
     return ncclInvalidArgument;

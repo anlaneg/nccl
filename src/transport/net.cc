@@ -151,12 +151,12 @@ struct netRegInfo {
 };
 
 /* Determine if two peers can communicate with NET */
-static ncclResult_t canConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
+static ncclResult_t canConnect(int* ret/*出参，是否容许连接*/, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
   *ret = 1;/*默认置1*/
   if (info1->hostHash == info2->hostHash) {
     /**在同一节点内，检查是否禁用了内节点网络*/
     // If on the same host, check intra-node net is not disabled.
-    NCCLCHECK(ncclTopoCheckNet(comm->topo, info1->rank, info2->rank, ret));
+    NCCLCHECK(ncclTopoCheckNet(comm->topo, info1->rank, info2->rank, ret/*出参，是否容许连接*/));
   }
   return ncclSuccess;/**跨节点通信，返回成功 */
 }
@@ -1320,7 +1320,8 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             void* phandle = &sub->pHandles[DIVUP(transmittedStepId, args->sliceSteps)%NCCL_STEPS];
             if (!checkedNetAttr++)
               setXferNetAttrs(proxyState, args, 1);
-            NCCLCHECK(proxyState->ncclNet->isend(resources->netSendComm, buff, size, resources->tpRank, sub->sendMhandle, phandle, sub->requests+buffSlot));
+            /*发送buffer*/
+            NCCLCHECK(proxyState->ncclNet->isend(resources->netSendComm, buff/*要发送的内容*/, size, resources->tpRank, sub->sendMhandle, phandle, sub->requests+buffSlot));
             if (sub->requests[buffSlot] != NULL) {
               TRACE(NCCL_NET, "sendProxy [%ld/%d/%d] Isend posted, req %p, buff %p, size %d, proto %d, myRank %d, channelId %d, mhandle %p", sub->transmitted, buffSlot, sub->nsteps, sub->requests[buffSlot], buff, size, p, proxyState->tpRank, sub->channelId, sub->sendMhandle);
               sub->transSize = size;
@@ -1866,7 +1867,7 @@ static ncclResult_t recvProxyDeregBuffer(struct ncclProxyConnection* connection,
   return ncclSuccess;
 }
 
-/**提供跨节点通信 */
+/**提供跨节点通信(其下封装nettransport,比如socket,ib等) */
 struct ncclTransport netTransport = {
   "NET",
   canConnect,/*判断是否可连接*/

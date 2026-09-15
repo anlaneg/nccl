@@ -20,16 +20,17 @@
 #include <condition_variable>
 
 /* Init functions */
-static int ncclNetIfs = -1;
+static int ncclNetIfs = -1;/*ncclNetSocketDevs数组有效内容数目*/
 struct ncclNetSocketDev {
   union ncclSocketAddress addr;
-  char devName[MAX_IF_NAME_SIZE];
-  char* pciPath;
+  char devName[MAX_IF_NAME_SIZE];/*接口名称*/
+  char* pciPath;/*pci地址*/
 };
 static struct ncclNetSocketDev ncclNetSocketDevs[MAX_IFS];
 
 static std::mutex ncclNetSocketMutex;
 
+/*取网络设备的pci地址信息*/
 static ncclResult_t ncclNetSocketGetPciPath(char* devName, char** pciPath) {
   char devicePath[PATH_MAX];
   snprintf(devicePath, PATH_MAX, "/sys/class/net/%s/device", devName);
@@ -47,19 +48,22 @@ static ncclProfilerCallback_t ncclProfilerFunction;
 // context support is added to the plugin the ref counter can be removed.
 static int netRefCount;
 
+/*收集接口，填充ncclNetSocketDevs*/
 ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
-  if (netRefCount++) return ncclSuccess;
+  if (netRefCount++) return ncclSuccess;/*已初始化，直接返回*/
   ncclProfilerFunction = profFunction;
   if (ncclNetIfs == -1) {
     std::lock_guard<std::mutex> lock(ncclNetSocketMutex);
-    if (ncclNetIfs == -1) {
+    if (ncclNetIfs == -1) {/*加锁再查一遍*/
       char names[MAX_IF_NAME_SIZE*MAX_IFS];
       union ncclSocketAddress addrs[MAX_IFS];
+      /*查找接口*/
       NCCLCHECK(ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS, &ncclNetIfs));
       if (ncclNetIfs <= 0) {
         WARN("NET/Socket : no interface found");
         return ncclInternalError;
       } else {
+    	/*接口查找成功*/
         #define MAX_LINE_LEN (2047)
         char line[MAX_LINE_LEN+1];
         char addrline[SOCKET_NAME_MAXLEN+1];
@@ -67,7 +71,7 @@ ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t*
         addrline[SOCKET_NAME_MAXLEN] = '\0';
         for (int i=0; i<ncclNetIfs; i++) {
           strcpy(ncclNetSocketDevs[i].devName, names+i*MAX_IF_NAME_SIZE);
-          memcpy(&ncclNetSocketDevs[i].addr, addrs+i, sizeof(union ncclSocketAddress));
+          memcpy(&ncclNetSocketDevs[i].addr, addrs+i, sizeof(union ncclSocketAddress));/*收集的接口地址*/
           NCCLCHECK(ncclNetSocketGetPciPath(ncclNetSocketDevs[i].devName, &ncclNetSocketDevs[i].pciPath));
           snprintf(line+strlen(line), MAX_LINE_LEN-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
               ncclSocketToString(&addrs[i], addrline));
@@ -81,14 +85,18 @@ ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t*
 }
 
 ncclResult_t ncclNetSocketDevices(int* ndev) {
-  *ndev = ncclNetIfs;
+  *ndev = ncclNetIfs;/*返回设备数目*/
   return ncclSuccess;
 }
 
-static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
+static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed/*出参，设备speed*/) {
   ncclResult_t ret = ncclSuccess;
   *speed = 0;
   char speedPath[PATH_MAX];
+  /*取设备对应的speed
+   * 例如：cat /sys/class/net/eth0/speed
+          25000
+   * */
   snprintf(speedPath, sizeof(speedPath), "/sys/class/net/%s/speed", devName);
   int fd = -1;
   SYSCHECKSYNC(open(speedPath, O_RDONLY), "open", fd);
@@ -102,6 +110,7 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
     }
   }
   if (*speed <= 0) {
+	  /*其它的均归于10Gbps*/
     INFO(NCCL_NET, "Could not get speed from %s. Defaulting to 10 Gbps.", speedPath);
     *speed = 10000;
   }
@@ -109,8 +118,9 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   return ret;
 }
 
+/*取dev号设备属性*/
 ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
-  props->name = ncclNetSocketDevs[dev].devName;
+  props->name = ncclNetSocketDevs[dev].devName;/*设备名称*/
   props->pciPath = ncclNetSocketDevs[dev].pciPath;
   props->guid = dev;
   props->ptrSupport = NCCL_PTR_HOST;
@@ -137,6 +147,7 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
 
 NCCL_PARAM(SocketInlineSize, "SOCKET_INLINE", /*128 B=*/1 << 7);
 NCCL_PARAM(SocketMinTaskSize, "SOCKET_MIN_TASKSIZE", /*64 kiB=*/1 << 16);
+/*每个线程多少个socket*/
 NCCL_PARAM(SocketNsocksPerThread, "NSOCKS_PERTHREAD", -2);
 NCCL_PARAM(SocketNthreads, "SOCKET_NTHREADS", -2);
 
@@ -158,8 +169,8 @@ struct ncclNetSocketCommStage {
 struct ncclNetSocketHandle {
   union ncclSocketAddress connectAddr;
   uint64_t magic; // random number to help debugging
-  int nSocks;
-  int nThreads;
+  int nSocks;/*socket总数*/
+  int nThreads;/*线程数*/
   struct ncclNetSocketCommStage stage;
 };
 
@@ -179,11 +190,11 @@ struct ncclProfilerInfo {
 };
 
 struct ncclNetSocketRequest {
-  int op;
-  void* data;
-  int size;
+  int op;/*操作类型，比如NCCL_SOCKET_SEND*/
+  void* data;/*内容指针*/
+  int size;/*内容大小*/
   void* inlineData;
-  struct ncclSocket* ctrlSock;
+  struct ncclSocket* ctrlSock;/*对应的ctrl socket*/
   int offset;
   int used;
   struct ncclNetSocketComm* comm;
@@ -210,22 +221,24 @@ struct ncclNetSocketThreadResources {
 struct ncclNetSocketListenComm {
   struct ncclSocket sock;
   struct ncclNetSocketCommStage stage;
-  int nSocks;
-  int nThreads;
-  int dev;
+  int nSocks;/*sockets总数*/
+  int nThreads;/*线程数*/
+  int dev;/*对应的netdev编号*/
 };
 
 struct ncclNetSocketComm {
+	/*控制socket*/
   struct ncclSocket ctrlSock;
+  /*按双方约定的索引存放sockets*/
   struct ncclSocket socks[MAX_SOCKETS];
   int dev;
-  int cudaDev;
+  int cudaDev;/*当前cuda设备*/
   int nSocks;
   int nThreads;
   int nextSock;
   void* inlineData;
   struct ncclNetSocketRequest requests[MAX_REQUESTS];
-  pthread_t helperThread[MAX_THREADS];
+  pthread_t helperThread[MAX_THREADS];/*执行线程*/
   struct ncclNetSocketThreadResources threadResources[MAX_THREADS];
 };
 
@@ -233,7 +246,7 @@ void* persistentSocketThread(void *args_) {
   struct ncclNetSocketThreadResources* resource = (struct ncclNetSocketThreadResources*)args_;
   struct ncclNetSocketComm* comm = resource->comm;
   struct ncclNetSocketTaskQueue* myQueue = &resource->threadTaskQueue;
-  int nSocksPerThread = comm->nSocks / comm->nThreads;
+  int nSocksPerThread = comm->nSocks / comm->nThreads;/*每个thread处理多少个socket*/
 #ifdef NCCL_ENABLE_NET_PROFILING
   void* eHandle[MAX_REQUESTS*MAX_SOCKETS] = { 0 };
 #endif
@@ -257,6 +270,7 @@ void* persistentSocketThread(void *args_) {
               ncclProfilerFunction(&eHandle[i+j], ncclProfilerNetEventStart, resource->pInfo->pHandle, NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
             }
 #endif
+            /*按r->op执行操作*/
             r->result = ncclSocketProgress(r->op, r->sock, r->data, r->size, &r->offset);
             if (r->result != ncclSuccess) {
 #ifdef NCCL_ENABLE_NET_PROFILING
@@ -280,27 +294,29 @@ void* persistentSocketThread(void *args_) {
     }
     if (idle) {
       std::unique_lock<std::mutex> lock(resource->threadMutex);
-      resource->threadCond.wait(lock, [&] { return mark != myQueue->next || resource->stop; });
+      resource->threadCond.wait(lock, [&] {/*返回false才继续wait*/ return mark != myQueue->next || resource->stop; });
     }
     if (resource->stop) return NULL;
   }
 }
 
-ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
+ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns/*出参，socket总数*/, int* nt/*出参，线程数*/) {
   ncclResult_t ret = ncclSuccess;
-  int nSocksPerThread = ncclParamSocketNsocksPerThread();
-  int nThreads = ncclParamSocketNthreads();
+  int nSocksPerThread = ncclParamSocketNsocksPerThread();/*一个线程多少个socket*/
+  int nThreads = ncclParamSocketNthreads();/*多少个socket处理线程*/
   if (nThreads > MAX_THREADS) {
+	  /*线程数过多*/
     WARN("NET/Socket : NCCL_SOCKET_NTHREADS is greater than the maximum allowed, setting to %d", MAX_THREADS);
     nThreads = MAX_THREADS;
   }
   int fd = -1;
   int nSocks;
+  /*-2为自动检测*/
   if (nThreads == -2 || nSocksPerThread == -2) {
     // Auto-detection
     int autoNt=0, autoNs=1; // By default, we only use the main thread and do not spawn extra threads
     char vendorPath[PATH_MAX];
-    snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetSocketDevs[dev].devName);
+    snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetSocketDevs[dev].devName);/*取vendor*/
     // Coverity is wrong.  NULL second argument to realpath() is OK by POSIX.1-2008.
     // coverity[alias_transfer:FALSE]
     char* rPath = realpath(vendorPath, NULL);
@@ -312,6 +328,7 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
       TRACE(NCCL_NET, "Open of %s failed : %s", vendorPath, strerror(errno));
       goto end;
     }
+    /*对这几家的设备做特殊处理*/
     char vendor[7];
     strncpy(vendor, "0x0000", 7);
     SYSCHECKGOTO(read(fd, vendor, 6), "read", ret, fail);
@@ -328,6 +345,7 @@ end:
   }
   nSocks = nSocksPerThread * nThreads;
   if (nSocks > MAX_SOCKETS) {
+	  /*sockets数过多，规范为最大值*/
     nSocksPerThread = MAX_SOCKETS/nThreads;
     WARN("NET/Socket : the total number of sockets is greater than the maximum allowed, setting NCCL_NSOCKS_PERTHREAD to %d", nSocksPerThread);
     nSocks = nSocksPerThread * nThreads;
@@ -342,10 +360,11 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclNetSocketListen(void* ctx, int dev, void* opaqueHandle, void** listenComm) {
+/*执行监听，获得对应的listencomm*/
+ncclResult_t ncclNetSocketListen(void* ctx, int dev/*设备编号*/, void* opaqueHandle, void** listenComm/*出参，listen对应的comm*/) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
     WARN("NET/Socket : ncclNetSocketListen dev=%d ncclNetIfs=%d", dev, ncclNetIfs);
-    return ncclInternalError;
+    return ncclInternalError;/*dev编号有误*/
   }
   ncclResult_t ret = ncclSuccess;
   struct ncclNetSocketHandle* handle = (struct ncclNetSocketHandle*) opaqueHandle;
@@ -354,9 +373,11 @@ ncclResult_t ncclNetSocketListen(void* ctx, int dev, void* opaqueHandle, void** 
   struct ncclNetSocketListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
   handle->magic = NCCL_SOCKET_MAGIC;
-  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL, 1), ret, fail);
+  /*初始化socket并listen*/
+  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr/*listen地址*/, handle->magic, ncclSocketTypeNetSocket, NULL, 1), ret, fail);
   NCCLCHECKGOTO(ncclSocketListen(&comm->sock), ret, fail);
-  NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr), ret, fail);
+  /*取得实际listen地址*/
+  NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr/*实际listen地址*/), ret, fail);
   NCCLCHECKGOTO(ncclNetSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads), ret, fail);
   handle->nSocks = comm->nSocks;
   handle->nThreads = comm->nThreads;
@@ -373,7 +394,7 @@ fail:
 #define SOCKET_CTRL_SIZE (sizeof(int))
 ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
-    return ncclInternalError;
+    return ncclInternalError;/*参数有误*/
   }
 
   int ready;
@@ -394,13 +415,14 @@ ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void**
   comm->dev = dev;
   CUDACHECK(cudaGetDevice(&comm->cudaDev));
   for (; i<comm->nSocks+1; i++) {
+	  /*多一个ctrlSocket*/
     sock = (i == comm->nSocks) ? &comm->ctrlSock : comm->socks+i;
     NCCLCHECK(ncclSocketInit(sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket, NULL, 1));
 
     stage->sock = sock;
     stage->state = ncclNetSocketCommStateConnect;
-    stage->iteration = i;
-    NCCLCHECK(ncclSocketConnect(sock));
+    stage->iteration = i;/*记录当前处理的socket位置*/
+    NCCLCHECK(ncclSocketConnect(sock));/*连接到对端*/
 
 socket_connect_check:
     NCCLCHECK(ncclSocketReady(sock, &ready));
@@ -409,9 +431,10 @@ socket_connect_check:
 
 socket_send:
     int done = 0;
-    NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, sock, &i, sizeof(uint8_t), &done));
-    if (done == 0) return ncclSuccess;
+    NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND/*执行发*/, sock, &i/*知会socket索引*/, sizeof(uint8_t), &done));
+    if (done == 0) return ncclSuccess;/*未发送完成，先返回，已记录处理到哪里了*/
   }
+  /*全部处理完成，设置发送comm*/
   NCCLCHECK(ncclCalloc(&comm->inlineData, MAX_REQUESTS * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize())));
   *sendComm = comm;
   return ncclSuccess;
@@ -451,6 +474,7 @@ socket_accept_check:
 
     stage->state = ncclNetSocketCommStateRecv;
 socket_recv:
+	/*读取一个字节（即发送指明的socket index)*/
     int done = 0;
     NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, sock, &sendSockIdx, sizeof(uint8_t), &done));
     if (done == 0) return ncclSuccess;
@@ -458,7 +482,7 @@ socket_recv:
     if (sendSockIdx == rComm->nSocks)
       rComm->ctrlSock = *sock;
     else
-      rComm->socks[sendSockIdx] = *sock;
+      rComm->socks[sendSockIdx] = *sock;/*存入收到的socket*/
     free(sock);
   }
   NCCLCHECK(ncclCalloc(&rComm->inlineData, MAX_REQUESTS * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize())));
@@ -472,9 +496,11 @@ socket_recv:
   return ncclSuccess;
 }
 
+/*构造并填充request*/
 ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, void* data, int size, struct ncclNetSocketRequest** req) {
   for (int i=0; i<MAX_REQUESTS; i++) {
     struct ncclNetSocketRequest* r = comm->requests+i;
+    /*查找一个未使用的request并填充*/
     if (r->used == 0) {
       r->op = op;
       r->data = data;
@@ -483,16 +509,18 @@ ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, voi
       r->used = 1;
       r->comm = comm;
       r->nSubs = 0;
+      /*对应的inline数据指针*/
       r->inlineData = (uint8_t*)comm->inlineData + i * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize());
       *req = r;
       return ncclSuccess;
     }
   }
+  /*没有空闲的request*/
   WARN("NET/Socket : unable to allocate requests");
   return ncclInternalError;
 }
 
-ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclProfilerInfo* pInfo, int op, void* data, int size, struct ncclNetSocketTask** req) {
+ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclProfilerInfo* pInfo, int op, void* data, int size, struct ncclNetSocketTask** req/*出参，生成的req*/) {
   int tid = comm->nextSock % comm->nThreads;
   struct ncclNetSocketThreadResources* res = comm->threadResources+tid;
   struct ncclNetSocketTaskQueue* queue = &res->threadTaskQueue;
@@ -508,11 +536,13 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
 #ifdef NCCL_ENABLE_NET_PROFILING
     res->pInfo = pInfo;
 #endif
+    /*创建线程*/
     PTHREADCHECK(pthread_create(comm->helperThread+tid, NULL, persistentSocketThread, res), "pthread_create");
     ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev, tid, comm->cudaDev);
   }
+  /*线程已创建，直接生成Task并串进去*/
   struct ncclNetSocketTask* r = queue->tasks+queue->next;
-  if (r->used == 0) {
+  if (r->used == 0) {/*可用，填充*/
     r->op = op;
     r->data = data;
     r->size = size;
@@ -523,8 +553,8 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
     r->used = 1;
     *req = r;
     std::lock_guard<std::mutex> lock(res->threadMutex);
-    queue->next = (queue->next+1)%queue->len;
-    res->threadCond.notify_one();
+    queue->next = (queue->next+1)%queue->len;/*更新queue->next*/
+    res->threadCond.notify_one();/*通知work线程处理*/
     return ncclSuccess;
   }
   WARN("NET/Socket : unable to allocate subtasks");
@@ -532,7 +562,7 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
 }
 
 // if the dataSize is smaller than the inline size, return the inline size; if not, return 0 to avoid the extra copy.
-static int ncclNetSocketInlineSize(int dataSize) { return (dataSize <= ncclParamSocketInlineSize()) ? dataSize : 0; }
+static int ncclNetSocketInlineSize(int dataSize) { return (dataSize <= ncclParamSocketInlineSize()) /*如小，则可存放些inline数据*/? dataSize : 0; }
 
 ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
   *done = 0;
@@ -548,17 +578,19 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       // sender side has the right data size, copy size info + inline data to the buffer
       int inlineSize = ncclNetSocketInlineSize(r->size);
       msgSize = inlineSize + SOCKET_CTRL_SIZE;
-      memcpy(msg, &r->size, SOCKET_CTRL_SIZE);
-      if (inlineSize > 0) memcpy(msg + SOCKET_CTRL_SIZE, r->data, inlineSize);
+      memcpy(msg, &r->size, SOCKET_CTRL_SIZE);/*写内容大小*/
+      if (inlineSize > 0) memcpy(msg + SOCKET_CTRL_SIZE, r->data, inlineSize);/*写inline数据内容*/
     } else {
       // receiver side doesn't have the right data size, wait for the sender to send it
       int sizeOffset = 0, senderSize = 0;
+      /*先收内容大小*/
       while (sizeOffset < SOCKET_CTRL_SIZE) {
         NCCLCHECK(ncclSocketProgress(r->op, r->ctrlSock, msg, SOCKET_CTRL_SIZE, &sizeOffset));
         if (sizeOffset == 0) return ncclSuccess; /* not ready yet*/
       }
       memcpy(&senderSize, msg, SOCKET_CTRL_SIZE);
       if (senderSize > r->size) {
+    	  /*发送提供的内容比我们预期的大小要大*/
         char line[SOCKET_NAME_MAXLEN + 1];
         union ncclSocketAddress addr;
         NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr));
@@ -569,13 +601,14 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       }
       // copy to the data buffer if we have received some inline data already
       int receivedInline = sizeOffset - SOCKET_CTRL_SIZE;
-      if (receivedInline > 0) memcpy(r->data, msg + SOCKET_CTRL_SIZE, receivedInline);
+      if (receivedInline > 0) memcpy(r->data, msg + SOCKET_CTRL_SIZE, receivedInline);/*填收到的inline数据*/
       // from the actual size, extract the remaining inline size to be received and redirect the msg buffer to the user data
       r->size = senderSize;
       msgSize = ncclNetSocketInlineSize(r->size) - receivedInline;
       msg = (uint8_t*)r->data + receivedInline;
     }
     int offset = 0;
+    /*再收取剩余的非inline数据*/
     while (offset < msgSize) {
       NCCLCHECK(ncclSocketProgress(r->op, r->ctrlSock, msg, msgSize, &offset));
       if (offset == 0) return ncclSuccess; /* not ready yet*/
@@ -588,6 +621,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       // each request can be divided up to nSocks tasks, we use the size left to transfer
       int taskSize = std::max((int)ncclParamSocketMinTaskSize(), DIVUP(r->size - r->offset, r->comm->nSocks));
       while (chunkOffset < r->size) {
+    	  /*生成task,通知执行线程执行*/
         int chunkSize = std::min(taskSize, r->size - chunkOffset);
         NCCLCHECK(ncclNetSocketGetTask(r->comm, &r->pInfo, r->op, (char*)(r->data) + chunkOffset, chunkSize, r->tasks + i++));
         chunkOffset += chunkSize;
@@ -641,12 +675,15 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
 }
 
 ncclResult_t ncclNetSocketRegMr(void* comm, void* data, size_t size, int type, void** mhandle) {
+	/*不支持regmr，直接忽略*/
   return (type != NCCL_PTR_HOST) ? ncclInternalError : ncclSuccess;
 }
 ncclResult_t ncclNetSocketDeregMr(void* comm, void* mhandle) { return ncclSuccess; }
 
+/*发送*/
 ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)sendComm;
+  /*填充request（send类型）*/
   NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_SEND, data, (int) size, (struct ncclNetSocketRequest**)request));
 #ifdef NCCL_ENABLE_NET_PROFILING
   // NCCL core profiler callback
@@ -659,6 +696,7 @@ ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, size_t size, int tag
 ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)recvComm;
   if (n != 1) return ncclInternalError;
+  /*填充request(recv类型）*/
   NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_RECV, data[0], (int)sizes[0], (struct ncclNetSocketRequest**)request));
 #ifdef NCCL_ENABLE_NET_PROFILING
   // NCCL core profiler callback
@@ -720,18 +758,18 @@ ncclResult_t ncclNetSocketFinalize(void* ctx) {
 ncclNet_t ncclNetSocket = {
   "Socket",
   ncclNetSocketInit,
-  ncclNetSocketDevices,
-  ncclNetSocketGetProperties,
-  ncclNetSocketListen,
-  ncclNetSocketConnect,
-  ncclNetSocketAccept,
+  ncclNetSocketDevices,/*返回设备数目*/
+  ncclNetSocketGetProperties,/*取设备属性*/
+  ncclNetSocketListen,/*监听*/
+  ncclNetSocketConnect,/*建立连接*/
+  ncclNetSocketAccept,/*接收client端的连接（配合client完成socket按索引设置）*/
   ncclNetSocketRegMr,
   NULL, // No DMA-BUF support
   ncclNetSocketDeregMr,
-  ncclNetSocketIsend,
-  ncclNetSocketIrecv,
+  ncclNetSocketIsend,/*只是填send request*/
+  ncclNetSocketIrecv,/*只是填recv request*/
   ncclNetSocketIflush,
-  ncclNetSocketTest,
+  ncclNetSocketTest,/*处理发送/接收，并检查req是否完成*/
   ncclNetSocketClose,
   ncclNetSocketClose,
   ncclNetSocketCloseListen,

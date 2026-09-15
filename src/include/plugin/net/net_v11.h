@@ -20,6 +20,7 @@ typedef struct {
 typedef struct {
 	/*设备名称*/
   char* name;                      // Used mostly for logging.
+  /*设备pci地址*/
   char* pciPath;                   // Path to the PCI device in /sys.
   uint64_t guid;                   // Unique identifier for the NIC chip. Important for
                                    // cards with multiple PCI functions (Physical or virtual).
