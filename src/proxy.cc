@@ -59,6 +59,7 @@ static void expectedProxyResponseFree(struct ncclProxyState* state) {
   }
 }
 
+/*respBuff中记录了opId的响应，将其复制到expecteResponses的对应链表上*/
 static ncclResult_t expectedProxyResponseStore(struct ncclProxyState* state, void* opId, void* respBuff, int respSize, ncclResult_t res) {
   struct ncclExpectedProxyResponse* elem = state->expectedResponses;
   while (elem) {
@@ -69,6 +70,7 @@ static ncclResult_t expectedProxyResponseStore(struct ncclProxyState* state, voi
       }
 
       if (elem->done) {
+    	  /*被禁记了done,但我们仍读到了，bug*/
         WARN("Storing response for already completed opId=%p", opId);
         return ncclInternalError;
       }
@@ -77,7 +79,7 @@ static ncclResult_t expectedProxyResponseStore(struct ncclProxyState* state, voi
         memcpy(elem->respBuff, respBuff, respSize);
         free(respBuff);
       }
-      elem->done = true;
+      elem->done = true;/*标记收到*/
       elem->res  = res;
       return ncclSuccess;
     }
@@ -88,6 +90,7 @@ static ncclResult_t expectedProxyResponseStore(struct ncclProxyState* state, voi
   return ncclInternalError;
 }
 
+/*构造ncclExpectedProxyResponse并入队*/
 static ncclResult_t expectedProxyResponseEnqueue(struct ncclProxyState* state, void* opId, int respSize) {
   struct ncclExpectedProxyResponse* ex;
   NCCLCHECK(ncclCalloc(&ex, 1));
@@ -96,20 +99,22 @@ static ncclResult_t expectedProxyResponseEnqueue(struct ncclProxyState* state, v
   // Pre-alloc response buffer
   ex->respBuff = malloc(respSize);
   ex->respSize = respSize;
-  ex->res      = ncclInternalError;
-  ex->done     = false;
+  ex->res      = ncclInternalError;/*结果初始为error*/
+  ex->done     = false;/*标记未完成*/
 
   // Enqueue
   struct ncclExpectedProxyResponse* list = state->expectedResponses;
   if (list == NULL) {
-    state->expectedResponses = ex;
+    state->expectedResponses = ex;/*队列为空，放在队头*/
     return ncclSuccess;
   }
+  /*队列不为空，放在队尾*/
   while (list->next) list = list->next;
   list->next = ex;
   return ncclSuccess;
 }
 
+/*在state中检查opid对应的响应，如果此响应已完成，则复制响应内容到respBuff,指明found为1，且返回elem->res*/
 static ncclResult_t expectedProxyResponseDequeue(struct ncclProxyState* state, void* opId, void* respBuff, int* found) {
   struct ncclExpectedProxyResponse* elem = state->expectedResponses;
   struct ncclExpectedProxyResponse* prev = NULL;
@@ -117,13 +122,13 @@ static ncclResult_t expectedProxyResponseDequeue(struct ncclProxyState* state, v
   while (elem) {
     if ((elem->opId == opId) && elem->done) {
       if (prev == NULL) {
-        state->expectedResponses = elem->next;
+        state->expectedResponses = elem->next;/*命中首个*/
       } else {
         prev->next = elem->next;
       }
-      memcpy(respBuff, elem->respBuff, elem->respSize);
+      memcpy(respBuff, elem->respBuff, elem->respSize);/*自期待的elem中直接复制response*/
       ncclResult_t res = elem->res;
-      free(elem->respBuff);
+      free(elem->respBuff);/*自身释放掉（何必复制后释放，直接返回elem不是更好？）*/
       free(elem);
       *found = 1;
       return res;
@@ -134,6 +139,7 @@ static ncclResult_t expectedProxyResponseDequeue(struct ncclProxyState* state, v
   return ncclSuccess;
 }
 
+/*移除掉expectedResponses*/
 static ncclResult_t expectedProxyResponseRemove(struct ncclProxyState* state, void* opId) {
   struct ncclExpectedProxyResponse* elem = state->expectedResponses;
   struct ncclExpectedProxyResponse* prev = NULL;
@@ -769,8 +775,8 @@ static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclPr
       NCCLCHECK(removeOp(state, &op, &prevOp));
       TIME_STOP(2);
     } else {
-      prevOp = op;
-      op = op->next;
+      prevOp = op;/*记录前一个*/
+      op = op->next;/*切到下一个*/
     }
   }
   return status;
@@ -1115,7 +1121,7 @@ struct ncclProxyInitResp {
   char devShmPath[6]; // "XXXXXX" - May or may not be set
 };
 
-ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, int proxyRank, struct ncclProxyConnector* proxyConn) {
+ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport/*哪种transport，比如net*/, int send/*是否发送*/, int proxyRank, struct ncclProxyConnector* proxyConn) {
   struct ncclSocket* sock;
   int ready;
   struct ncclProxyState* sharedProxyState = comm->proxyState;
@@ -1145,12 +1151,13 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   }
 
   struct ncclProxyInitReq req = {0};
-  req.transport = transport;
+  req.transport = transport;/*指明用哪个transport(例如：TRANSPORT_NET）*/
   req.send = send;
   req.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   req.tpRank = comm->topParentRanks[comm->rank];
   req.sameProcess = proxyConn->sameProcess;
 
+  /*请求执行ncclProxyMsgInit*/
   struct ncclProxyInitResp resp = {0};
   // This usually sends proxyConn->connection to identify which connection this is.
   // However, this is part of the response and therefore is ignored
@@ -1161,7 +1168,7 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   struct ncclTransportComm* tcomm = send ? &ncclTransports[transport]->send : &ncclTransports[transport]->recv;
   if (tcomm->proxyProgress) {
     char poolPath[] = "/dev/shm/nccl-XXXXXX";
-    strncpy(poolPath+sizeof("/dev/shm/nccl-")-1, resp.devShmPath, sizeof("XXXXXX")-1);
+    strncpy(poolPath+sizeof("/dev/shm/nccl-")-1, resp.devShmPath, sizeof("XXXXXX")-1);/*填响应的shmPath*/
     struct ncclProxyOps* proxyOps = sharedProxyState->proxyOps + proxyConn->tpLocalRank;
     if (proxyOps->pool == NULL) {
       NCCLCHECK(ncclShmOpen(poolPath, sizeof(poolPath), sizeof(struct ncclProxyOpsPool), (void**)(&proxyOps->pool), NULL, -1, &proxyOps->handle));
@@ -1257,7 +1264,7 @@ fail:
 }
 
 const char* ncclProxyMsgTypeStr[] = { "Unknown", "Init", "SharedInit", "Setup", "Connect", "Start", "Close", "Abort", "Stop", "GetFd", "QueryFd", "Register", "Deregister" };
-ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff, int reqSize, int respSize, void* opId) {
+ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff, int reqSize/*reqBuff大小*/, int respSize, void* opId) {
   struct ncclSocket* sock;
   ncclResult_t ret = ncclSuccess;
   struct ncclProxyState* sharedProxyState = comm->proxyState;
@@ -1266,6 +1273,7 @@ ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector
 
   sock = sharedProxyState->peerSocks + proxyConn->tpLocalRank;
 
+  /*向sock阻塞发送type,connection指针，reqsize,respsize，reqBuff，opId*/
   NCCLCHECKGOTO(ncclSocketSend(sock, &type, sizeof(int)), ret, error);
   NCCLCHECKGOTO(ncclSocketSend(sock, &proxyConn->connection, sizeof(void*)), ret, error);
   NCCLCHECKGOTO(ncclSocketSend(sock, &reqSize, sizeof(int)), ret, error);
@@ -1273,17 +1281,17 @@ ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector
   if (reqSize) NCCLCHECKGOTO(ncclSocketSend(sock, reqBuff, reqSize), ret, error);
 
   // Send opId to proxy
-  NCCLCHECKGOTO(ncclSocketSend(sock, &opId, sizeof(opId)), ret, error);
+  NCCLCHECKGOTO(ncclSocketSend(sock, &opId, sizeof(opId)), ret, error);/*指针标记（此请求对应的id)*/
 
   // Add proxyOp to expected response queue
-  NCCLCHECK(expectedProxyResponseEnqueue(sharedProxyState, opId, respSize));
+  NCCLCHECK(expectedProxyResponseEnqueue(sharedProxyState, opId, respSize));/*添加对opId的响应预期*/
 
   return ncclSuccess;
 error:
   return ret;
 }
 
-ncclResult_t ncclPollProxyResponse(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, void* respBuff, void* opId) {
+ncclResult_t ncclPollProxyResponse(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, void* respBuff/*出叁，响应内容*/, void* opId/*查找opId响应*/) {
   struct ncclProxyState* sharedProxyState = comm->proxyState;
   // Receive the connection pointer from the Proxy
   if (__atomic_load_n(comm->abortFlag, __ATOMIC_ACQUIRE)) {
@@ -1294,27 +1302,32 @@ ncclResult_t ncclPollProxyResponse(struct ncclComm* comm, struct ncclProxyConnec
 
   // Check response queue
   int found = 0;
+  /*在cache中查询opid是否已完成*/
   ncclResult_t res = expectedProxyResponseDequeue(sharedProxyState, opId, respBuff, &found);
-  if (found == 0) {
+  if (found == 0) {/*opId还未完成*/
     // Attempt to read in a new response header from the proxy thread
     struct ncclSocket* sock = sharedProxyState->peerSocks + proxyConn->tpLocalRank;
     ncclProxyRpcResponseHeader resp = {0};
     int offset = 0;
+    /*触发读取*/
     if (ncclSuccess != ncclSocketProgress(NCCL_SOCKET_RECV, sock, &resp, sizeof(resp), &offset)) {
       WARN("Socket recv failed while polling for opId=%p", opId);
       return ncclInternalError;
     }
 
     if (offset == 0) {
+    	/*没有读到*/
       return ncclInProgress;
     // If we've returned a partial response, block to receive the rest of it
     } else if (offset < sizeof(resp)) {
+    	/*读到了一部分，阻塞等待读取resp头部*/
       while (offset < sizeof(resp))
         NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, sock, &resp, sizeof(resp), &offset));
     }
 
     INFO(NCCL_PROXY, "ncclPollProxyResponse Received new opId=%p", resp.opId);
 
+    /*再读取resp响应内容*/
     // If there's a respSize to recv
     if (resp.respSize > 0) {
       if (resp.opId != opId) {
@@ -1326,30 +1339,36 @@ ncclResult_t ncclPollProxyResponse(struct ncclComm* comm, struct ncclProxyConnec
     }
 
     if (resp.opId == opId) {
+      /*读到了opId,期待的Response就移除掉*/
       INFO(NCCL_PROXY, "resp.opId=%p matches expected opId=%p", resp.opId, opId);
       NCCLCHECK(expectedProxyResponseRemove(sharedProxyState, resp.opId));
       return resp.res;
     } else {
+    	/*读到的不是opId,将读到的内容存放在其对应的opid expected列表中*/
       INFO(NCCL_PROXY, "Queuing opId=%p respBuff=%p respSize=%d", resp.opId, respBuff, resp.respSize);
       // Store the result and mark response as completed
       NCCLCHECK(expectedProxyResponseStore(sharedProxyState, resp.opId, respBuff, resp.respSize, resp.res));
       return ncclInProgress;
     }
   } else {
+	  /*从cache中找到了*/
     INFO(NCCL_PROXY, "ncclPollProxyResponse Dequeued cached opId=%p", opId);
   }
 
   return res;
 }
 
-ncclResult_t ncclProxyCallBlocking(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff, int reqSize, void* respBuff, int respSize) {
+/*阻塞发送请求并读取响应*/
+ncclResult_t ncclProxyCallBlocking(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type/*消息类型*/, void* reqBuff/*请求buffer*/, int reqSize, void* respBuff/*响应buffer*/, int respSize/*响应buffer大小*/) {
   // Alloc some memory to act as a handle
   ncclResult_t res = ncclSuccess;
   void* opId = malloc(1);
 
+  /*阻塞发送opId的请求*/
   NCCLCHECKGOTO(ncclProxyCallAsync(comm, proxyConn, type, reqBuff, reqSize, respSize, opId), res, fail);
 
   do {
+	  /*阻塞等opId的响应*/
     res = ncclPollProxyResponse(comm, proxyConn, respBuff, opId);
   } while (res == ncclInProgress);
 
@@ -1434,7 +1453,7 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
 
   resp->connection = *connection;
 
-  /**依据transport和是否为发送，获取对应的transport comm */
+  /**依据transport和send，获取对应的transport comm */
   (*connection)->tcomm = (*connection)->send ? &ncclTransports[(*connection)->transport]->send : &ncclTransports[(*connection)->transport]->recv;
   // If we need proxy progress, let's allocate ops and start the thread
   if ((*connection)->tcomm->proxyProgress) {
@@ -1490,6 +1509,7 @@ error:
 #endif
 }
 
+/*proxy处理（异步）*/
 static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclProxyState* proxyState, int* asyncOpCount, struct ncclProxyLocalPeer* peer, struct ncclProxyConnectionPool* connectionPool) {
   int done = 1;
   ncclResult_t res = ncclInternalError;
@@ -1530,7 +1550,7 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclP
      * to abort and close the connection, it can cause segfault if the requester is using
      * the respBuff. */
 
-    ncclProxyRpcResponseHeader resp = {op->opId, res, op->respSize};
+    ncclProxyRpcResponseHeader resp = {op->opId, res/*结果*/, op->respSize/*响应大小*/};/*准备响应头*/
 
     // Send the opId for referencing async operation
     NCCLCHECK(ncclSocketSend(op->connection->sock, &resp, sizeof(resp)));/**向连接对端发送响应头 */
@@ -1551,6 +1571,7 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclP
   return ncclInProgress;
 }
 
+/*ncclProxyCallAsync函数会发送请求，而本函数用于处理其发送过来的请求*/
 static ncclResult_t proxyServiceInitOp(int type, struct ncclProxyLocalPeer* peer, struct ncclProxyConnectionPool* connectionPool, struct ncclProxyState* proxyState, int* asyncOpCount/**出参，异步操作队列计数器 */) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket* sock = &peer->sock;
@@ -1558,7 +1579,7 @@ static ncclResult_t proxyServiceInitOp(int type, struct ncclProxyLocalPeer* peer
   NCCLCHECK(ncclCalloc(&asyncOp, 1));
 
   asyncOp->type = type;
-  /**接收连接指针 */
+  /**接收connection指针 */
   NCCLCHECKGOTO(ncclSocketRecv(sock, &asyncOp->connection, sizeof(void*)), ret, fail);
 
   /**接收请求数据大小 */
@@ -1581,7 +1602,7 @@ static ncclResult_t proxyServiceInitOp(int type, struct ncclProxyLocalPeer* peer
   /**将此asyncOp入队 */
   asyncProxyOpEnqueue(peer, asyncOp);
 
-  (*asyncOpCount)++;
+  (*asyncOpCount)++;/*异步操作数增大*/
   NCCLCHECK(proxyProgressAsync(asyncOp, proxyState, asyncOpCount, peer, connectionPool));
 exit:
   return ret;

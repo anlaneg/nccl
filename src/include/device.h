@@ -161,7 +161,7 @@ struct ncclConnector {
   int hasSeen;
   int p2pOnly;
   struct ncclProxyConnector proxyConn;
-  struct ncclTransportComm* transportComm;
+  struct ncclTransportComm* transportComm;/*对应的transport*/
   void* transportResources;
   struct ncclConnInfo conn;
 };

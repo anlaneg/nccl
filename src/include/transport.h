@@ -103,8 +103,8 @@ struct ncclCollNetSharedRes {
 };
 
 struct ncclTransportComm {
-  /*本地资源分配 + 生成 handshake 材料*/
-  ncclResult_t (*setup)(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int channelId, int connIndex);
+  /*当transport可用于通信时，此函数将首先被调用，用于初始化。比如:本地资源分配 + 生成 handshake 材料*/
+  ncclResult_t (*setup)(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo*/*本端信息*/, struct ncclPeerInfo*/*对端信息*/, struct ncclConnect*, struct ncclConnector*, int channelId, int connIndex);
   /**连接到远程peer */
   ncclResult_t (*connect)(struct ncclComm* comm, struct ncclConnect*, int nranks, int rank, struct ncclConnector*);
   /**拆连接,释放 connector 资源 */

@@ -1273,7 +1273,7 @@ fail:
 // 0: don't use PXN for P2P, 1: use PXN if needed, 2: use PXN as much as possible to maximize aggregation
 NCCL_PARAM(P2pPxnLevel, "P2P_PXN_LEVEL", 2);
 
-ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoGraph* graph, int channelId, int peerRank, int64_t* id, int* dev, int* proxyRank) {
+ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank/*自身rank*/, struct ncclTopoGraph* graph, int channelId, int peerRank/*对端rank*/, int64_t* id, int* dev, int* proxyRank) {
   int64_t netId = -1;
   int netDev = -1;
   if (graph) {
@@ -1291,6 +1291,7 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
     if (id) *id = netId;
     NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, netId, proxyRank));
   } else if (peerRank == -1) {
+	  /*peerRank必须指出*/
     return ncclInternalError;
   } else {
     // Start with our local NIC and local Rank

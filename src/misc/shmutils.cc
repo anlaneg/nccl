@@ -27,7 +27,7 @@ struct shmHandleInternal {
   int* refcount;
 };
 
-static void shmHandleInit(int fd, char* shmPath, size_t shmSize, size_t realShmSize, char* hptr, void* dptr, bool create, struct shmHandleInternal* handle) {
+static void shmHandleInit(int fd, char* shmPath, size_t shmSize, size_t realShmSize, char* hptr, void* dptr, bool create, struct shmHandleInternal* handle/*出参，初始化此结构*/) {
   handle->fd = fd;
   handle->shmPtr = hptr;
   handle->devShmPtr = dptr;
@@ -45,7 +45,7 @@ static void shmHandleInit(int fd, char* shmPath, size_t shmSize, size_t realShmS
   return;
 }
 
-ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr, int refcount, ncclShmHandle_t* handle) {
+ncclResult_t ncclShmOpen(char* shmPath/*共享内存文件路径*/, size_t shmPathSize/*路径长度*/, size_t shmSize/*占用大小*/, void** shmPtr/*出参，共享内存起始位置*/, void** devShmPtr, int refcount, ncclShmHandle_t* handle) {
   int fd = -1;
   char* hptr = NULL;
   void* dptr = NULL;
@@ -53,19 +53,20 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
   struct shmHandleInternal* tmphandle;
   bool create = refcount > 0 ? true : false;
   const size_t refSize = sizeof(int); /* extra sizeof(int) bytes for reference count */
-  const size_t realShmSize = shmSize + refSize;
+  const size_t realShmSize = shmSize + refSize;/*增加引用计数大小*/
 
   *handle = *shmPtr = NULL; /* assume shmPtr and handle always set correctly by users. */
   EQCHECKGOTO(tmphandle = (struct shmHandleInternal*)calloc(1, sizeof(struct shmHandleInternal)), NULL, ret, fail);
-  if (create) {
+  if (create/*创建*/) {
     /* refcount > 0 means the caller tries to allocate a shared memory. This shared memory segment will have
      * refcount references; when the peer attaches, it should pass -1 to reduce one reference count. When it
      * goes down to 0, unlink should be called in order to delete shared memory file. */
     if (shmPath[0] == '\0') {
       snprintf(shmPath, shmPathSize, "/dev/shm/nccl-XXXXXX");
     retry_mkstemp:
-      fd = mkstemp(shmPath);
+      fd = mkstemp(shmPath);/*创建临时文件*/
       if (fd < 0) {
+    	  /*重新尝试或者报错*/
         if (errno == EINTR) {
           INFO(NCCL_ALL, "mkstemp: Failed to create %s, error: %s (%d) - retrying", shmPath, strerror(errno), errno);
           goto retry_mkstemp;
@@ -75,10 +76,12 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
         goto fail;
       }
     } else {
+    	/*创建共享内存*/
       SYSCHECKGOTO(fd = open(shmPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
     }
 
   retry_fallocate:
+    /*设置占用大小*/
     if (fallocate(fd, 0, 0, realShmSize) != 0) {
       if (errno == EINTR) {
         INFO(NCCL_ALL, "fallocate: Failed to extend %s to %ld bytes, error: %s (%d) - retrying", shmPath, realShmSize, strerror(errno), errno);
@@ -90,9 +93,11 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
     }
     INFO(NCCL_ALLOC, "Allocated %ld bytes of shared memory in %s", realShmSize, shmPath);
   } else {
+	  /*仅打开*/
     SYSCHECKGOTO(fd = open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
   }
 
+  /*映射此文件*/
   hptr = (char*)mmap(NULL, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (hptr == MAP_FAILED) {
     WARN("Error: Could not map %s size %zu, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
@@ -102,10 +107,13 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
   }
 
   if (create) {
+	  /*初始化引用计数*/
     *(int*)(hptr + shmSize) = refcount;
   } else {
+	  /*增加引用计数*/
     int remref = ncclAtomicRefCountDecrement((int*)(hptr + shmSize));
     if (remref == 0) {
+    	/*移除此文件*/
       /* the last peer has completed attachment, it should unlink the shm mem file. */
       if (unlink(shmPath) != 0) {
         INFO(NCCL_ALLOC, "unlink shared memory %s failed, error: %s (%d)", shmPath, strerror(errno), errno);
@@ -121,6 +129,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
     CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
   }
 
+  /*初始化tmphandle*/
   shmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
 exit:
   *shmPtr = hptr;
@@ -128,6 +137,7 @@ exit:
   *handle = (ncclShmHandle_t)tmphandle;
   return ret;
 fail:
+	/*创建share memory失败*/
   WARN("Error while %s shared memory segment %s (size %ld), error: %s (%d)", create ? "creating" : "attaching to",
        shmPath, shmSize, strerror(errno), errno);
   if (tmphandle) {

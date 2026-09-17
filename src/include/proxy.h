@@ -369,7 +369,7 @@ enum proxyConnectState {
 };
 
 struct ncclProxyConnection {
-  int send, transport, shared;
+  int send/*是否为发送*/, transport/*连接对应的transport,比如TRANSPORT_NET*/, shared;
   int tpLocalRank, sameProcess;
   struct ncclSocket* sock;
   struct ncclTransportComm* tcomm;

@@ -175,6 +175,7 @@ struct ncclTopoSystem {
   int systemId;
   uint64_t hostHashes[NCCL_TOPO_MAX_NODES];
   int nHosts;
+  /*不同类型的节点*/
   struct ncclTopoNodeSet nodes[NCCL_TOPO_NODE_TYPES];
   float maxBw;
   float totalBw;

@@ -23,8 +23,9 @@ struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
   &profilerTransport // Not really used for transport, only to create proxy ops polling on profiler counters.
 };
 
+/*遍历transport,选择首个可连接的transport，并执行setup回调*/
 template <int type/*type为1时为发送*/>
-static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclConnect* connect, int channelId, int peer, int connIndex, int* transportType) {
+static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclConnect* connect/*待初始化的connect*/, int channelId/*此connect对应的channel编号*/, int peer/*收取目标*/, int connIndex, int* transportType/*出参，使用哪种transport*/) {
   struct ncclPeerInfo* myInfo = comm->peerInfo+comm->rank;/*自身信息*/
   struct ncclPeerInfo* peerInfo = comm->peerInfo+peer;/*对端信息*/
   struct ncclConnector* connector = (type == 1) ? comm->channels[channelId].peers[peer]->send + connIndex :
@@ -37,8 +38,9 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
     /**检查此transport是否可以连接 */
     NCCLCHECK(transport->canConnect(&ret/*出参，可连接时为真*/, comm, graph, myInfo, peerInfo));
     if (ret) {
-      /*可连接*/
+      /*t号transport可连接*/
       connector->transportComm = transportComm;
+      /*初始化*/
       NCCLCHECK(transportComm->setup(comm, graph, myInfo, peerInfo, connect, connector, channelId, connIndex));
       if (transportType) *transportType = t;
       return ncclSuccess;
@@ -136,7 +138,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   bool timeReported = false;
   cudaStream_t hostStream, deviceStream;
 
-  NCCLCHECK(ncclCalloc(&data, maxPeers));/*申请maxPeers个ncclConnect*/
+  NCCLCHECK(ncclCalloc(&data, maxPeers));/*申请maxPeers个ncclConnect指针*/
   NCCLCHECKGOTO(ncclCalloc(&recvData, maxPeers), ret, fail);/*申请maxPeers个ncclConnect*/
   NCCLCHECKGOTO(ncclCalloc(&sendData, maxPeers), ret, fail);/*申请maxPeers个ncclConnect*/
 
@@ -147,7 +149,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     int bootstrapTag = (i<<8) + (graph ? graph->id+1 : 0);/**生成tag,这个tag可用于控制同步 */
     int recvPeer = (comm->rank - i + comm->nRanks) % comm->nRanks;/*从前一个收取*/
     int sendPeer = (comm->rank + i) % comm->nRanks;/*向后一个发送（这样就构成了一个ring)*/
-    uint64_t recvMask = comm->connectRecv[recvPeer];
+    uint64_t recvMask = comm->connectRecv[recvPeer];/*接收可使用的channel id*/
     uint64_t sendMask = comm->connectSend[sendPeer];
 
     // Data[i] contains all ncclConnect information for all send and receive connections with a given send and recv peer
@@ -157,16 +159,17 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     // It's not guaranteed that each entry of data has the same number of total or send/recv specific connections
     int p = i-(done+1);
     if (recvMask || sendMask) {
+    	/*为每个ncclConnect指针申请2*MAXCHANNELS个channel(recv channel+ send channel)*/
       if (data[p] == NULL) NCCLCHECKGOTO(ncclCalloc(data + p, 2 * MAXCHANNELS), ret, fail);
       else memset(data[p], 0, 2 * MAXCHANNELS * sizeof(struct ncclConnect));
     }
     recvData[p] = data[p];
-    int sendChannels = 0, recvChannels = 0;
+    int sendChannels = 0, recvChannels = 0/*记录recvChannel总数*/;
     int type;
     TIME_START(0);
     for (int c=0; c<MAXCHANNELS; c++) {
       if (recvMask & (1UL<<c)) {
-        NCCLCHECKGOTO(selectTransport<0/*接收*/>(comm, graph, recvData[p]+recvChannels++, c, recvPeer, connIndex, &type), ret, fail);
+        NCCLCHECKGOTO(selectTransport<0/*接收*/>(comm, graph, recvData[p]+recvChannels++/*待初始化的recvChannel*/, c/*channel编号*/, recvPeer/*收取目标*/, connIndex, &type), ret, fail);
       }
     }
     TIME_STOP(0);
@@ -174,7 +177,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     sendData[p] = recvData[p]+recvChannels;
     for (int c=0; c<MAXCHANNELS; c++) {
       if (sendMask & (1UL<<c)) {
-        NCCLCHECKGOTO(selectTransport<1/*发送*/>(comm, graph, sendData[p]+sendChannels++, c, sendPeer, connIndex, &type), ret, fail);
+        NCCLCHECKGOTO(selectTransport<1/*发送*/>(comm, graph, sendData[p]+sendChannels++/*待初始化的SendChannel*/, c, sendPeer/*发送目标*/, connIndex, &type), ret, fail);
       }
     }
     TIME_STOP(1);

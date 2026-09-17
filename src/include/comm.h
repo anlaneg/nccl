@@ -454,7 +454,7 @@ struct ncclComm {
   int* topParentRanks;
   int* topParentLocalRanks;
   struct ncclChannel channels[MAXCHANNELS];
-  struct ncclPeerInfo* peerInfo;/*nRanks+1个peerInfo结构*/
+  struct ncclPeerInfo* peerInfo;/*nRanks+1个peerInfo结构（记录自身及peer信息）*/
   struct ncclTopoSystem* topo;/*拓扑*/
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
@@ -470,8 +470,8 @@ struct ncclComm {
   void* collNetContext;
   void* bootstrap;
   // Bitmasks for ncclTransportP2pSetup
-  uint64_t* connectSend;
-  uint64_t* connectRecv;
+  uint64_t* connectSend;/*数组，每个元素指出发送可使用的channel id*/
+  uint64_t* connectRecv;/*数组，每个元素指出接收可使用的channel id*/
   struct ncclTopoGraph graphs[NCCL_NUM_ALGORITHMS];
   int maxTreePattern;
   bool initAlgoChannels[NCCL_NUM_ALGORITHMS];

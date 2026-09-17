@@ -289,7 +289,7 @@ static inline int getHandleForAddressRangeFlags(ncclTopoGdrMode useGdr) {
 
 /* Determine if we will use this transport for this peer and return connect
  * information for this peer */
-static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId, int connIndex) {
+static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo/*本端信息*/, struct ncclPeerInfo* peerInfo/*对端信息*/, struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId, int connIndex) {
   struct setupReq req = { 0 };
 
   send->conn.shared = req.shared = graph || connIndex == 0 ? 0 : ncclParamNetSharedBuffers() != -2 ? ncclParamNetSharedBuffers() : 1;
@@ -431,16 +431,18 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
 
     populateCommNetAttrs(comm, send, &args.netAttr);
 
+    /*发送opId对应的请求*/
     NCCLCHECK(ncclProxyCallAsync(comm, &send->proxyConn, ncclProxyMsgConnect, &args, sizeof(netSendConnectArgs), sizeof(struct connectMap), opId));
   } else {
     opId =  send;
   }
 
+  /*尝试读取opId对应的响应*/
   ncclResult_t ret;
-  ret = ncclPollProxyResponse(comm, &send->proxyConn, map, opId);
+  ret = ncclPollProxyResponse(comm, &send->proxyConn, map/*出参，填充响应内容*/, opId);
   if (ret != ncclSuccess) {
     if (ret != ncclInProgress) {
-      free(map);
+      free(map);/*读取失败，释放*/
       send->transportResources = NULL;
     }
     return ret;
@@ -544,11 +546,13 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
 
     populateCommNetAttrs(comm, recv, &args.netAttr);
 
+    /*发送opId对应的请求*/
     NCCLCHECK(ncclProxyCallAsync(comm, &recv->proxyConn, ncclProxyMsgConnect, &args, sizeof(netRecvConnectArgs), sizeof(struct connectMap), opId));
   } else {
     opId = recv;
   }
 
+  /*尝试读取opId对应的响应*/
   ncclResult_t ret;
   NCCLCHECK(ret = ncclPollProxyResponse(comm, &recv->proxyConn, map, opId));
   if (ret != ncclSuccess) {

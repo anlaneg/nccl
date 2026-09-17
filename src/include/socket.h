@@ -57,7 +57,7 @@ struct ncclSocket {
   int errorRetries;
   union ncclSocketAddress addr;
   volatile uint32_t* abortFlag;
-  int asyncFlag;
+  int asyncFlag;/*指明是否异步操作*/
   enum ncclSocketState state;
   int salen;
   uint64_t magic;

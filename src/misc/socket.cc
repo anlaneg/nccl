@@ -25,16 +25,17 @@ static void msleep(unsigned int time_msec) {
   nanosleep(&tv, NULL);
 }
 
-static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr/*buffer*/, int size/*buffer大小*/, int* offset/*偏移量*/, int block, int* closed/*出参，是否关闭*/) {
+/*socket收发处理*/
+static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr/*buffer*/, int size/*buffer大小*/, int* offset/*入出参，偏移量*/, int block/*是否阻塞socket*/, int* closed/*出参，是否关闭*/) {
   int bytes = 0;
   *closed = 0;
   char* data = (char*)ptr;
   char line[SOCKET_NAME_MAXLEN+1];
   do {
 	  /*检查是否recv,则接收buffer*/
-    if (op == NCCL_SOCKET_RECV) bytes = recv(sock->fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
+    if (op == NCCL_SOCKET_RECV) bytes = recv(sock->fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT/*本次调用指明非阻塞*/);
     /*检查是否send,则发送buffer*/
-    if (op == NCCL_SOCKET_SEND) bytes = send(sock->fd, data+(*offset), size-(*offset), block ? MSG_NOSIGNAL : MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (op == NCCL_SOCKET_SEND) bytes = send(sock->fd, data+(*offset), size-(*offset), block ? MSG_NOSIGNAL : MSG_DONTWAIT | MSG_NOSIGNAL/*禁止断开的时候向进程发 SIGPIPE 信号*/);
     if (op == NCCL_SOCKET_RECV && bytes == 0) {
     	/*收到的长度为0，连接关闭*/
       *closed = 1;
@@ -59,15 +60,15 @@ static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr
       INFO(NCCL_NET, "socketProgressOpt: abort called");
       return ncclInternalError;
     }
-  } while (sock->asyncFlag == 0 && bytes > 0 && (*offset) < size);
+  } while (sock->asyncFlag == 0/*无异步标记*/ && bytes > 0 && (*offset) < size);
   return ncclSuccess;
 }
 
 /*按op操作socket,执行收/发*/
-static ncclResult_t socketProgress(int op/*收或者发*/, struct ncclSocket* sock, void* ptr, int size/*内容长度*/, int* offset/*出参，偏移量*/, int* pclosed = NULL) {
+static ncclResult_t socketProgress(int op/*收或者发*/, struct ncclSocket* sock, void* ptr, int size/*内容长度*/, int* offset/*出参，偏移量*/, int* pclosed = NULL/*出参，连接是否关闭*/) {
   int closed;
   /*按op操作*/
-  NCCLCHECK(socketProgressOpt(op, sock, ptr, size, offset, 0 /*block*/, &closed));
+  NCCLCHECK(socketProgressOpt(op, sock, ptr, size, offset, 0 /*block*/, &closed/*出参，连接是否关闭*/));
   if (closed) {
 	  /*需要关闭socket*/
     if (pclosed) {
@@ -84,6 +85,7 @@ static ncclResult_t socketProgress(int op/*收或者发*/, struct ncclSocket* so
 }
 
 static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset) {
+  /*循环直到op操作处理完成*/
   while (*offset < size)
     NCCLCHECK(socketProgress(op, sock, ptr, size, offset));
   return ncclSuccess;
@@ -916,6 +918,7 @@ ncclResult_t ncclSocketSend(struct ncclSocket* sock, void* ptr, int size) {
     WARN("ncclSocketSend: socket state (%d) is not ready", sock->state);
     return ncclInternalError;
   }
+  /*发送并等待,直到ptr指向的size字节发送完成*/
   NCCLCHECK(socketWait(NCCL_SOCKET_SEND, sock, ptr, size, &offset));
   return ncclSuccess;
 }
