@@ -199,7 +199,7 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
   NVTX3_FUNC_WITH_PARAMS(Send, NcclNvtxParamsSendRecv,
     NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), peer));
 
-  struct ncclInfo info = { ncclFuncSend, "Send"/**指明发送操作 */,
+  struct ncclInfo info = { ncclFuncSend/*指明操作类型*/, "Send"/**指明操作名称 */,
     NULL/**无接收指针 */, (void*)sendbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
   return ncclEnqueueCheck(&info);/**send操作入队处理 */

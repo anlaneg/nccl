@@ -25,7 +25,7 @@ ncclResult_t CudaPtrCheck(const void* pointer, struct ncclComm* comm, const char
   return ncclSuccess;
 }
 
-ncclResult_t PtrCheck(void* ptr, const char* opname, const char* ptrname) {
+ncclResult_t PtrCheck(void* ptr, const char* opname/*操作名*/, const char* ptrname/*指针名称*/) {
   if (ptr == NULL) {
     /**检查指针是否为空，若为空则报错 */
     WARN("%s : %s argument is NULL", opname, ptrname);
@@ -61,7 +61,8 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
   // just as a reminder.
   // coverity[result_independent_of_operands]
   if (info->op < 0 || ncclMaxRedOp < info->op) {
-    WARN("%s : invalid reduction operation %d", info->opName, info->op);
+    /*操作必须有效*/
+	  WARN("%s : invalid reduction operation %d", info->opName, info->op);
     return ncclInvalidArgument;
   }
   int opIx = int(ncclUserRedOpMangle(info->comm, info->op)) - int(ncclNumOps);

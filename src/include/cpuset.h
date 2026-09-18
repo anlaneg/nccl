@@ -67,6 +67,7 @@ static char* ncclCpusetToRangeStr(cpu_set_t* mask, char* str, size_t len) {
   return str;
 }
 
+/*userStr是一串以','分隔的cpu串，按序转换并填充进cpu set*/
 static ncclResult_t ncclStrListToCpuset(const char* userStr, cpu_set_t* mask) {
   // reset the CPU set
   CPU_ZERO(mask);
@@ -82,6 +83,7 @@ static ncclResult_t ncclStrListToCpuset(const char* userStr, cpu_set_t* mask) {
   return ncclSuccess;
 }
 
+/*按cpuset中指出的内容格式化并输出到str中*/
 static ncclResult_t ncclCpusetToStrList(cpu_set_t* mask, char* str, size_t len) {
   if (len == 0) return ncclSuccess;
   str[0] = '\0';

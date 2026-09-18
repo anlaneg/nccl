@@ -164,7 +164,7 @@ struct ncclProxySubArgs {
 struct ncclProxyArgs {
   struct ncclProxySubArgs subs[NCCL_PROXY_MAX_SUBS];
   proxyProgressFunc_t progress;
-  int nsubs;
+  int nsubs;/*有效的subs数目*/
   int done;
   int onePPN;
   uint64_t opCount;

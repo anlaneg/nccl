@@ -459,12 +459,12 @@ static ncclResult_t ProxyAppend(struct ncclProxyProgressState* state, struct ncc
     if (state->active == NULL) {
       // Create the list
       DEBUG_PROXY_PRINT("Insert  %5ld (%d/%5ld) as first element\n", OP_INDEX(args), shared, args->opCount);
-      state->active = args;
+      state->active = args;/*添加到队头*/
     } else {
       // Append element at the end of the list
       struct ncclProxyArgs* last = state->active;
-      while (last->next) last = last->next;
-      last->next = args;
+      while (last->next) last = last->next;/*定位到结尾*/
+      last->next = args;/*添加到结尾*/
       DEBUG_PROXY_PRINT("Insert  %5ld (%d/%5ld) as last element\n", OP_INDEX(args), shared, args->opCount);
     }
     *(args->proxyAppendPtr) = args;
@@ -758,10 +758,12 @@ static ncclResult_t removeOp(struct ncclProxyProgressState* state, struct ncclPr
   return ncclSuccess;
 }
 
+/*遍历执行opStart链表上所有op*/
 static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclProxyProgressState* state, struct ncclProxyArgs* opStart, int* idle) {
   struct ncclProxyArgs* prevOp = NULL;
   struct ncclProxyArgs* op = opStart;
   ncclResult_t status = ncclSuccess;
+  /*处理opStart链表上所有的*/
   while (op) {
     if (op->state == ncclProxyOpNone) return ncclInternalError;
     TIME_START(0); TIME_START(1);
@@ -913,7 +915,8 @@ NCCL_PARAM(ProgressAppendOpFreq, "PROGRESS_APPENDOP_FREQ", 8);
 static cpu_set_t proxyCpuset;
 static pthread_once_t proxyCpusetOnce = PTHREAD_ONCE_INIT;
 void proxyCpusetOnceFunc() {
-  const char* setEnv = ncclGetEnv("NCCL_PROXY_CPUSET");/**指明proxy线程的CPU set */
+  /**指明proxy线程的CPU set */
+  const char* setEnv = ncclGetEnv("NCCL_PROXY_CPUSET");
   if (setEnv) {
     ncclResult_t res = ncclStrListToCpuset(setEnv, &proxyCpuset);
     if (res != ncclSuccess) {
@@ -923,8 +926,10 @@ void proxyCpusetOnceFunc() {
     // debug info
     char msg[1024] = {0};
     cpu_set_t currSet;
-    sched_getaffinity(0, sizeof(cpu_set_t), &currSet);/**获取当前线程亲和 */
+    /**获取当前线程亲和并输出*/
+    sched_getaffinity(0, sizeof(cpu_set_t), &currSet);
     (void)ncclCpusetToStrList(&currSet, msg, sizeof(msg));
+    /*输出env计划设置的cpu亲和*/
     snprintf(msg + strlen(msg), sizeof(msg) - strlen(msg), " changed to ");
     (void)ncclCpusetToStrList(&proxyCpuset, msg + strlen(msg), sizeof(msg) - strlen(msg));
     INFO(NCCL_ENV, "NCCL_PROXY_CPUSET = %s: %s", setEnv, msg);
@@ -944,7 +949,8 @@ void* ncclProxyProgress(void *proxyState_) {
 
   if (setProxyThreadContext(proxyState)) {
     INFO(NCCL_INIT, "[Proxy Progress] Set CUDA context on device %d", proxyState->cudaDev);
-  } else if (cudaSetDevice(proxyState->cudaDev) != cudaSuccess) {/**为此线程绑定cuda设备 */
+  } else if (cudaSetDevice(proxyState->cudaDev) != cudaSuccess) {
+	  /**为此线程绑定cuda设备失败 */
     WARN("[Proxy Progress] Failed to set CUDA device %d", proxyState->cudaDev);
   }
 
@@ -1415,7 +1421,8 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
     memcpy(state->opsPoolShmSuffix, shmPath+sizeof("/dev/shm/nccl-")-1, sizeof("XXXXXX")-1);
 
     // All ops structures are created, we can start the progress thread
-    NCCLCHECK(ncclProxyProgressCreate(proxyState));/**创建proxy progress线程 */
+    /**创建proxy progress线程 */
+    NCCLCHECK(ncclProxyProgressCreate(proxyState));
   }
   return ncclSuccess;
 }
@@ -1457,7 +1464,10 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
   (*connection)->tcomm = (*connection)->send ? &ncclTransports[(*connection)->transport]->send : &ncclTransports[(*connection)->transport]->recv;
   // If we need proxy progress, let's allocate ops and start the thread
   if ((*connection)->tcomm->proxyProgress) {
-    /**如果此transport有proxy progress功能，初始化proxy progress线程状态并创建proxy progress线程 */
+    /**
+     * 如果此transport有proxy progress功能，
+     * 初始化proxy progress线程状态并创建proxy progress线程
+     * */
     NCCLCHECK(proxyProgressInit(proxyState));
     struct ncclProxyProgressState* state = &proxyState->progressState;
     strncpy(resp->devShmPath, state->opsPoolShmSuffix, sizeof(resp->devShmPath));/**指出dev shm path */
@@ -1527,6 +1537,7 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclP
     __atomic_store_n(&op->connection->state, connSharedInitialized, __ATOMIC_RELEASE);
   }
   else if (op->type == ncclProxyMsgInit) {
+	  /*msg Init消息处理*/
     TRACE(NCCL_PROXY, "proxyProgressAsync::ncclProxyMsgInit opId=%p op.reqBuff=%p", op->opId, op->reqBuff);
     res = proxyConnInit(peer, connectionPool, proxyState, (ncclProxyInitReq*) op->reqBuff/**请求buffer */, (ncclProxyInitResp*) op->respBuff, &op->connection);
   } else if (op->type == ncclProxyMsgRegister) {

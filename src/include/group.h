@@ -93,7 +93,7 @@ inline bool ncclGroupEnabled() {
 
 inline ncclResult_t ncclGroupErrCheck(ncclResult_t ret) {
   if (ncclGroupDepth > 0) {
-	  /*depth大于0，则在一个group内,如有错误，则置error*/
+	  /*depth大于0，则在当前在某一个group内,如有错误，则置error*/
     if (ret != ncclSuccess && ret != ncclInProgress) ncclGroupError = ret;
   }
   return ret;

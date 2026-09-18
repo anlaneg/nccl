@@ -92,12 +92,15 @@ int main(int argc, char *argv[]) {
   // Create device list (use all available devices)
   int *devices = (int *)malloc(num_gpus * sizeof(int));
   for (int i = 0; i < num_gpus; i++) {
-    devices[i] = i;/**创建gpu设备编号列表（0到num_gpus-1） */
+	  /**创建gpu设备编号列表（0到num_gpus-1） */
+    devices[i] = i;
   }
 
   // Allocate communicators, streams, and buffer pointers
-  comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));/*每个gpu对应一个ncclComm_t结构*/
-  streams = (cudaStream_t *)malloc(num_gpus * sizeof(cudaStream_t));/*每个gpu对应一个cudaStream_t结构*/
+  /*每个gpu对应一个ncclComm_t结构*/
+  comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));
+  /*每个gpu对应一个cudaStream_t结构*/
+  streams = (cudaStream_t *)malloc(num_gpus * sizeof(cudaStream_t));
   /**一组指针数据，每个指针指向一个gpu的发送缓冲区（主机端） */
   h_sendbuff = (float **)malloc(num_gpus * sizeof(float *));/*主机侧发送buffer*/
   h_recvbuff = (float **)malloc(num_gpus * sizeof(float *));/*主机侧接收buffer*/

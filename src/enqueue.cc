@@ -2639,14 +2639,14 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   if (ncclProfilerApiState.profilerGroupDepth > 0) {
     ncclProfilerApiState.profilerGroupDepth++;
   }
-  NCCLCHECK(ncclGroupStartInternal());/**仅增加层数 */
+  NCCLCHECK(ncclGroupStartInternal());/**仅增加group层数 */
   ret = ncclSuccess;
   int devOld = -1;
   // Check whether communicator is ready to communicate
   NCCLCHECKGOTO(ncclCommEnsureReady(info->comm), ret, fail);
 
   if (info->comm->checkPointers) {
-    CUDACHECKGOTO(cudaGetDevice(&devOld), ret, fail);/**获取当前gpu编号 */
+    CUDACHECKGOTO(cudaGetDevice(&devOld), ret, fail);/**获取并保存当前gpu编号 */
     CUDACHECKGOTO(cudaSetDevice(info->comm->cudaDev), ret, fail);/**设置comm的gpu编号 */
   }
   NCCLCHECKGOTO(ArgsCheck(info), ret, fail);
@@ -2659,8 +2659,9 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   NCCLCHECKGOTO(taskAppend(info->comm, info), ret, fail);/**具体完成入队 */
 
 exit:
-  if (devOld != -1) CUDACHECK(cudaSetDevice(devOld));
+  if (devOld != -1) CUDACHECK(cudaSetDevice(devOld));/*还原原来的gpu编号*/
   ncclGroupErrCheck(ret);
+  /*标记group结束，只有group=0，才会真正的执行*/
   NCCLCHECK(ncclGroupEndInternal());
   /* if depth is 1, ncclGroupEndInternal() will trigger group ops. The state can change
    * so we have to check state here. */
