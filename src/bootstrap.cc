@@ -227,29 +227,36 @@ static ncclResult_t socketRecv(struct ncclSocket* sock, void* data/*出参，收
     NCCLCHECK(ncclSocketRecv(sock, data, actualSize));/*再收取实际的内容*/
   return ncclSuccess;
 }
-static ncclResult_t socketSendRecv(struct ncclSocket* sendSock, void* sendData, int sendSize, struct ncclSocket* recvSock,
-                                   void* recvData, int recvSize) {
+/**按要求发送和接收指定数据片 */
+static ncclResult_t socketSendRecv(struct ncclSocket* sendSock/**发送socket */, void* sendData/**发送数据片指针 */, int sendSize/**发送数据片大小 */, struct ncclSocket* recvSock/**接收socket */,
+                                   void* recvData/**接收数据片指针 */, int recvSize/**接收数据片大小 */) {
+  /**先交换两边size */                                  
   int senderRecvSize;
-  NCCLCHECK(ncclSocketSendRecv(sendSock, &sendSize, sizeof(int), recvSock, &senderRecvSize, sizeof(int)));
+  NCCLCHECK(ncclSocketSendRecv(sendSock, &sendSize/**发送数据 */, sizeof(int)/**数据大小 */, recvSock, &senderRecvSize, sizeof(int)));
   if (senderRecvSize > recvSize) {
     WARN("Message truncated : received %d bytes instead of %d", senderRecvSize, recvSize);
     return ncclInternalError;
   }
+  /**再交换两边数据 */
   NCCLCHECK(ncclSocketSendRecv(sendSock, sendData, sendSize, recvSock, recvData, std::min(recvSize, senderRecvSize)));
   return ncclSuccess;
 }
 
+/**按要求执行双向收发操作 */
 static ncclResult_t socketDoubleSendRecv(struct ncclSocketOp ops[4]) {
   // ops synchronously exchange size then asynchronously exchange data in send->recv->send->recv order
   int senderRecvSize1, senderRecvSize2;
+  /**先交换两边size */
   NCCLCHECK(ncclSocketSendRecv(ops[0].sock, &ops[0].size, sizeof(int), ops[1].sock, &senderRecvSize1, sizeof(int)));
   NCCLCHECK(ncclSocketSendRecv(ops[2].sock, &ops[2].size, sizeof(int), ops[3].sock, &senderRecvSize2, sizeof(int)));
   if (senderRecvSize1 > ops[1].size || senderRecvSize2 > ops[3].size) {
     WARN("Message truncated : received %d,%d bytes instead of %d,%d", senderRecvSize1, senderRecvSize2, ops[1].size, ops[3].size);
     return ncclInternalError;
   }
+  /**更新接收数据片大小 */
   ops[1].size = std::min(ops[1].size, senderRecvSize1);
   ops[3].size = std::min(ops[3].size, senderRecvSize2);
+  /**再利用multiop交换数据 */
   NCCLCHECK(ncclSocketMultiOp(ops, 4));
   return ncclSuccess;
 }
@@ -468,11 +475,11 @@ struct bootstrapRing_t {
     struct {
       void *sendComm/*发送对应的comm*/, *recvComm/*接收对应的comm*/;
       ncclNetDeviceHandle_t *sendDevHandle, *recvDevHandle;
-    } net;
+    } net;/**ncclNet环 */
     struct {
-      struct ncclSocket recv;
-      struct ncclSocket send;
-    } socket;
+      struct ncclSocket recv;/**接收socket，用于接收client的连接 */
+      struct ncclSocket send;/**发送socket，用于与client通信 */
+    } socket;/**socket环 */
   };
 };
 struct bootstrapListen_t {
@@ -482,14 +489,14 @@ struct bootstrapListen_t {
       int dev;
       void* comm;
       char handle[NCCL_NET_HANDLE_MAXSIZE];
-    } net;
+    } net;/**ncclNet插件时使用*/
     struct ncclSocket socket; // socket to be used for the ring
   };
 };
 
 struct bootstrapState {
-  struct bootstrapRing_t ring;
-  struct bootstrapListen_t listen;
+  struct bootstrapRing_t ring;/**ring型环收发信息 */
+  struct bootstrapListen_t listen;/**监听socket，用于接收client的连接 */
   ncclNet_t* net;
   uint64_t* peerProxyAddressesUDS;
   union ncclSocketAddress* peerProxyAddresses;
@@ -591,11 +598,11 @@ static ncclResult_t netRingConnect(void* ctx, ncclNet_t* net, struct bootstrapLi
   } while (!*sendComm || !*recvComm);
   return ncclSuccess;
 }
-static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket* sendSocket, struct ncclSocket* listenSock, struct ncclSocket* recvSocket, uint64_t magic, volatile uint32_t* abortFlag) {
-  NCCLCHECK(ncclSocketInit(sendSocket, addr, magic, ncclSocketTypeBootstrap, abortFlag));
-  NCCLCHECK(ncclSocketConnect(sendSocket));
-  NCCLCHECK(ncclSocketInit(recvSocket));
-  NCCLCHECK(ncclSocketAccept(recvSocket, listenSock));
+static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket* sendSocket/**出参，发送socket */, struct ncclSocket* listenSock/**入参，listen socket */, struct ncclSocket* recvSocket/*出参，发送socket*/, uint64_t magic/**为socket关联的Magic */, volatile uint32_t* abortFlag/*指针，指向abortFlag,如出错设置此flags，使用指针可与其它结构体共享 */) {
+  NCCLCHECK(ncclSocketInit(sendSocket, addr, magic, ncclSocketTypeBootstrap/**bootstrap 创建的socket */, abortFlag));
+  NCCLCHECK(ncclSocketConnect(sendSocket));/**建立连接（sendSocket） */
+  NCCLCHECK(ncclSocketInit(recvSocket));/**初始化接收socket */
+  NCCLCHECK(ncclSocketAccept(recvSocket, listenSock));/**接受连接（recvSocket），如果两端的magic,type不一致，会连接失败 */
   return ncclSuccess;
 }
 static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* state,
@@ -757,11 +764,12 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
 
   // accept and connect the ring network
   if (ncclParamBootstrapNetEnable()) {
-	  /*连接发送comm,接受接收comm*/
+	  /*开启时，走NCCL net插件，连接发送comm,接受接收comm*/
     NCCLCHECK(netRingConnect(comm->netContext, state->net, &state->listen, nextPeer.handle/*发送对应的对端地址*/,
                              &STATE_RING(state, net.sendComm)/*发送*/, &STATE_RING(state, net.sendDevHandle),
                              &STATE_RING(state, net.recvComm)/*接收*/, &STATE_RING(state, net.recvDevHandle), state->abortFlag));
   } else {
+    /**走tcp socket，与发送端，建收端建立起连接 */
     NCCLCHECK(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket), &STATE_RING(state, socket.recv), comm->magic, state->abortFlag));
   }
 
@@ -1074,37 +1082,44 @@ exit:
   if (recvDataHandle) netDereg(net, recvComm, &recvDataHandle);
   return res;
 }
-static ncclResult_t socketRingAllGather(struct ncclSocket* nextSock, struct ncclSocket* prevSock, int rank, int nranks, char* data, int size) {
+static ncclResult_t socketRingAllGather(struct ncclSocket* nextSock/**本rank的next_rank的发送socket */, struct ncclSocket* prevSock/**本rank的pre_rank的接收socket */, int rank/**本rank编号 */, int nranks/**总rank数 */, char* data/**交换的信息 */, int size/**每个rank片大小 */ ) {
   ncclResult_t res = ncclSuccess;
   uint64_t tFirst = 0, tRest = 0;
   /* Simple ring based AllGather
    * At each step i receive data from (rank-i-1) from prev
    * and send previous step's data from (rank-i) to next
    */
-  TRACE(NCCL_BOOTSTRAP, "socketRingAllGather started: rank=%d nranks=%d", rank, nranks);
-  int totalSteps = nranks / 2;
+  TRACE(NCCL_BOOTSTRAP, "socketRingAllGather started: rank=%d nranks=%d", rank, nranks);/**指明开启做socketRingAllGather */
+  int totalSteps = nranks / 2;/**又向ring(之前单向ring只向前后，只向后发，现在前后都可收发) */
   TRACE(NCCL_BOOTSTRAP, "bidirectional bootstrap: totalSteps=%d", totalSteps);
   BOOTSTRAP_PROF_OPEN(tFirst);
   for (int step = 0; step < totalSteps; step++) {
     // N ranks requires (N-1)/2 steps for the double ring  algorithm. If N is even, the last step is requires a single send/recv
-    bool isFinalUnidirectional = (step == totalSteps - 1) && (nranks % 2 == 0);
+    bool isFinalUnidirectional = (step == totalSteps - 1) && (nranks % 2 == 0/**总rank数为偶数 */);
     // Ring0: ring from previous to next
+    /**发送的这一片是向后一个邻居去，故每步从自已的那一片向前偏（随step增大） */
     int sendSliceRing0 = (rank - step + nranks) % nranks;      // Send this slice to next neighbor
+    /**接收的这一片是从前一个邻居来，故每步从自已的前一片向前偏（随step增大） */
     int recvSliceRing0 = (rank - step - 1 + nranks) % nranks;  // Receive this slice from prev neighbor
     // Ring1: ring from next to previous
+    /**发送的这一片是向前一个邻居去，故每步从自已的那一片向后偏（随step增大） */
     int sendSliceRing1 = (rank + step) % nranks;               // Send this slice to prev neighbor
+    /**接收的这一片是从后一个邻居来，故每步从自已的那一片向后偏（随step增大） */
     int recvSliceRing1 = (rank + step + 1) % nranks;           // Receive this slice from next neighbor
     if (isFinalUnidirectional) {
+      /**如果是最后一步，则只向后传递 */
       // Final unidirectional step, only Ring0 is used
       NCCLCHECKGOTO(socketSendRecv(nextSock, data + sendSliceRing0 * size, size, prevSock, data + recvSliceRing0 * size, size), res, exit);
     } else {
+      /**非最后一步，需要双向传递，按步把数据向前后发送并接收前后数据 */
       // Bidirectional step: Ring0 and Ring1 are used simultaneously
       struct ncclSocketOp ops[4] = {
-        {NCCL_SOCKET_SEND, nextSock, data + sendSliceRing0 * size, size, 0},  // Ring0: send to next
-        {NCCL_SOCKET_RECV, prevSock, data + recvSliceRing0 * size, size, 0},  // Ring0: recv from prev
-        {NCCL_SOCKET_SEND, prevSock, data + sendSliceRing1 * size, size, 0},  // Ring1: send to prev
-        {NCCL_SOCKET_RECV, nextSock, data + recvSliceRing1 * size, size, 0}   // Ring1: recv from next
+        {NCCL_SOCKET_SEND, nextSock/*发给后一个邻居 */, data + sendSliceRing0 * size/**数据片 */, size/**数据片大小 */, 0},  // Ring0: send to next
+        {NCCL_SOCKET_RECV, prevSock/*从前一个邻居收*/, data + recvSliceRing0 * size, size, 0},  // Ring0: recv from prev
+        {NCCL_SOCKET_SEND, prevSock/*发给前一个邻居 */, data + sendSliceRing1 * size, size, 0},  // Ring1: send to prev
+        {NCCL_SOCKET_RECV, nextSock/*从后一个邻居收*/, data + recvSliceRing1 * size, size, 0}   // Ring1: recv from next
       };
+      /**执行双向发送 */
       NCCLCHECKGOTO(socketDoubleSendRecv(ops), res, exit);
     }
     if (step == 0) {
@@ -1117,20 +1132,22 @@ static ncclResult_t socketRingAllGather(struct ncclSocket* nextSock, struct nccl
 exit:
   return res;
 }
-ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
+ncclResult_t bootstrapAllGather(void* commState, void* allData/*交换数据的指针 */, int size/*每个rank片大小*/) {
   ncclResult_t res = ncclSuccess;
   struct bootstrapState* state = (struct bootstrapState*)commState;
   int rank = state->rank;/*自身对应的rank*/
-  int nranks = state->nranks;
+  int nranks = state->nranks;/*总rank数*/
 
   TRACE(NCCL_BOOTSTRAP, "rank %d nranks %d size %d - AllGather", rank, nranks, size);
 
   uint64_t time = 0;
   BOOTSTRAP_PROF_OPEN(time);
   if (ncclParamBootstrapNetEnable()) {
+    /*开启时，利用netRingAllGather交换数据 */
     NCCLCHECKGOTO(netRingAllGather(state->net, STATE_RING(state, net.sendComm)/*发送*/, STATE_RING(state, net.recvComm)/*接收*/, rank/*所属的rank*/, nranks/*rank总数*/, (char*)allData, size, state->abortFlag), res, exit);
   } else {
-    NCCLCHECKGOTO(socketRingAllGather(&STATE_RING(state, socket.send), &STATE_RING(state, socket.recv), rank, nranks, (char*)allData, size), res, exit);
+    /*关闭时（默认），利用socketRingAllGather交换数据 */
+    NCCLCHECKGOTO(socketRingAllGather(&STATE_RING(state, socket.send)/**本rank的发送socket */, &STATE_RING(state, socket.recv)/**本rank的接收socket */, rank, nranks, (char*)allData, size), res, exit);
   }
 exit:
   BOOTSTRAP_PROF_CLOSE(time);

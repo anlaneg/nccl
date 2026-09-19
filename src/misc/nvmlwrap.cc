@@ -13,7 +13,9 @@
 #include <mutex>
 
 int ncclNvmlDeviceCount = 0;
+/**nvml设备句柄数组 */
 ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
+/**nvml设备对信息数组 */
 ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevices];
 
 #if NCCL_NVML_DIRECT
@@ -60,16 +62,17 @@ namespace {
 ncclResult_t ncclNvmlEnsureInitialized() {
   // Optimization to avoid repeatedly grabbing the lock when we only want to
   // read from the global tables.
-  if (threadInitialized) return initResult;
+  if (threadInitialized) return initResult;/*已初始化，直接返回结果 */
   threadInitialized = true;
 
   std::lock_guard<std::mutex> locked(lock);
 
-  if (initialized) return initResult;
+  if (initialized) return initResult;/*加锁后再查，已初始化，直接返回结果 */
   initialized = true;
 
   #if !NCCL_NVML_DIRECT
   if (pfn_nvmlInit == nullptr) {
+    /**加载nvml库 */
     void *libhandle = dlopen("libnvidia-ml.so.1", RTLD_NOW);
     if (libhandle == nullptr) {
       WARN("Failed to open libnvidia-ml.so.1");
@@ -77,6 +80,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       return initResult;
     }
 
+    /*初始化各名称对应的指针*/
     struct Symbol { void **ppfn; char const *name; };
     std::initializer_list<Symbol> symbols = {
       {(void**)&pfn_nvmlInit, "nvmlInit"},
@@ -101,6 +105,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       {(void**)&pfn_nvmlSystemGetConfComputeState, "nvmlSystemGetConfComputeState"},
       {(void**)&pfn_nvmlSystemGetConfComputeSettings, "nvmlSystemGetConfComputeSettings"}
     };
+    /**通过名称查找各符号地址，赋值给指针 */
     for(Symbol sym: symbols) {
       *sym.ppfn = dlsym(libhandle, sym.name);
     }
@@ -114,8 +119,10 @@ ncclResult_t ncclNvmlEnsureInitialized() {
   #if NCCL_NVML_DIRECT
     bool have_v2 = true;
   #else
+    /**检查是否支持v2接口 */
     bool have_v2 = pfn_nvmlInit_v2 != nullptr; // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
   #endif
+  /**初始化nvml */
   nvmlReturn_t res1 = (have_v2 ? pfn_nvmlInit_v2 : pfn_nvmlInit)();
   if (res1 != NVML_SUCCESS) {
     WARN("nvmlInit%s() failed: %s", have_v2 ? "_v2" : "", pfn_nvmlErrorString(res1));
@@ -123,6 +130,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
     return initResult;
   }
 
+  /**获取nvml设备数量 */
   unsigned int ndev;
   res1 = (have_v2 ? pfn_nvmlDeviceGetCount_v2 : pfn_nvmlDeviceGetCount)(&ndev);
   if (res1 != NVML_SUCCESS) {
@@ -131,6 +139,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
     return initResult;
   }
 
+  /**检查设备数量是否超过最大支持数量 */
   ncclNvmlDeviceCount = int(ndev);
   if (ncclNvmlMaxDevices < ncclNvmlDeviceCount) {
     WARN("nvmlDeviceGetCount() reported more devices (%d) than the internal maximum (ncclNvmlMaxDevices=%d)", ncclNvmlDeviceCount, ncclNvmlMaxDevices);
@@ -138,6 +147,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
     return initResult;
   }
 
+  /**获取各nvml设备句柄 */
   for(int a=0; a < ncclNvmlDeviceCount; a++) {
     res1 = pfn_nvmlDeviceGetHandleByIndex(a, &ncclNvmlDevices[a].handle);
     if (res1 != NVML_SUCCESS) {
@@ -146,6 +156,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       return initResult;
     }
 
+    /**获取各nvml设备的计算能力 */
     res1 = pfn_nvmlDeviceGetCudaComputeCapability(ncclNvmlDevices[a].handle, &ncclNvmlDevices[a].computeCapabilityMajor, &ncclNvmlDevices[a].computeCapabilityMinor);
     if (res1 != NVML_SUCCESS) {
       WARN("nvmlDeviceGetCudaComputeCapability(%d) failed: %s", int(a), pfn_nvmlErrorString(res1));
@@ -159,6 +170,11 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       nvmlDevice_t da = ncclNvmlDevices[a].handle;
       nvmlDevice_t db = ncclNvmlDevices[b].handle;
 
+      /*pfn_nvmlDeviceGetP2PStatus 调用是探测两块 GPU (a, b) 之间的 P2P 直连能力，分别查：
+      读方向（NVML_P2P_CAPS_INDEX_READ）：GPU b 能不能直接读 GPU a 的显存 → 写入 p2pStatusRead
+      写方向（NVML_P2P_CAPS_INDEX_WRITE）：GPU b 能不能直接写 GPU a 的显存 → 写入 p2pStatusWrite*/
+
+      /**获取设备a,b的P2P读方向状态 */
       res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_READ, &ncclNvmlDevicePairs[a][b].p2pStatusRead);
       if (res1 != NVML_SUCCESS) {
         WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
@@ -166,6 +182,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
         return initResult;
       }
 
+      /**获取设备a,b的P2P写方向状态 */
       res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_WRITE, &ncclNvmlDevicePairs[a][b].p2pStatusWrite);
       if (res1 != NVML_SUCCESS) {
         WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
@@ -180,8 +197,8 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 }
 
 #define NVMLCHECK(name, ...) do { \
-  nvmlReturn_t e44241808 = pfn_##name(__VA_ARGS__); \
-  if (e44241808 != NVML_SUCCESS) { \
+  nvmlReturn_t e44241808 = pfn_##name(__VA_ARGS__); /*调用函数，获取返回值*/\
+  if (e44241808 != NVML_SUCCESS) { /*调用失败，显示日志并返回错误*/\
     WARN(#name "() failed: %s", pfn_nvmlErrorString(e44241808)); \
     return ncclSystemError; \
   } \
@@ -189,15 +206,16 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 
 #define NVMLTRY(name, ...) do { \
   if (!NCCL_NVML_DIRECT && pfn_##name == nullptr) \
-    return ncclInternalError; /* missing symbol is not a warned error */ \
-  nvmlReturn_t e44241808 = pfn_##name(__VA_ARGS__); \
+    return ncclInternalError; /*此函数未实现，直接返回错误*//* missing symbol is not a warned error */ \
+  nvmlReturn_t e44241808 = pfn_##name(__VA_ARGS__); /*调用函数，获取返回值*/\
   if (e44241808 != NVML_SUCCESS) { \
-    if (e44241808 != NVML_ERROR_NOT_SUPPORTED) \
+    if (e44241808 != NVML_ERROR_NOT_SUPPORTED) /**调用失败，显示日志并返回错误*/\
       INFO(NCCL_INIT, #name "() failed: %s", pfn_nvmlErrorString(e44241808)); \
     return ncclSystemError; \
   } \
 } while(0)
 
+/**利用pciBusId获取nvml设备句柄 */
 ncclResult_t ncclNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device) {
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
@@ -296,6 +314,7 @@ ncclResult_t ncclNvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, nvmlGpuFabricI
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
   gpuFabricInfo->version = nvmlGpuFabricInfo_v2;
+  /*取设备a的Fabric信息 */
   NVMLTRY(nvmlDeviceGetGpuFabricInfoV, device, gpuFabricInfo);
   return ncclSuccess;
 }
@@ -304,6 +323,7 @@ ncclResult_t ncclNvmlDeviceGetPlatformInfo(nvmlDevice_t device, nvmlPlatformInfo
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
   platformInfo->version = nvmlPlatformInfo_v2;
+  /*取设备a的平台信息 */
   NVMLTRY(nvmlDeviceGetPlatformInfo, device, platformInfo);
   return ncclSuccess;
 }

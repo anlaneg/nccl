@@ -154,6 +154,7 @@ ncclResult_t ncclInitEnv() {
   return envInitResult;
 }
 
+/**返回nccl当前版本号 */
 NCCL_API(ncclResult_t, ncclGetVersion, int* version);
 ncclResult_t ncclGetVersion(int* version) {
   if (version == NULL) return ncclInvalidArgument;
@@ -448,14 +449,14 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
 
   NCCLCHECK(ncclCudaContextTrack(&comm->context));
 
-  NCCLCHECK(getBusId(comm->cudaDev, &comm->busId));
+  NCCLCHECK(getBusId(comm->cudaDev, &comm->busId));/**取当前gpu的bdf号 */
   nvmlDevice_t nvmlDev;
   char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
   NCCLCHECK(int64ToBusId(comm->busId, busId));
   NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
   NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&comm->nvmlDev));
 
-  comm->compCap = ncclCudaCompCap();
+  comm->compCap = ncclCudaCompCap(comm->cudaDev);/**取当前gpu的计算能力 */
   TRACE(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx compCap %d", comm, rank, ndev, comm->cudaDev, comm->busId, comm->compCap);
 
   comm->checkPointers = ncclParamCheckPointers() == 1 ? true : false;
@@ -622,27 +623,30 @@ static void showVersion() {
 NCCL_PARAM(MNNVLUUID, "MNNVL_UUID", -1);
 NCCL_PARAM(MNNVLCliqueId, "MNNVL_CLIQUE_ID", -1);
 
+/**填充peerInfo，仅填充自身的peerInfo */
 static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, uint64_t commHash) {
   cudaDeviceProp prop;
-  info->rank = comm->rank;
+  info->rank = comm->rank;/**设置自身rank */
   info->cudaDev = comm->cudaDev;
   info->nvmlDev = comm->nvmlDev;
   NCCLCHECK(ncclGetVersion(&info->version));
-  info->hostHash=getHostHash()+commHash;/*host-hash合上commHash*/
-  info->pidHash=getPidHash()+commHash;/*pid对应的hash*/
-  info->cuMemSupport = ncclCuMemEnable();
-  CUDACHECK(cudaGetDeviceProperties(&prop, comm->cudaDev));
-  info->totalGlobalMem = ROUNDUP(prop.totalGlobalMem, (1L << 32));
+  /*host-hash合上commHash，得出host-hash，即在此通信域中唯一标识此主机*/
+  info->hostHash=getHostHash()+commHash;
+  info->pidHash=getPidHash()+commHash;/*hash合上commHash，即在此通信域中唯一标识此进程*/
+  info->cuMemSupport = ncclCuMemEnable();/**取配置的cumem开启情况 */
+  CUDACHECK(cudaGetDeviceProperties(&prop, comm->cudaDev));/**取当前gpu的属性信息 */
+  info->totalGlobalMem = ROUNDUP(prop.totalGlobalMem, (1L << 32));/**取当前gpu的总内存，向上取整到 2^32 字节 */
 
   // Get the device MAJOR:MINOR of /dev/shm so we can use that
   // information to decide whether we can use SHM for inter-process
   // communication in a container environment
   struct stat statbuf;
   SYSCHECK(stat("/dev/shm", &statbuf), "stat");
-  info->shmDev = statbuf.st_dev;
+  info->shmDev = statbuf.st_dev;/*取/dev/shm挂载点下的dev_t，即共享内存的dev_t */
 
   info->busId = comm->busId;
 
+  /**检查是否支持gdr通信 */
   NCCLCHECK(ncclGpuGdrSupport(comm, &info->gdrSupport));
   info->comm = comm;
   info->cudaCompCap = comm->minCompCap = comm->maxCompCap = comm->compCap;
@@ -652,30 +656,33 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
     // MNNVL: Request the fabric UUID and partition info
     char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
     nvmlDevice_t nvmlDev;
-    NCCLCHECK(int64ToBusId(info->busId, busId));
-    NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
+    NCCLCHECK(int64ToBusId(info->busId, busId));/**将bdf号转换为字符串 */
+    NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));/**取bdf号对应的nvml设备句柄 */
     info->fabricInfo.state = NVML_GPU_FABRIC_STATE_NOT_SUPPORTED;
-    (void) ncclNvmlDeviceGetGpuFabricInfoV(nvmlDev, &info->fabricInfo);
+    (void) ncclNvmlDeviceGetGpuFabricInfoV(nvmlDev, &info->fabricInfo);/**取bdf号对应的fabric信息 */
     if (info->fabricInfo.state != NVML_GPU_FABRIC_STATE_NOT_SUPPORTED) {
       unsigned long uuid0 = 0;
       unsigned long uuid1 = 0;
       if (ncclParamMNNVLUUID() != -1) {
+        /**取用户配置的fabric UUID，用两个uuid填充fabricInfo.clusterUuid */
         unsigned long temp_uuid0 = (unsigned long)ncclParamMNNVLUUID();
         unsigned long temp_uuid1 = (unsigned long)ncclParamMNNVLUUID();
         memcpy(info->fabricInfo.clusterUuid, &temp_uuid0, sizeof(temp_uuid0));
         memcpy(info->fabricInfo.clusterUuid + sizeof(temp_uuid0), &temp_uuid1, sizeof(temp_uuid1));
       }
+      /**取fabricInfo.clusterUuid中的两个uuid到uuid0和uuid1 */
       memcpy(&uuid0, info->fabricInfo.clusterUuid, sizeof(uuid0));
       memcpy(&uuid1, info->fabricInfo.clusterUuid + sizeof(uuid0), sizeof(uuid1));
       if (ncclParamMNNVLCliqueId() == -2) {
         nvmlPlatformInfo_t platformInfo = { 0 };
-        NCCLCHECK(ncclNvmlDeviceGetPlatformInfo(nvmlDev, &platformInfo));
+        NCCLCHECK(ncclNvmlDeviceGetPlatformInfo(nvmlDev, &platformInfo));/**取bdf号对应的平台信息 */
         INFO(NCCL_INIT, "MNNVL rack serial %s slot %d tray %d hostId %d peerType %d moduleId %d",
              platformInfo.chassisSerialNumber, platformInfo.slotNumber, platformInfo.trayIndex,
              platformInfo.hostId, platformInfo.peerType, platformInfo.moduleId);
         // Use a hash of the Rack serial number to partition the NVLD clique
+        /**用户指明自动，利用平台信息中的rack serial number计算cliqueId */
         info->fabricInfo.cliqueId = getHash(platformInfo.chassisSerialNumber, sizeof(platformInfo.chassisSerialNumber));
-      } else if (ncclParamMNNVLCliqueId() != -1) info->fabricInfo.cliqueId = ncclParamMNNVLCliqueId();
+      } else if (ncclParamMNNVLCliqueId() != -1) info->fabricInfo.cliqueId = ncclParamMNNVLCliqueId();/**取用户配置的cliqueId */
       INFO(NCCL_INIT, "MNNVL busId 0x%lx fabric UUID %lx.%lx cliqueId 0x%x state %d healthMask 0x%x",
            info->busId,
            uuid0, uuid1,
@@ -847,6 +854,7 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+/*主要完成一个 rank 视角下 communicator 的传输层初始化 */
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent, uint64_t timers[TIMERS_INIT_COUNT]) {
   // We use 2 AllGathers
   // 1. { peerInfo, comm, compCap}
@@ -854,13 +862,15 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   ncclResult_t ret = ncclSuccess;
   int rank = comm->rank;
   int nranks = comm->nRanks;
-  int nNodes = 1;
+  int nNodes = 1;/**初始化1 */
   cpu_set_t affinitySave;
+  /*取不同类型的槽位指针（只取了5种） */
   struct ncclTopoGraph* ringGraph = &comm->graphs[NCCL_ALGO_RING];
   struct ncclTopoGraph* treeGraph = &comm->graphs[NCCL_ALGO_TREE];
   struct ncclTopoGraph* collNetChainGraph = &comm->graphs[NCCL_ALGO_COLLNET_CHAIN];
   struct ncclTopoGraph* collNetDirectGraph = &comm->graphs[NCCL_ALGO_COLLNET_DIRECT];
   struct ncclTopoGraph* nvlsGraph = &comm->graphs[NCCL_ALGO_NVLS];
+  /*按7种填graphs指针数组（复用了5，6种）  */
   struct ncclTopoGraph* graphs[NCCL_NUM_ALGORITHMS] = { treeGraph, ringGraph, collNetDirectGraph, collNetChainGraph, nvlsGraph, nvlsGraph, treeGraph };
 
   struct graphInfo {
@@ -895,29 +905,35 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   timers[TIMER_INIT_ALLGATHER] = clockNano();
   // AllGather1 - begin
+  /*开始第一次AllGather */
+  /*分配peerInfo内存（nranks+1个peerInfo，多一个rank为CollNet root） */ 
   NCCLCHECKGOTO(ncclCalloc(&comm->peerInfo, nranks+1), ret, fail); // Extra rank to represent CollNet root
+  /*填充自身的peerInfo */
   NCCLCHECKGOTO(fillInfo(comm, comm->peerInfo+rank/*当前rank*/, comm->commHash), ret, fail);
+  /**启动AllGather和其它人完成peerInfo信息交换并等待所有rank完成 */
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, comm->peerInfo, sizeof(struct ncclPeerInfo)), ret, fail);
-  __atomic_store_n(&comm->peerInfoValid, true, __ATOMIC_RELEASE);
+  __atomic_store_n(&comm->peerInfoValid, true, __ATOMIC_RELEASE);/**标记peerInfo为有效,已完成交换 */
 
   comm->cuMemSupport = 1;
   for (int i = 0; i < nranks; i++) {
     if (comm->peerInfo[i].version != comm->peerInfo[rank].version) {
+      /**检查是否所有rank的版本号都相同 */
       WARN("Mismatched NCCL version detected : rank %d version %d rank %d version %d",
            i, comm->peerInfo[i].version, rank, comm->peerInfo[rank].version);
       ret = ncclInvalidUsage;
       goto fail;
     }
-    if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash) nNodes++;
-    if (!comm->peerInfo[i].cuMemSupport) comm->cuMemSupport = 0;
+    if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash) nNodes++;/**统计不同主机的rank数 */
+    if (!comm->peerInfo[i].cuMemSupport) comm->cuMemSupport = 0;/**存在有一台机器不支持cumem，所有rank都不支持cumem */
     if ((i != rank) && (comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash) && (comm->peerInfo[i].busId == comm->peerInfo[rank].busId)) {
+      /**存在rank值不同，但主机相同，bdf号相同的情况 */
       WARN("Duplicate GPU detected : rank %d and rank %d both on CUDA device %lx", rank, i, comm->peerInfo[rank].busId);
       ret = ncclInvalidUsage;
       goto fail;
     }
   }
   // AllGather1 - end
-  timers[TIMER_INIT_ALLGATHER] = clockNano() - timers[TIMER_INIT_ALLGATHER];
+  timers[TIMER_INIT_ALLGATHER] = clockNano() - timers[TIMER_INIT_ALLGATHER];/**记录AllGather1耗时 */
 
   // Check for MNNVL support
   NCCLCHECKGOTO(ncclGetUserP2pLevel(&p2pLevel), ret, fail);

@@ -23,7 +23,9 @@ typedef ncclNvlDomainInfo_v5_t ncclNvlDomainInfo_t;
 #define NCCL_TUNER_PLUGIN_SYMBOL "ncclTunerPlugin_v5"
 
 #define NCCL_ALGO_UNDEF -1
+/**二叉树 reduce/broadcast（延迟 O(log N)） */
 #define NCCL_ALGO_TREE 0
+/**环型传递（带宽最优，延迟 O(N)） */
 #define NCCL_ALGO_RING 1
 #define NCCL_ALGO_COLLNET_DIRECT 2
 #define NCCL_ALGO_COLLNET_CHAIN 3

@@ -458,7 +458,7 @@ struct ncclComm {
   struct ncclTopoSystem* topo;/*拓扑*/
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
-  bool peerInfoValid;
+  bool peerInfoValid;/*标记peerInfo是否有效(已填充) */
 
   ncclNet_t* ncclNet;
   void* netContext;
@@ -479,6 +479,7 @@ struct ncclComm {
   bool directMode; // if any process manages more than one local rank
   int cuMemSupport;
 
+  /**通信域内的magic number，用于验证client与server的magic是否一致，一致则连接成功，不一致则连接失败 */
   uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect mismatches.
 
   uint64_t commHash;
@@ -486,10 +487,14 @@ struct ncclComm {
   int rank;    // my rank in the communicator
   /*communicator中gpu的数目*/
   int nRanks;  // number of GPUs in communicator
+  /**当前gpu对应的cuda设备编号 */
   int cudaDev; // my cuda device index
+  /**NVML（NVIDIA Management Library）视角下的 GPU 索引，和 CUDA runtime 的 cudaDev 是两套不同的编号系统。*/
   int nvmlDev; // my nvml device index
   int compCap; // compute capability of the GPU
+  /*最小，最大算力 */
   int minCompCap, maxCompCap; // min/max compute capability in the communicator
+  /**记录cudaDev在本机的bdf号 */
   int64_t busId;   // my PCI bus ID in int format
   /*线程指明的亲和cpu*/
   cpu_set_t cpuAffinity; // CPU affinity of the GPU

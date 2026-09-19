@@ -38,20 +38,22 @@ struct ncclComm;
 
 struct ncclPeerInfo {
   int rank;/*节点当前rank*/
-  int cudaDev;
-  int nvmlDev;
-  int gdrSupport;/*是否支持gdr*/
-  uint64_t hostHash;
-  uint64_t pidHash;
-  dev_t shmDev;/*share memory对应的dev_t*/
-  int64_t busId;
-  struct ncclComm* comm;
-  int cudaCompCap;
-  size_t totalGlobalMem;
+  int cudaDev;/*对应的cuda设备 */
+  int nvmlDev;/*NVML（NVIDIA Management Library）视角下的 GPU 索引，和 CUDA runtime 的 cudaDev 是两套不同的编号系统。*/
+  int gdrSupport;/*是否支持gdr通信*/
+  uint64_t hostHash;/*在此通信域中唯一标识此主机*/
+  uint64_t pidHash;/*在此通信域中唯一标识此进程*/
+  /*dev/shm在本机挂载点下的dev_t（同一个 mount 下的所有文件 → st_dev 相同）
+  在hostHash相同（即同物理机）+shmdev相同（即同共享内存）时，可以使用共享内存通信，否则需要使用普通内存通信*/
+  dev_t shmDev;
+  int64_t busId;/**对应的cudaDev的bdf号 */
+  struct ncclComm* comm;/*对应的ncclComm结构体*/
+  int cudaCompCap;/*当前gpu的计算能力*/
+  size_t totalGlobalMem;/*当前gpu的总内存，向上取整到 2^32 字节（4G对齐） */
   // MNNVL support
-  nvmlGpuFabricInfoV_t fabricInfo;
-  int cuMemSupport;/*cuda是否支持'虚拟内存管理'*/
-  int version;
+  nvmlGpuFabricInfoV_t fabricInfo;/*当前gpu的Fabric信息 */
+  int cuMemSupport;/*当前cuda是否支持'cumem'低层虚拟内存管理*/
+  int version;/*当前nccl版本号 */
 };
 
 #define CONNECT_SIZE 256

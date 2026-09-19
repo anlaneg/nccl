@@ -46,6 +46,10 @@ error:
 int ncclCuMemEnable() {
   // NCCL_CUMEM_ENABLE=-2 means auto-detect CUMEM support
   int param = ncclParamCuMemEnable();
+  /*CUMEM 是 CUDA 版的"低层虚拟内存管理"，
+  把 VA、物理页、映射、权限四件事解耦成独立原语；
+  cudaMalloc 的行为可以用它模拟（Reserve + Create + Map + SetAccess 一把梭），
+  但反过来 CUMEM 能做的事（跨进程 IPC、组播绑定、动态映射、FABRIC 共享）用 cudaMalloc 做不到*/
   return  param >= 0 ? param : (param == -2 && ncclCuMemSupported);
 }
 

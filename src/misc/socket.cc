@@ -14,7 +14,9 @@
 #include "param.h"
 #include <time.h>
 
+/**重试次数 */
 NCCL_PARAM(RetryCnt, "SOCKET_RETRY_CNT", 34);
+/**重试时间间隔 */
 NCCL_PARAM(RetryTimeOut, "SOCKET_RETRY_SLEEP_MSEC", 100);
 static void msleep(unsigned int time_msec) {
   const long c_1e6 = 1e6;
@@ -84,7 +86,7 @@ static ncclResult_t socketProgress(int op/*收或者发*/, struct ncclSocket* so
   return ncclSuccess;
 }
 
-static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset) {
+static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset/**入出参，偏移量,比如发送偏移量*/) {
   /*循环直到op操作处理完成*/
   while (*offset < size)
     NCCLCHECK(socketProgress(op, sock, ptr, size, offset));
@@ -481,7 +483,7 @@ static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
       WARN("socketTryAccept: exceeded error retry count after %d attempts, %s", sock->errorRetries, strerror(errno));
       return ncclSystemError;
     }
-    INFO(NCCL_NET|NCCL_INIT, "Call to accept returned %s, retrying", strerror(errno));
+    INFO(NCCL_NET|NCCL_INIT, "Call to accept returned %s, retrying", strerror(errno));/**后续重试 */
   } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
 	  /*accept出错*/
     WARN("socketTryAccept: Accept failed: %s", strerror(errno));
@@ -493,17 +495,21 @@ static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
 NCCL_PARAM(SocketMaxRecvBuff, "SOCKET_RCVBUF", -1);
 NCCL_PARAM(SocketMaxSendBuff, "SOCKET_SNDBUF", -1);
 
+/**设置socket */
 static ncclResult_t socketSetFlags(struct ncclSocket* sock) {
   const int one = 1;
   /* Set socket as non-blocking if async or if we need to be able to abort */
   if ((sock->asyncFlag || sock->abortFlag) && sock->fd >= 0) {
     int flags;
+    /**设置非阻塞标志 */
     SYSCHECK(flags = fcntl(sock->fd, F_GETFL), "fcntl");
     SYSCHECK(fcntl(sock->fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
   }
+  /**设置tcp no delay */
   SYSCHECK(setsockopt(sock->fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(int)), "setsockopt TCP NODELAY");
   // setsockopt should not fail even if the sizes are too large, do not change the default if unset by the user (=-1)
   int rcvBuf = ncclParamSocketMaxRecvBuff(), sndBuf = ncclParamSocketMaxSendBuff();
+  /**设置发送/接收缓冲区大小 */
   if (sndBuf > 0) SYSCHECK(setsockopt(sock->fd, SOL_SOCKET, SO_SNDBUF, (char*)&sndBuf, sizeof(int)), "setsockopt SO_SNDBUF");
   if (rcvBuf > 0) SYSCHECK(setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, (char*)&rcvBuf, sizeof(int)), "setsockopt SO_RCVBUF");
   return ncclSuccess;
@@ -520,6 +526,7 @@ static void socketResetAccept(struct ncclSocket* sock) {
   sock->finalizeCounter = 0;
 }
 
+/**接入了client与server的magic,type字节，验证是否一致 */
 static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
   uint64_t magic;
   enum ncclSocketType type;
@@ -528,14 +535,16 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
   // once accepted, linux sockets do NOT inherit file status flags such as O_NONBLOCK (BSD ones do)
   NCCLCHECK(socketSetFlags(sock));
 
-  if (sock->asyncFlag == 0 || sock->finalizeCounter < sizeof(magic)) {
+  if (sock->asyncFlag == 0 /*同步操作*/|| sock->finalizeCounter < sizeof(magic)/**异步操作未读取magic字节 */) {
     if (sock->asyncFlag == 0) {
       received = 0;
+      /**读取magic字节 */
       if (socketWait(NCCL_SOCKET_RECV, sock, &magic, sizeof(magic), &received) != ncclSuccess) {
         socketResetAccept(sock);
         return ncclSuccess;
       }
     } else {
+      /**异步读取magic字节 */
       int closed = 0;
       received = sock->finalizeCounter;
       NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, sock->finalizeBuffer, sizeof(magic), &received, &closed));
@@ -548,11 +557,13 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
       }
       memcpy(&magic, sock->finalizeBuffer, sizeof(magic));
     }
+    /**读取的magic与自身magic不一致的，断开连接 */
     if (magic != sock->magic) {
       socketResetAccept(sock);
       return ncclSuccess;
     }
   }
+  /**读取type字节 */
   if (sock->asyncFlag == 0) {
     received = 0;
     NCCLCHECK(socketWait(NCCL_SOCKET_RECV, sock, &type, sizeof(type), &received));
@@ -563,6 +574,7 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
     if (received < sizeof(type)) return ncclSuccess;
     memcpy(&type, sock->finalizeBuffer, sizeof(type));
   }
+  /**读取的type与自身type不一致的，断开连接 */
   if (type != sock->type) {
     WARN("socketFinalizeAccept from %s: wrong type %d != %d", ncclSocketToString(&sock->addr, line), type, sock->type);
     sock->state = ncclSocketStateError;
@@ -600,7 +612,7 @@ cleanup:
   goto exit;
 }
 
-static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, const char funcName[]) {
+static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode/**错误码 */, const char funcName[]/**调用方函数名称 */) {
   char line[SOCKET_NAME_MAXLEN+1];
   if (errCode == 0) {
 	  /*指明为连接成功*/
@@ -611,7 +623,7 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
   } else if (errCode == EINTR || errCode == EWOULDBLOCK || errCode == EAGAIN || errCode == ETIMEDOUT ||
              errCode == EHOSTUNREACH || errCode == ECONNREFUSED) {
     if (sock->customRetry == 0) {
-    	/*nccl负责重试及避让*/
+    	/*customRetry为0，nccl负责重试及避让*/
       if (sock->errorRetries++ == ncclParamRetryCnt()) {
     	  /*重试次数超限*/
         sock->state = ncclSocketStateError;
@@ -619,13 +631,14 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
              funcName, ncclSocketToString(&sock->addr, line), strerror(errCode), sock->errorRetries);
         return ncclRemoteError;
       }
+      /**按重试次数增加避让时间间隔 */
       unsigned int sleepTime = sock->errorRetries * ncclParamRetryTimeOut();
       INFO(NCCL_NET|NCCL_INIT, "%s: connect to %s returned %s, retrying (%d/%ld) after sleep for %u msec",
            funcName, ncclSocketToString(&sock->addr, line), strerror(errCode),
            sock->errorRetries, ncclParamRetryCnt(), sleepTime);
       msleep(sleepTime);/*避让重试*/
     }
-    /*重置socket*/
+    /*重置socket fd，置为连接中状态*/
     NCCLCHECK(socketResetFd(sock)); /* in case of failure in connect, socket state is unspecified */
     sock->state = ncclSocketStateConnecting;/*指明为connting状态（一会会执行再连）*/
   } else {
@@ -637,6 +650,7 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
   return ncclSuccess;
 }
 
+/**启动连接到远端 */
 static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
   /* blocking/non-blocking connect() is determined by asyncFlag. */
   int ret = connect(sock->fd, &sock->addr.sa, sock->salen);/*连接到远端*/
@@ -678,24 +692,27 @@ ncclResult_t ncclSocketPollConnect(struct ncclSocket* sock) {
 
 static ncclResult_t socketFinalizeConnect(struct ncclSocket* sock) {
   int sent;
-  if (sock->asyncFlag == 0) {
+  if (sock->asyncFlag == 0/**同步操作 */) {
     sent = 0;
+    /**向对端发送此socket magic */
     NCCLCHECK(socketWait(NCCL_SOCKET_SEND, sock, &sock->magic, sizeof(sock->magic), &sent));
     sent = 0;
+    /**向对端发送此socket type */
     NCCLCHECK(socketWait(NCCL_SOCKET_SEND, sock, &sock->type, sizeof(sock->type), &sent));
   } else {
     if (sock->finalizeCounter < sizeof(sock->magic)) {
+      /*未完成Magic发送（finalizeCounter中记录的是已完成发送的字节数）*/
       sent = sock->finalizeCounter;
       /*发送magic*/
       NCCLCHECK(socketProgress(NCCL_SOCKET_SEND/*指明send*/, sock, &sock->magic, sizeof(sock->magic), &sent));
-      sock->finalizeCounter = sent;
-      if (sent < sizeof(sock->magic)) return ncclSuccess;
+      sock->finalizeCounter = sent;/**更新已完成发送的字节数 */
+      if (sent < sizeof(sock->magic)) return ncclSuccess;/**当前是异步实现，未完成magic发送，没法继续发送，先返回，等下一次再发送 */
     }
     /*发送type*/
     sent = sock->finalizeCounter - sizeof(sock->magic);
     NCCLCHECK(socketProgress(NCCL_SOCKET_SEND, sock, &sock->type, sizeof(sock->type), &sent));
     sock->finalizeCounter = sent + sizeof(sock->magic);
-    if (sent < sizeof(sock->type)) return ncclSuccess;
+    if (sent < sizeof(sock->type)) return ncclSuccess;/**等待下次再发送 */
   }
   sock->state = ncclSocketStateReady;/*变更为state ready状态*/
   return ncclSuccess;
@@ -704,27 +721,29 @@ static ncclResult_t socketFinalizeConnect(struct ncclSocket* sock) {
 static ncclResult_t socketProgressState(struct ncclSocket* sock) {
 	/*按状态处理*/
   if (sock->state == ncclSocketStateAccepting) {
-	  /*对于正要accept的*/
+	  /*对于等待accept的socket，尝试accept*/
     NCCLCHECK(socketTryAccept(sock));
   }
   if (sock->state == ncclSocketStateAccepted) {
+    /**对于已accept到clent的调用（读取magic,type） */
     NCCLCHECK(socketFinalizeAccept(sock));
   }
   if (sock->state == ncclSocketStateConnecting) {
-	  /*对于正在连接状态，执行connect*/
+	  /*对于正在连接状态，启动执行connect*/
     NCCLCHECK(socketStartConnect(sock));
   }
   if (sock->state == ncclSocketStateConnectPolling) {
+    /**未拿到连接结果，轮询时调用 */
     NCCLCHECK(socketPollConnect(sock));
   }
   if (sock->state == ncclSocketStateConnected) {
-	  /*connect成功后调用*/
+	  /*connect成功后调用（告知对端magic,type,以便达到state ready状态 */
     NCCLCHECK(socketFinalizeConnect(sock));
   }
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketReady(struct ncclSocket* sock, int *running) {
+ncclResult_t ncclSocketReady(struct ncclSocket* sock, int *running/*出参，是否已达到ready状态 */) {
   if (sock == NULL) {
     *running = 0;
     return ncclSuccess;
@@ -748,15 +767,18 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
 #endif
 
   if (sock == NULL) {
+    /**不能为空 */
     WARN("ncclSocketConnect: pass NULL socket");
     return ncclInvalidArgument;
   }
   if (sock->fd == -1) {
+    /**不能未初始化的socket */
     WARN("ncclSocketConnect: file descriptor is -1");
     return ncclInvalidArgument;
   }
 
   if (sock->state != ncclSocketStateInitialized) {
+    /**必须已完成初始化 */
     WARN("ncclSocketConnect: wrong socket state %d", sock->state);
     if (sock->state == ncclSocketStateError) return ncclRemoteError;
     return ncclInternalError;
@@ -766,13 +788,14 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   sock->state = ncclSocketStateConnecting;/*指定为正在连接状态*/
   sock->finalizeCounter = 0;
   do {
-    NCCLCHECK(socketProgressState(sock));/*执行连接*/
-  } while (sock->asyncFlag == 0 &&
-      (sock->abortFlag == NULL || __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE) == 0) &&
+    NCCLCHECK(socketProgressState(sock));/*执行连接，如出错直接返回*/
+  } while (sock->asyncFlag == 0/**同步操作 */ &&
+      (sock->abortFlag == NULL || __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE) == 0)/**没有abort */ &&
       (sock->state == ncclSocketStateConnecting ||
        sock->state == ncclSocketStateConnectPolling ||
-       sock->state == ncclSocketStateConnected));
+       sock->state == ncclSocketStateConnected))/**未达到ready ready状态时，继续轮询 */;
 
+  /**已设置abortFlag，返回错误 */
   if (sock->abortFlag && __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE)) return ncclInternalError;
 
   /*按状态跳转*/
@@ -795,11 +818,13 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
   ncclResult_t ret = ncclSuccess;
 
   if (listenSock == NULL || sock == NULL) {
+    /**listen socket不得为0，recv socket不得为NULL*/
     WARN("ncclSocketAccept: pass NULL socket");
     ret = ncclInvalidArgument;
     goto exit;
   }
   if (listenSock->state != ncclSocketStateReady) {
+    /**listen socket必须为ready状态 */
     WARN("ncclSocketAccept: wrong socket state %d", listenSock->state);
     if (listenSock->state == ncclSocketStateError)
       ret = ncclSystemError;
@@ -809,8 +834,8 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
   }
 
   if (sock->acceptFd == -1) {
-	/*此sock首次应用于accept调用时，置为accepting状态*/
-    memcpy(sock, listenSock, sizeof(struct ncclSocket));
+	/**此sock首次应用于accept调用时，置为accepting状态*/
+    memcpy(sock, listenSock, sizeof(struct ncclSocket));/**这里的复制大有深意，复用listenSock的magic,type */
     sock->acceptFd = listenSock->fd;
     sock->state = ncclSocketStateAccepting;
     sock->finalizeCounter = 0;
@@ -819,10 +844,10 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
   /*执行accept*/
   do {
     NCCLCHECKGOTO(socketProgressState(sock), ret, exit);
-  } while (sock->asyncFlag == 0 &&
-      (sock->abortFlag == NULL || __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE) == 0) &&
+  } while (sock->asyncFlag == 0/**同步操作 */ &&
+      (sock->abortFlag == NULL || __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE) == 0)/**没有abort */ &&
       (sock->state == ncclSocketStateAccepting ||
-       sock->state == ncclSocketStateAccepted));
+       sock->state == ncclSocketStateAccepted))/**未接入client，继续轮询 */;
 
   if (sock->abortFlag && __atomic_load_n(sock->abortFlag, __ATOMIC_ACQUIRE)) return ncclInternalError;
 
@@ -850,7 +875,7 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock/*出参，待初始化的soc
   ncclResult_t ret = ncclSuccess;
 
   if (sock == NULL) goto exit;
-  sock->errorRetries = 0;
+  sock->errorRetries = 0;/**重试次数置为0*/
   sock->abortFlag = abortFlag;
   sock->asyncFlag = asyncFlag;
   sock->state = ncclSocketStateInitialized;/*状态指定为初始*/
@@ -873,11 +898,11 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock/*出参，待初始化的soc
       ret = ncclInternalError;
       goto exit;
     }
-    sock->salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+    sock->salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);/**设置地址长度 */
     // in case of error, we close the fd before returning as it's unclear if the caller has to use ncclSocketClose for cleanup
     NCCLCHECKGOTO(socketResetFd(sock), ret, fail);/*初始化socket*/
   } else {
-	  /*没有指定地址，置为0*/
+	  /*没有指定地址，地址置为0，且不初始化socket*/
     memset(&sock->addr, 0, sizeof(union ncclSocketAddress));
   }
 exit:
@@ -937,43 +962,53 @@ ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketSendRecv(struct ncclSocket* sendSock, void* sendPtr, int sendSize, struct ncclSocket* recvSock, void* recvPtr, int recvSize) {
+/**按要求发送和接收指定数据片 */
+ncclResult_t ncclSocketSendRecv(struct ncclSocket* sendSock/**发送socket */, void* sendPtr/**发送数据片指针 */, int sendSize/**发送数据片大小 */, struct ncclSocket* recvSock/**接收socket */, void* recvPtr/**接收数据片指针 */, int recvSize/**接收数据片大小 */) {
   int sendOffset = 0, recvOffset = 0;
   if (sendSock == NULL || recvSock == NULL) {
+    /**不能为空 */
     WARN("ncclSocketSendRecv: invalid socket %p/%p", sendSock, recvSock);
     return ncclInternalError;
   }
   if (sendSock->state != ncclSocketStateReady ||
       (recvSock->state != ncclSocketStateReady && recvSock->state != ncclSocketStateTerminating)) {
+        /**状态有误 */
     WARN("ncclSocketSendRecv: socket state (%d/%d) is not ready", sendSock->state, recvSock->state);
     return ncclInternalError;
   }
+
+  /**持续直到发送和接收完成，或者出错 */
   while (sendOffset < sendSize || recvOffset < recvSize) {
+    /*未完成发送，则执行发送*/
     if (sendOffset < sendSize) NCCLCHECK(socketProgress(NCCL_SOCKET_SEND, sendSock, sendPtr, sendSize, &sendOffset));
+    /*未完成接收，则执行接收*/
     if (recvOffset < recvSize) NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, recvSock, recvPtr, recvSize, &recvOffset));
   }
   return ncclSuccess;
 }
 
-
+/**按要求执行多个操作 */
 ncclResult_t ncclSocketMultiOp(struct ncclSocketOp* ops, int numOps) {
   if (ops == NULL || numOps <= 0) {
+    /**操作不能为空 */
     WARN("ncclSocketMultiOp: invalid arguments ops=%p numOps=%d", ops, numOps);
     return ncclInvalidArgument;
   }
 
+  /**不能没有socket */
   for (int i = 0; i < numOps; i++) {
     if (ops[i].sock == NULL) {
       WARN("ncclSocketMultiOp: invalid socket at index %d", i);
       return ncclInvalidArgument;
     }
-    ops[i].offset = 0;
+    ops[i].offset = 0;/**起始偏移必须为0 */
   }
   int completedOps=0, i=0;
   while(completedOps < numOps){
+    /**持续直到所有操作完成 */
     if (ops[i].offset < ops[i].size){
       NCCLCHECK(socketProgress(ops[i].op, ops[i].sock, ops[i].ptr, ops[i].size, &ops[i].offset));
-      if(ops[i].offset >= ops[i].size) completedOps++;
+      if(ops[i].offset >= ops[i].size) completedOps++;/*记录完成操作的数目*/
     }
     i=(i+1)%numOps;
   }

@@ -19,9 +19,10 @@ int ncclCudaCompCap() {
   int ccMajor, ccMinor;
   if (cudaDeviceGetAttribute(&ccMajor, cudaDevAttrComputeCapabilityMajor, cudaDev) != cudaSuccess) return 0;
   if (cudaDeviceGetAttribute(&ccMinor, cudaDevAttrComputeCapabilityMinor, cudaDev) != cudaSuccess) return 0;
-  return ccMajor*10+ccMinor;
+  return ccMajor*10+ccMinor;/**返回当前gpu的计算能力，格式为major*10 +minor，如70 */
 }
 
+/**将bdf号转换为字符串 */
 ncclResult_t int64ToBusId(int64_t id, char* busId) {
   sprintf(busId, "%04lx:%02lx:%02lx.%01lx", (id) >> 20, (id & 0xff000) >> 12, (id & 0xff0) >> 4, (id & 0xf));
   return ncclSuccess;
@@ -68,7 +69,7 @@ ncclResult_t getHostName(char* hostname, int maxlen, const char delim) {
   return ncclSuccess;
 }
 
-static uint64_t hostHashValue = 0;
+static uint64_t hostHashValue = 0;/*记录本主机的hash值，用于在communicator中唯一标识本主机 */
 /* Generate a hash of the unique identifying string for this host
  * that will be unique for both bare-metal and container instances
  * Equivalent of a hash of;
@@ -83,11 +84,11 @@ static void getHostHashOnce() {
   const char *hostId;
 
   // Fall back is the full hostname if something fails
-  (void) getHostName(hostHash, sizeof(hostHash), '\0');/*默认取hostname*/
+  (void) getHostName(hostHash, sizeof(hostHash), '\0');/*先默认取hostname*/
   int offset = strlen(hostHash);
 
   if ((hostId = ncclGetEnv("NCCL_HOSTID")) != NULL) {
-	  /*使用evn做为hostHash*/
+	  /*使用evn做为hostHash，直接赋值*/
     INFO(NCCL_ENV, "NCCL_HOSTID set by environment to %s", hostId);
     strncpy(hostHash, hostId, sizeof(hostHash)-1);
     hostHash[sizeof(hostHash)-1] = '\0';
@@ -96,7 +97,7 @@ static void getHostHashOnce() {
     if (file != NULL) {
       char *p;
       if (fscanf(file, "%ms", &p) == 1) {
-    	  /*设置HOSTID_FILE中的内容到hostHash*/
+    	  /*取boot_id到hostHash,放在hostname后面*/
         strncpy(hostHash+offset, p, sizeof(hostHash)-offset-1);
         free(p);
       }
@@ -109,8 +110,9 @@ static void getHostHashOnce() {
 
   TRACE(NCCL_INIT,"unique hostname '%s'", hostHash);
 
-  hostHashValue = getHash(hostHash, strlen(hostHash));/*利用hostname算hash值*/
+  hostHashValue = getHash(hostHash, strlen(hostHash));/*最终算出hash值*/
 }
+/**获取本主机的hash值（用于标记本机）*/
 uint64_t getHostHash(void) {
   static std::once_flag once;
   std::call_once(once, getHostHashOnce);
@@ -123,6 +125,7 @@ uint64_t getHostHash(void) {
  *
  * $$ $(readlink /proc/self/ns/pid)
  */
+/**获取本进程的hash值（用于标记本进程）*/
 uint64_t getPidHash(void) {
   char pname[1024];
   // Start off with our pid ($$)

@@ -313,7 +313,7 @@ struct ncclNvmlDeviceInfo {
   int computeCapabilityMajor, computeCapabilityMinor;
 };
 struct ncclNvmlDevicePairInfo {
-  nvmlGpuP2PStatus_t p2pStatusRead, p2pStatusWrite;
+  nvmlGpuP2PStatus_t p2pStatusRead/**p2p状态（读方向） */, p2pStatusWrite/**p2p状态（写方向） */;
 };
 extern int ncclNvmlDeviceCount;
 extern ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];

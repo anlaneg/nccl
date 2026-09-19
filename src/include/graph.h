@@ -100,20 +100,31 @@ ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system);
 #define NCCL_TOPO_PATTERN_COLLNET_DIRECT 6  // Collnet Direct
 struct ncclTopoGraph {
   // Input / output
+  /*算法编号 */
   int id; // ring : 0, tree : 1, collnet : 2, nvls : 3, collnetDirect : 4
+  /*拓扑模式 */
   int pattern;
   int crossNic;
   int collNet;
   int minChannels;
   int maxChannels;
   // Output
+  /*规划出几条并行通道*/
   int nChannels;
+  /*节点内估算带宽*/
   float bwIntra;
+  /*节点间估算带宽*/
   float bwInter;
+  /*节点间估算延迟*/
   float latencyInter;
+  /*节点内链路类型*/
+  float latencyInter;
+  /*节点内链路类型*/
   int typeIntra;
+  /*节点间链路类型*/
   int typeInter;
   int sameChannels;
+  /*节点间跳数*/
   int nHops;
   int intra[MAXCHANNELS*NCCL_TOPO_MAX_NODES];
   int64_t inter[MAXCHANNELS*2];
