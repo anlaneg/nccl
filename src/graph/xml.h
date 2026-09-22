@@ -24,20 +24,20 @@
 #define NODE_TYPE_SINGLE 3
 
 struct ncclXmlNode {
-  char name[MAX_STR_LEN+1];
+  char name[MAX_STR_LEN+1];/*节点名称 */
   struct {
-    char key[MAX_STR_LEN+1];
-    char value[MAX_STR_LEN+1];
+    char key[MAX_STR_LEN+1];/*属性名称 */
+    char value[MAX_STR_LEN+1];/*属性值 */
   } attrs[MAX_ATTR_COUNT+1]; // Need an extra one to consume extra params
-  int nAttrs;
-  int type;
-  struct ncclXmlNode* parent;
-  struct ncclXmlNode* subs[MAX_SUBS];
-  int nSubs;
+  int nAttrs;/*属性数量 */
+  int type;/*节点类型 */
+  struct ncclXmlNode* parent;/*父节点 */
+  struct ncclXmlNode* subs[MAX_SUBS];/*子节点 */
+  int nSubs;/*子节点数量 */
 };
 
 struct ncclXml {
-  int maxIndex, maxNodes;
+  int maxIndex, maxNodes;/*最大节点索引，最大节点数 */
   struct ncclXmlNode nodes[1];
 };
 
@@ -66,11 +66,12 @@ ncclResult_t ncclTopoConvertXml(struct ncclXml* xml, uintptr_t base, int exp);
 /**************/
 
 static size_t xmlMemSize(int maxNodes) {
+  /*按最大节点数计算内存大小 */
   return offsetof(struct ncclXml, nodes) + sizeof(struct ncclXmlNode)*maxNodes;
 }
-static ncclResult_t xmlAlloc(struct ncclXml** xml, int maxNodes) {
+static ncclResult_t xmlAlloc(struct ncclXml** xml/*出参，xml结构体指针  */, int maxNodes) {
   char* mem;
-  NCCLCHECK(ncclCalloc(&mem, xmlMemSize(maxNodes)));
+  NCCLCHECK(ncclCalloc(&mem, xmlMemSize(maxNodes)));/**申请node */
   *xml = (struct ncclXml*)mem;
   (*xml)->maxNodes = maxNodes;
   return ncclSuccess;

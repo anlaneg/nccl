@@ -759,7 +759,7 @@ ncclResult_t ncclTopoRefreshBcmP2pLinks(void) {
       INFO(NCCL_GRAPH, "Failed to read refresh_switch_toplogy");
     fclose(fp);
   }
-  return ncclSuccess;
+  return ncclSuccess;/*如果无此文件，也不失败 */
 }
 
 // This is just checking for direct descendence
@@ -1420,9 +1420,11 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   NCCLCHECK(xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES));
   const char* xmlTopoFile = ncclGetEnv("NCCL_TOPO_FILE");
   if (xmlTopoFile) {
+    /*从环境变量中获取topo文件路径，并加载进xml */
     INFO(NCCL_ENV, "NCCL_TOPO_FILE set by environment to %s", xmlTopoFile);
     NCCLCHECKGOTO(ncclTopoGetXmlFromFile(xmlTopoFile, xml, 1), ret, fail);
   } else {
+    /*从默认路径获取topo文件,并加载进xml */
     // Try default XML topology location
     NCCLCHECKGOTO(ncclTopoGetXmlFromFile("/var/run/nvidia-topologyd/virtualTopology.xml", xml, 0), ret, fail);
   }
@@ -1432,14 +1434,14 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   // intended to be preserved from the XML files that have been read.
   NCCLCHECKGOTO(xmlFindTag(xml, "cpu", &node), ret, fail);
   while (node != nullptr) {
-    NCCLCHECKGOTO(xmlSetAttrLong(node, "host_hash", getHostHash()), ret, fail);
-    NCCLCHECKGOTO(xmlFindNextTag(xml, "cpu", node, &node), ret, fail);
+    NCCLCHECKGOTO(xmlSetAttrLong(node, "host_hash", getHostHash()), ret, fail);/*设置cpu节点的host_hash属性 */
+    NCCLCHECKGOTO(xmlFindNextTag(xml, "cpu", node, &node), ret, fail);/*找到下一个cpu节点 */
   }
-  if (xml->maxIndex == 0) {
+  if (xml->maxIndex == 0) {/**当前节点为空，创建根节点 */
     // Create top tag
     struct ncclXmlNode* top;
-    NCCLCHECKGOTO(xmlAddNode(xml, NULL, "system", &top), ret, fail);
-    NCCLCHECKGOTO(xmlSetAttrInt(top, "version", NCCL_TOPO_XML_VERSION), ret, fail);
+    NCCLCHECKGOTO(xmlAddNode(xml, NULL, "system", &top), ret, fail);/*添加system节点 */
+    NCCLCHECKGOTO(xmlSetAttrInt(top, "version", NCCL_TOPO_XML_VERSION), ret, fail);/*设置system节点的version属性 */
   }
 
   NCCLCHECKGOTO(ncclTopoRefreshBcmP2pLinks(), ret, fail);
@@ -1449,6 +1451,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   NCCLCHECKGOTO(int64ToBusId(comm->peerInfo[comm->rank].busId, busId), ret, fail);
   NCCLCHECKGOTO(ncclTopoFillGpu(xml, busId, &node), ret, fail);
   if (node) {
+    /*设置gpu节点的keep,rank,gdr属性 */
     NCCLCHECKGOTO(xmlSetAttrInt(node, "keep", 1), ret, fail);
     NCCLCHECKGOTO(xmlSetAttrInt(node, "rank", comm->rank), ret, fail);
     NCCLCHECKGOTO(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport), ret, fail);
@@ -1502,16 +1505,18 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       if (comm->peerInfo[i].hostHash == comm->peerInfo[comm->rank].hostHash) {
         if (i == comm->rank)
           localRank = nLocalRanks;
-        localRanks[nLocalRanks++] = i;
+        localRanks[nLocalRanks++] = i;/*记录和当前节点在同一主机的rank */
       }
     }
   }
-  NCCLCHECKGOTO(ncclCalloc(&mem, nLocalRanks * xmlMemSize(NCCL_TOPO_XML_MAX_NODES)), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&mem, nLocalRanks/*和当前节点在同一主机的rank数量 */ * xmlMemSize(NCCL_TOPO_XML_MAX_NODES)), ret, fail);
   rankXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*localRank);
-  memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));
+  memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));/**写入自身对应的xml位置 */
+  /**设置parent,subs属性 */
   NCCLCHECKGOTO(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1), ret, fail);
   // nLocalRanks can't actually be 0, or we wouldn't be running at all...
   // coverity[divide_by_zero]
+  /**同步mem中的所有节点的xml位置 */
   NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem, xmlMemSize(NCCL_TOPO_XML_MAX_NODES)), ret, fail);
   if (comm->MNNVL) {
     // Ensure that we have enough room when fusing topos from multiple nodes.
@@ -1524,17 +1529,17 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   }
   for (int i = 0; i < nLocalRanks; i++) {
     struct ncclXml* peerXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*i);
-    NCCLCHECKGOTO(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0), ret, fail);
-    NCCLCHECKGOTO(ncclTopoFuseXml(xml, peerXml), ret, fail);
+    NCCLCHECKGOTO(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0), ret, fail);/**转换peerXml的parent,subs属性 */
+    NCCLCHECKGOTO(ncclTopoFuseXml(xml, peerXml), ret, fail);/**融合peerXml到xml */
   }
 
   if (dumpXmlFile && comm->rank == ncclParamTopoDumpFileRank()) {
     INFO(NCCL_ENV, "NCCL_TOPO_DUMP_FILE set by environment to %s", dumpXmlFile);
-    NCCLCHECKGOTO(ncclTopoDumpXmlToFile(dumpXmlFile, xml), ret, fail);
+    NCCLCHECKGOTO(ncclTopoDumpXmlToFile(dumpXmlFile, xml), ret, fail);/**写入到dumpXmlFile文件 */
   }
 
   // Only update our topo tracking structure if we aren't dumping (separate steps)
-  if (dumpXmlFile == NULL) NCCLCHECKGOTO(ncclTopoGetSystemFromXml(xml, system, getHostHash()), ret, fail);
+  if (dumpXmlFile == NULL) NCCLCHECKGOTO(ncclTopoGetSystemFromXml(xml, system/** 从xml中获取拓扑结构 */, getHostHash()), ret, fail);
 
 exit:
   if (!comm->MNNVL && localRanks) free(localRanks);

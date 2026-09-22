@@ -126,7 +126,7 @@ struct ncclTopoLinkList {
 #define NCCL_TOPO_ID(systemid, localid) (((int64_t)systemid << 56) + (localid & NCCL_TOPO_ID_LOCAL_ID_MASK))
 
 struct ncclTopoNode {
-  int type;
+  int type;/**节点类型 */
   int64_t id;
   // Type specific data
   union {
@@ -161,7 +161,7 @@ struct ncclTopoNode {
   int nlinks;
   struct ncclTopoLink links[NCCL_TOPO_MAX_LINKS];
   // Pre-computed paths to GPUs and NICs
-  struct ncclTopoLinkList* paths[NCCL_TOPO_NODE_TYPES];
+  struct ncclTopoLinkList* paths[NCCL_TOPO_NODE_TYPES];/**路径数组,每种类型一个指针 */
   // Used during search
   uint64_t used;
 };

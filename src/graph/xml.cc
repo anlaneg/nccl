@@ -125,16 +125,18 @@ ncclResult_t xmlSkipComment(FILE* file, char* start, char next) {
 
 ncclResult_t xmlGetNode(FILE* file, struct ncclXmlNode* node) {
   node->type = NODE_TYPE_NONE;
+  /**跳过空字符 */
   char c = ' ';
   while (c == ' ' || c == '\n' || c == '\r') {
     if (fread(&c, 1, 1, file) == 0) return ncclSuccess;
   }
+  /*遇到非标签起始符，格式有误*/
   if (c != '<') {
     WARN("XML Parse error : expecting '<', got '%c'", c);
     return ncclInternalError;
   }
   // Read XML element name
-  NCCLCHECK(xmlGetToken(file, node->name, NULL, &c));
+  NCCLCHECK(xmlGetToken(file, node->name, NULL, &c));/**读取节点名称*/
 
   // Check for comments
   if (strncmp(node->name, "!--", 3) == 0) {
@@ -144,6 +146,7 @@ ncclResult_t xmlGetNode(FILE* file, struct ncclXmlNode* node) {
 
   // Check for closing tag
   if (node->name[0] == '\0' && c == '/') {
+    /**遇到关闭标签*/
     node->type = NODE_TYPE_CLOSE;
     // Re-read the name, we got '/' in the first call
     NCCLCHECK(xmlGetToken(file, node->name, NULL, &c));
@@ -159,6 +162,7 @@ ncclResult_t xmlGetNode(FILE* file, struct ncclXmlNode* node) {
   // Get Attributes
   int a = 0;
   while (c == ' ') {
+    /*读取属性*/
     NCCLCHECK(xmlGetToken(file, node->attrs[a].key, node->attrs[a].value, &c));
     if (a == MAX_ATTR_COUNT) {
       INFO(NCCL_GRAPH, "XML Parse : Ignoring extra attributes (max %d)", MAX_ATTR_COUNT);
@@ -189,12 +193,13 @@ ncclResult_t xmlLoadSub(FILE* file, struct ncclXml* xml, struct ncclXmlNode* hea
   if (head && head->type == NODE_TYPE_SINGLE) return ncclSuccess;
   while (1) {
     if (xml->maxIndex == xml->maxNodes) {
-      WARN("Error : XML parser is limited to %d nodes", xml->maxNodes);
+      /**节点数量超过最大限制,报错*/
+           WARN("Error : XML parser is limited to %d nodes", xml->maxNodes);
       return ncclInternalError;
     }
     struct ncclXmlNode* node = xml->nodes+xml->maxIndex;
-    memset(node, 0, sizeof(struct ncclXmlNode));
-    NCCLCHECK(xmlGetNode(file, node));
+    memset(node, 0, sizeof(struct ncclXmlNode));/*清空 */
+    NCCLCHECK(xmlGetNode(file, node));/**读取并填充节点*/
     if (node->type == NODE_TYPE_NONE) {
       if (head) {
         WARN("XML Parse : unterminated %s", head->name);
@@ -213,6 +218,7 @@ ncclResult_t xmlLoadSub(FILE* file, struct ncclXml* xml, struct ncclXmlNode* hea
     }
     int found = 0;
     for (int h=0; h<nHandlers; h++) {
+      /**遍历所有处理函数，查找匹配的节点名称*/
       if (strcmp(node->name, handlers[h].name) == 0) {
         if (head) {
           if (head->nSubs == MAX_SUBS) {
@@ -224,7 +230,7 @@ ncclResult_t xmlLoadSub(FILE* file, struct ncclXml* xml, struct ncclXmlNode* hea
         node->parent = head;
         node->nSubs = 0;
         xml->maxIndex++;
-        NCCLCHECK(handlers[h].func(file, xml, node));
+        NCCLCHECK(handlers[h].func(file, xml, node));/**调用处理函数*/
         found = 1;
         break;
       }
@@ -283,7 +289,7 @@ ncclResult_t ncclTopoDumpXmlToFile(const char* xmlTopoFile, struct ncclXml* xml)
     INFO(NCCL_GRAPH|NCCL_ENV, "Unable to open %s, not dumping topology.", xmlTopoFile);
     return ncclSuccess;
   }
-  NCCLCHECK(ncclTopoDumpXmlRec(0, file, xml->nodes));
+  NCCLCHECK(ncclTopoDumpXmlRec(0, file, xml->nodes));/**写到文件 */
   fclose(file);
   return ncclSuccess;
 }
@@ -304,17 +310,17 @@ static ncclResult_t xmlTopoFuseXmlRecursive(struct ncclXml* dst, struct ncclXmlN
 
 ncclResult_t ncclTopoFuseXml(struct ncclXml* dst, struct ncclXml* src) {
   struct ncclXmlNode* topNodeDst;
-  NCCLCHECK(xmlFindTag(dst, "system", &topNodeDst));
+  NCCLCHECK(xmlFindTag(dst, "system", &topNodeDst));/**找system节点 */
 
   if (topNodeDst == NULL) {
-    xmlAddTree(dst, NULL, src->nodes);
+    xmlAddTree(dst, NULL, src->nodes);/**如果dst中没有system节点，直接添加src的system节点 */
     return ncclSuccess;
   }
 
   struct ncclXmlNode* topNodeSrc;
-  NCCLCHECK(xmlFindTag(src, "system", &topNodeSrc));
+  NCCLCHECK(xmlFindTag(src, "system", &topNodeSrc));/**取src的system节点 */
 
-  NCCLCHECK(xmlTopoFuseXmlRecursive(dst, topNodeDst, topNodeSrc));
+  NCCLCHECK(xmlTopoFuseXmlRecursive(dst, topNodeDst, topNodeSrc));/**递归融合子节点到dst */
 
   return ncclSuccess;
 }
@@ -335,10 +341,12 @@ ncclResult_t ncclTopoXmlLoadPciLink(FILE* file, struct ncclXml* xml, struct nccl
 }
 
 ncclResult_t ncclTopoXmlLoadC2c(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
+  /*只加载节点及属性*/
   NCCLCHECK(xmlLoadSub(file, xml, head, NULL, 0));
   return ncclSuccess;
 }
 ncclResult_t ncclTopoXmlLoadGpu(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
+  /**在gpu节点下，考虑nvlink,c2c节点*/
   struct xmlHandler handlers[] = { { "nvlink", ncclTopoXmlLoadNvlink }, { "c2c", ncclTopoXmlLoadC2c } };
   NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 2));
   return ncclSuccess;
@@ -350,27 +358,31 @@ ncclResult_t ncclTopoXmlLoadNet(FILE* file, struct ncclXml* xml, struct ncclXmlN
 }
 
 ncclResult_t ncclTopoXmlLoadNic(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
-  struct xmlHandler handlers[] = { { "net", ncclTopoXmlLoadNet } };
+  struct xmlHandler handlers[] = { { "net", ncclTopoXmlLoadNet/*加载net节点*/ } };
   NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 1));
   return ncclSuccess;
 }
 
 ncclResult_t ncclTopoXmlLoadPci(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
-  struct xmlHandler handlers[] = { { "pci", ncclTopoXmlLoadPci }, { "gpu", ncclTopoXmlLoadGpu }, { "nic", ncclTopoXmlLoadNic}, { "pcilink", ncclTopoXmlLoadPciLink} };
+  /**在pci节点下，考虑pci,gpu,nic,pcilink节点*/
+  struct xmlHandler handlers[] = { { "pci", ncclTopoXmlLoadPci }, { "gpu", ncclTopoXmlLoadGpu }, { "nic", ncclTopoXmlLoadNic}, { "pcilink", ncclTopoXmlLoadPciLink/*加载pcilink节点*/ } };
   NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 4));
   return ncclSuccess;
 }
 
 ncclResult_t ncclTopoXmlLoadCpu(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
+  /**在cpu节点下，只考虑pci和nic节点*/
   struct xmlHandler handlers[] = { { "pci", ncclTopoXmlLoadPci }, { "nic", ncclTopoXmlLoadNic } };
   NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 2));
   return ncclSuccess;
 }
 
+/**加载system节点*/
 ncclResult_t ncclTopoXmlLoadSystem(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
   int version;
   NCCLCHECK(xmlGetAttrInt(head, "version", &version));
   if (version != NCCL_TOPO_XML_VERSION) {
+    /**版本号错误*/
     WARN("XML Topology has wrong version %d, %d needed", version, NCCL_TOPO_XML_VERSION);
     return ncclInvalidUsage;
   }
@@ -379,6 +391,7 @@ ncclResult_t ncclTopoXmlLoadSystem(FILE* file, struct ncclXml* xml, struct ncclX
   if (name != NULL) INFO(NCCL_GRAPH, "Loading topology %s", name);
   else INFO(NCCL_GRAPH, "Loading unnamed topology");
 
+  /**在system节点下，只考虑cpu节点*/
   struct xmlHandler handlers[] = { { "cpu", ncclTopoXmlLoadCpu } };
   NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 1));
   return ncclSuccess;
@@ -387,6 +400,7 @@ ncclResult_t ncclTopoXmlLoadSystem(FILE* file, struct ncclXml* xml, struct ncclX
 ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml, int warn) {
   FILE* file = fopen(xmlTopoFile, "r");
   if (file == NULL) {
+    /**打开文件失败*/
     if (warn) {
       INFO(NCCL_GRAPH|NCCL_ENV, "Could not open XML topology file %s : %s", xmlTopoFile, strerror(errno));
     }
@@ -410,6 +424,7 @@ ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml
 static void memcpylower(char* dst, const char* src, const size_t size) {
   for (int i=0; i<size; i++) dst[i] = tolower(src[i]);
 }
+/*拼出此busId对应的pci节点路径*/
 static ncclResult_t getPciPath(const char* busId, char** path) {
   char busPath[] = "/sys/class/pci_bus/0000:00/../../0000:00:00.0";
   memcpylower(busPath+sizeof("/sys/class/pci_bus/")-1, busId, BUSID_REDUCED_SIZE-1);
@@ -444,6 +459,7 @@ static ncclResult_t getBcmLinks(const char* busId, int* nlinks, char** peers) {
   return ncclSuccess;
 }
 
+/**取指定路径下指定文件的内容 */
 ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName, char* strValue) {
   char filePath[PATH_MAX];
   snprintf(filePath, sizeof(filePath), "%s/%s", path, fileName);
@@ -467,8 +483,8 @@ ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName, char*
 
 ncclResult_t ncclTopoSetAttrFromSys(struct ncclXmlNode* pciNode, const char* path, const char* fileName, const char* attrName) {
   char strValue[MAX_STR_LEN];
-  NCCLCHECK(ncclTopoGetStrFromSys(path, fileName, strValue));
-  if (strValue[0] != '\0') { NCCLCHECK(xmlSetAttr(pciNode, attrName, strValue)); }
+  NCCLCHECK(ncclTopoGetStrFromSys(path, fileName, strValue));/*自sys下取内容 */
+  if (strValue[0] != '\0') { NCCLCHECK(xmlSetAttr(pciNode, attrName, strValue)); }/*自用sys下取的内容设置属性*/
   TRACE(NCCL_GRAPH, "Read from sys %s/%s -> %s=%s", path, fileName, attrName, strValue);
   return ncclSuccess;
 }
@@ -551,6 +567,7 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
 ncclResult_t ncclTopoGetPciNode(struct ncclXml* xml, const char* busId, struct ncclXmlNode** pciNode) {
   NCCLCHECK(xmlFindTagKv(xml, "pci", pciNode, "busid", busId));
   if (*pciNode == NULL) {
+    /*如果未找到pci节点，添加一个新pci节点*/
     NCCLCHECK(xmlAddNode(xml, NULL, "pci", pciNode));
     NCCLCHECK(xmlSetAttr(*pciNode, "busid", busId));
   }
@@ -578,11 +595,13 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   NOWARN(getPciPath(busId, &path), NCCL_GRAPH);
 
   if (path) {
+    /**从sys下取class文件，设置为pci节点的class属性 */
     NCCLCHECK(ncclTopoSetAttrFromSys(pciNode, path, "class", "class"));
   }
   int index;
   NCCLCHECKNOWARN(xmlGetAttrIndex(pciNode, "vendor", &index), NCCL_GRAPH);
   if (index == -1) {
+    /**从sys下取vendor文件，设置为pci节点的vendor属性 */
     if (path) NOWARN(ncclTopoSetAttrFromSys(pciNode, path, "vendor", "vendor"), NCCL_GRAPH);
   }
   NCCLCHECKNOWARN(xmlGetAttrIndex(pciNode, "device", &index), NCCL_GRAPH);
@@ -734,6 +753,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
 ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvmlDev, struct ncclXml* xml, struct ncclXmlNode** gpuNodeRet) {
   struct ncclXmlNode* gpuNode = NULL;
   NCCLCHECK(xmlGetSub(pciNode, "gpu", &gpuNode));
+  /**如果未找到gpu节点，添加一个新gpu节点*/
   if (gpuNode == NULL) NCCLCHECK(xmlAddNode(xml, pciNode, "gpu", &gpuNode));
 
   int index = -1;
@@ -882,11 +902,11 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
 ncclResult_t ncclTopoFillGpu(struct ncclXml* xml, const char* busId, struct ncclXmlNode** gpuNode) {
   struct ncclXmlNode* node;
   NCCLCHECK(ncclTopoGetPciNode(xml, busId, &node));
-  NCCLCHECK(xmlSetAttrIfUnset(node, "class", "0x03"));
-  NCCLCHECK(ncclTopoGetXmlFromSys(node, xml));
+  NCCLCHECK(xmlSetAttrIfUnset(node, "class", "0x03"));/*指明为GPU*/
+  NCCLCHECK(ncclTopoGetXmlFromSys(node, xml));/*从sys下取内容，设置为node的属性*/
   nvmlDevice_t nvmlDev;
   NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
-  NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, xml, gpuNode));
+  NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, xml, gpuNode));/*如有必要添加gpu节点信息 */
   return ncclSuccess;
 }
 
@@ -968,7 +988,7 @@ ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
     *keep = 0;
     for (int s=0; s<nSubs; s++) {
       int k = 0;
-      NCCLCHECK(ncclTopoTrimXmlRec(subs[s], &k));
+      NCCLCHECK(ncclTopoTrimXmlRec(subs[s], &k));/*递归处理子节点 */
       *keep += k;
     }
     // Remove node if it has no children and no keep attribute
@@ -981,7 +1001,7 @@ ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
       NCCLCHECK(xmlGetAttr(node, "busid", &busid));
       TRACE(NCCL_GRAPH, "Removing node %s %s %s\n", node->name, name, busid);
 #endif
-      NCCLCHECK(xmlRemoveNode(node));
+      NCCLCHECK(xmlRemoveNode(node));/*无子节点，移除 */
     }
   }
   return ncclSuccess;

@@ -12,7 +12,7 @@
 // Determine if MNNVL support is available
 ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
   // MNNVL requires cuMem to be enabled
-  if (!ncclCuMemEnable()) return ncclSuccess;
+  if (!ncclCuMemEnable()) return ncclSuccess;/*需要cuMem开启 */
 
   // MNNVL also requires FABRIC handle support
   int cudaDev;

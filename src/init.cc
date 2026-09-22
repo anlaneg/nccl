@@ -943,19 +943,24 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   do {
     // Compute intra-process ranks
-    int intraProcRank0 = -1, intraProcRank = -1, intraProcRanks = 0;
+    int intraProcRank0 = -1/**第一个与当前rank在同一个主机且在同一个进程的（最小）rank*/, intraProcRank = -1/**本rank在同进程rank中的序号*/, intraProcRanks = 0/**累计同进程rank数 */;
 
     comm->nvlsRegSupport = 1;
     for (int i = 0; i < nranks; i++) {
+      /*统计通信域中minCompCap和maxCompCap */
       comm->minCompCap = std::min(comm->minCompCap, comm->peerInfo[i].cudaCompCap);
       comm->maxCompCap = std::max(comm->maxCompCap, comm->peerInfo[i].cudaCompCap);
       if ((comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash) &&
           (comm->peerInfo[i].pidHash == comm->peerInfo[rank].pidHash)) {
+            /*i号rank和当前rank在同一个主机且在同一个进程 */
         // Rank is in same process
-        if (intraProcRanks == 0) intraProcRank0 = i;
-        if (i == rank) intraProcRank = intraProcRanks;
-        intraProcRanks++;
+        if (intraProcRanks == 0) intraProcRank0 = i;/*第一个与当前rank在同一个主机且在同一个进程的（最小）rank */
+        if (i == rank) intraProcRank = intraProcRanks;/*本rank在同进程rank中的序号 */
+        intraProcRanks++;/*累计同进程rank数增加*/
         if (intraProcRank0 == rank && rank != i) {
+          /* 与rank在同一个进程中的最小rank是自已，且当前与rank在同一进程中的i是另一个rank id
+          将这个i对应的comm设置为comm->intraNext的链表头
+           */
           comm->peerInfo[i].comm->intraNext = comm->intraNext;
           comm->intraNext = comm->peerInfo[i].comm;
         }
@@ -965,7 +970,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
         for (int j = i + 1; j < nranks; j++) {
           if (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash &&
             comm->peerInfo[i].pidHash == comm->peerInfo[j].pidHash) {
-            comm->nvlsRegSupport = 0;
+            comm->nvlsRegSupport = 0;/*存在同进程的rank，不支持NVLS注册 */
             break;
           }
         }
@@ -978,13 +983,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
     TRACE(NCCL_INIT,"pidHash[%d] %lx intraProcRank %d intraProcRanks %d intraProcRank0 %d",
         rank, comm->peerInfo[rank].pidHash, intraProcRank, intraProcRanks, intraProcRank0);
-    if (intraProcRank == -1 || intraProcRank0 == -1 || comm->peerInfo[intraProcRank0].comm == NULL) {
+    if (intraProcRank == -1/*存在多个rank在本进程，且当前rank不是最小编号的 */ || intraProcRank0 == -1 || comm->peerInfo[intraProcRank0].comm == NULL) {
       WARN("Failed to determine intra proc ranks rank %d hostHash %lx pidHash %lx intraProcRank %d intraProcRanks %d intraProcRank0 %d",
           rank, comm->peerInfo[rank].hostHash, comm->peerInfo[rank].pidHash,
           intraProcRank, intraProcRanks, intraProcRank0);
       ret = ncclInternalError;
       goto fail;
     }
+    /*第一个与当前rank在同一个进程中的comm,定为进程头communicator */
     struct ncclComm* comm0 = comm->peerInfo[intraProcRank0].comm;
     assert(intraProcRank==0 ? comm==comm0 : true);
     comm->intraComm0 = comm0;
@@ -999,13 +1005,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // Dump XML if requested by user
   const char* dumpXmlFile;
-  dumpXmlFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE");
+  dumpXmlFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE");/**取topo dump文件路径 */
   if (dumpXmlFile) {
-    NCCLCHECKGOTO(ncclTopoGetSystem(comm, NULL, dumpXmlFile), ret, fail);
+    /*给定dumpXmlFile，从dumpXmlFile中获取拓扑结构,写到文件 */
+       NCCLCHECKGOTO(ncclTopoGetSystem(comm, NULL, dumpXmlFile), ret, fail);
   }
 
   // Topo detection / System graph creation
-  NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);
+  NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);/**加载拓扑结构到comm->topo */
   // Compute paths between GPUs and NICs
   NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
   // Remove inaccessible GPUs and unused NICs

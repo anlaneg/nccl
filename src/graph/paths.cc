@@ -20,7 +20,8 @@ struct ncclTopoNodeList {
   int count;
 };
 
-static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t, int64_t id, struct ncclTopoLinkList** path) {
+/**通过节点类型和ID，获取该节点的路径数组指针，用于后续设置路径 */
+static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t/**节点类型 */, int64_t id, struct ncclTopoLinkList** path) {
   for (int i=0; i<system->nodes[t].count; i++) {
     if (system->nodes[t].nodes[i].id == id) {
       *path = node->paths[t]+i;
@@ -35,14 +36,16 @@ NCCL_PARAM(NvbDisable, "NVB_DISABLE", 0);
 
 static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclTopoSystem* system) {
   if (baseNode->paths[baseNode->type] == NULL) {
+    /*初始化此类型paths数组*/
     NCCLCHECK(ncclCalloc(baseNode->paths+baseNode->type, system->nodes[baseNode->type].count));
+    /**先置为disconnect */
     for (int i=0; i<system->nodes[baseNode->type].count; i++) baseNode->paths[baseNode->type][i].type = PATH_DIS;
   }
 
   // breadth-first search to set all paths to that node in the system
   struct ncclTopoNodeList nodeList;
   struct ncclTopoNodeList nextNodeList = { { 0 }, 0 };
-  nodeList.count = 1; nodeList.list[0] = baseNode;
+  nodeList.count = 1; nodeList.list[0] = baseNode;/**baseNode做为第一个 */
   struct ncclTopoLinkList* basePath;
   NCCLCHECK(getPath(system, baseNode, baseNode->type, baseNode->id, &basePath));
   basePath->count = 0;
@@ -56,9 +59,10 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
       struct ncclTopoLinkList* path;
       NCCLCHECK(getPath(system, node, baseNode->type, baseNode->id, &path));
       for (int l=0; l<node->nlinks; l++) {
-        struct ncclTopoLink* link = node->links+l;
+        struct ncclTopoLink* link = node->links+l;/**取l号link */
         struct ncclTopoNode* remNode = link->remNode;
         if (remNode->paths[baseNode->type] == NULL) {
+          /**初始化此类型paths数组*/
           NCCLCHECK(ncclCalloc(remNode->paths+baseNode->type, system->nodes[baseNode->type].count));
           for (int i=0; i<system->nodes[baseNode->type].count; i++) remNode->paths[baseNode->type][i].type = PATH_DIS;
         }
@@ -203,6 +207,7 @@ static ncclResult_t addInterStep(struct ncclTopoSystem* system, int tx, int ix, 
 // Remove/free all paths
 static void ncclTopoRemovePaths(struct ncclTopoSystem* system) {
   for (int t1=0; t1<NCCL_TOPO_NODE_TYPES; t1++) {
+    /*遍历System下所有节点(cpu,net,gpu等) ，这些节点其下有paths数组的，释放掉*/
     for (int n=0; n<system->nodes[t1].count; n++) {
       struct ncclTopoNode* node = system->nodes[t1].nodes+n;
       for (int t2=0; t2<NCCL_TOPO_NODE_TYPES; t2++) {
@@ -221,7 +226,7 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
       const char* str = ncclGetEnv(disableEnv);
       if (str) {
         int disable = strtol(str, NULL, 0);
-        if (disable == 1) l = PATH_LOC;
+        if (disable == 1) l = PATH_LOC;/**disable为真，l取PATH_LOC   */
         if (l >= 0) INFO(NCCL_ALL, "%s set by environment to %d", disableEnv, disable);
       }
     }
@@ -231,7 +236,7 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
         for (int i=0; i<=PATH_SYS; i++) {
           if (strcmp(str, topoPathTypeStr[i]) == 0) {
             l = i;
-            break;
+            break;/**找到匹配的path类型，跳出循环 */
           }
         }
         // Old style numbering
@@ -239,11 +244,12 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
         // "old level" int, and each value mapping to the correct value defined in topo.h
         // maxOldLevel is a quick check to handle out of bounds (based on the length of levelsOldToNew)
         if (l == -1 && str[0] >= '0' && str[0] <= '9') {
-          int oldLevel = strtol(str, NULL, 0);
+          int oldLevel = strtol(str, NULL, 0);/*环境变量中指出的可能是数字*/
           const int maxOldLevel = sizeof(levelsOldToNew)/sizeof(int) - 1;
           if (oldLevel > maxOldLevel) oldLevel = maxOldLevel;
-          l = levelsOldToNew[oldLevel];
+          l = levelsOldToNew[oldLevel];/**根据oldLevel取对应的path类型 */
         }
+        /*显示path类型*/
         if (l >= 0) INFO(NCCL_ALL, "%s set by environment to %s", levelEnv, topoPathTypeStr[l]);
       }
     }
@@ -260,6 +266,7 @@ static int ncclTopoUserP2pLevel = -1; // Initially "uninitialized".  When initia
 // of the "level" argument is left unchanged.
 ncclResult_t ncclGetUserP2pLevel(int* level) {
   if (ncclTopoUserP2pLevel == -1)
+    /*依据环境变量设置ncclTopoUserP2pLevel*/
     NCCLCHECK(ncclGetLevel(&ncclTopoUserP2pLevel, "NCCL_P2P_DISABLE", "NCCL_P2P_LEVEL"));
   if (ncclTopoUserP2pLevel != -2)
     *level = ncclTopoUserP2pLevel;
@@ -642,7 +649,7 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
   // Precompute paths between GPUs/NICs.
 
   // Remove everything in case we're re-computing
-  ncclTopoRemovePaths(system);
+  ncclTopoRemovePaths(system);/**先移除掉所有Paths */
 
   // Set direct paths to CPUs. We need them in many cases.
   for (int c=0; c<system->nodes[CPU].count; c++) {

@@ -455,7 +455,7 @@ struct ncclComm {
   int* topParentLocalRanks;
   struct ncclChannel channels[MAXCHANNELS];
   struct ncclPeerInfo* peerInfo;/*nRanks+1个peerInfo结构（记录自身及peer信息）*/
-  struct ncclTopoSystem* topo;/*拓扑*/
+  struct ncclTopoSystem* topo;/*拓扑(由xml获得的)*/
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
   bool peerInfoValid;/*标记peerInfo是否有效(已填充) */
@@ -585,11 +585,13 @@ struct ncclComm {
   uint32_t workFifoConsumed;
 
   // Intra-process sync
-  /*同一类型并行指行时，如果此值不同也不一组并行执行（见groupLaunch）*/
+  /*本 rank 所在进程的进程头 comm 指针
+  同一类型并行指行时，如果此值不同也不一组并行执行（见groupLaunch）*/
   struct ncclComm* intraComm0; // leader of intra-process comms (self possible)
+  /*用于串连第一个与本rank同进程的communicator*/
   struct ncclComm* intraNext; // next of intra-process comms, intraComm0 is head
-  int intraRank;
-  int intraRanks;
+  int intraRank;/*本rank在同进程rank中的序号*/
+  int intraRanks;/*累计与本rank同进程的rank数*/
   uint32_t intraBarrierPhase;
   char intraPad1[64 - sizeof(uint64_t)];
   uint64_t intraBarrierCounter; // only used if this is intraComm0
@@ -610,7 +612,7 @@ struct ncclComm {
 
   // NVLink SHARP (NVLS) support
   int nvlsSupport;
-  int nvlsRegSupport;
+  int nvlsRegSupport;/*如存在同进程的rank，则不支持NVLS注册 */
   /* sharable NVLS resource. */
   struct ncclNvlsSharedRes* nvlsResources;
 
