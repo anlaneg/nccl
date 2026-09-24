@@ -81,7 +81,7 @@ void ncclOsDlclose(ncclOsLibraryHandle handle) {
 
 // Process Management
 uint64_t ncclOsGetPid() {
-  return (uint64_t)getpid();
+  return (uint64_t)getpid();/*取当前进程pid*/
 }
 
 std::tm* ncclOsLocaltime(const time_t* timer, std::tm* buf) {

@@ -2142,7 +2142,7 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   ncclResult_t res = ncclSuccess;
   int archMajor, archMinor;
   size_t maxLocalSizeBytes = 0;
-  int cudaDev = job->cudaDev;
+  int cudaDev = job->cudaDev;/*取job对应的gpu*/
   int* parentRanks = NULL;
   int cudaArch;
   int maxSharedMem = 0;

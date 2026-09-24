@@ -450,6 +450,7 @@ ncclResult_t ncclSocketReady(struct ncclSocket* sock, int* running/*出参，是
   return ncclSuccess;
 }
 
+/*执行连接*/
 ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN + 1];
