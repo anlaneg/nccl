@@ -1123,6 +1123,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->nChannels = std::min(treeGraph->nChannels, ringGraph->nChannels);
   NCCLCHECKGOTO(ncclTopoPreset(comm, graphs, &allGather3Data[rank].topoRanks), ret, fail);
 
+  /*交换allGather3Data*/
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allGather3Data, sizeof(*allGather3Data)), ret, fail);
 
   // Determine nNodes, firstRanks, ...
@@ -1457,12 +1458,12 @@ NCCL_PARAM(NvlinkUtilCentricSchedEnable, "NVLINK_UTIL_CENTRIC_SCHED_ENABLE", NCC
 #define NCCL_COMMINIT_FUNCNAME_LEN 128
 struct ncclCommInitRankAsyncJob {
   struct ncclAsyncJob base;
-  struct ncclComm* comm;
+  struct ncclComm* comm;/*对应的comm*/
   struct ncclComm** newcomm;
   int cudaDev;/*自身对应gpu编号*/
   // For ncclCommInitRank
-  int nranks/*总数*/, myrank/*自身索引*/, nId/*commId数目*/;
-  ncclUniqueId* commId;
+  int nranks/*rank总数*/, myrank/*自身rank id*/, nId/*commId数组数目*/;
+  ncclUniqueId* commId;/*对应的commId,实际上是监听的地址*/
   // for ncclCommSplit
   struct ncclComm* parent;
   int color, key;
@@ -2010,7 +2011,8 @@ static void ncclCommInitJobFree(void* _job) {
   free(_job);
 }
 
-static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*rank总数*/, int nId/*commId数目*/, ncclUniqueId* commId, int myrank/*自身rank编号*/, int cudaDev/*自身gpu编号*/, ncclConfig_t *config/*配置*/, const char funcName[]/*调用方函数名称*/) {
+/*初始化一个rank*/
+static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*rank总数*/, int nId/*commId数目*/, ncclUniqueId* commId/*id，实际是当前bootstrap监听的地址*/, int myrank/*自身rank编号*/, int cudaDev/*自身gpu编号*/, ncclConfig_t *config/*配置*/, const char funcName[]/*调用方函数名称*/) {
   if (nId <= 0 || nId > nranks) {
     WARN("improper usage of ncclCommInitRank: nId = %d, nranks=%d", nId, nranks);
     return ncclInvalidArgument;
@@ -2025,7 +2027,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
 
   if (ncclDebugLevel > NCCL_LOG_WARN || (ncclDebugLevel != NCCL_LOG_NONE && myrank == 0)) {
     static std::once_flag once;
-    std::call_once(once, showVersion);
+    std::call_once(once, showVersion);/*显示nccl版本号*/
   }
   // Make sure the CUDA runtime is initialized.
   /*传入NULL,按约定无条件成功，用于校验cuda是否已初始化*/
@@ -2034,22 +2036,33 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
   NCCLCHECKGOTO(PtrCheck(newcomm, "CommInitRank", "newcomm"), res, fail);
   NCCLCHECKGOTO(PtrCheck(config, "CommInitRank", "config"), res, fail);
   if (nranks < 1 || myrank < 0 || myrank >= nranks) {
+	  /*校验myrank是否合适*/
     WARN("Invalid rank requested : %d/%d", myrank, nranks);
     res = ncclInvalidArgument;
     goto fail;
   }
 
+  /*申请comm*/
   NCCLCHECKGOTO(ncclCalloc(&comm, 1), res, fail);
-  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);/*申请abort标记*/
+  /*申请abort标记*/
+  NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);
+  /*申请abortFlagDev标记*/
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->abortFlagDev, 1), res, fail);
+  /*申请abortFlagRefCount引用计数*/
   NCCLCHECKGOTO(ncclCalloc(&comm->abortFlagRefCount, 1), res, fail);
+  /*设置magic(结构体在不同版本间会变，用于结构体有效性检查）*/
   comm->startMagic = comm->endMagic = NCCL_MAGIC; // Used to detect comm corruption.
-  *comm->abortFlagRefCount = 1;/*初始化引用计数为1*/
-  NCCLCHECKGOTO(parseCommConfig(comm, config), res, fail);/*设置配置*/
+  /*初始化引用计数为1*/
+  *comm->abortFlagRefCount = 1;
+  /*设置配置*/
+  NCCLCHECKGOTO(parseCommConfig(comm, config), res, fail);
   /* start with ncclInProgress and will be changed to ncclSuccess if init succeeds. */
+  /*指明状态为处理中*/
   comm->initState = ncclInProgress;
+  /*填充准备好的comm*/
   *newcomm = comm;
 
+  /*申请并初始化这个异步job*/
   NCCLCHECKGOTO(ncclCalloc(&job, 1), res, fail);
   job->nId = nId;
   job->comm = comm;
@@ -2066,11 +2079,11 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
 
   commIdEnv = ncclGetEnv("NCCL_COMM_ID");
   if (commIdEnv && myrank == 0) {
-	  /*自身是第0号*/
+	  /*设置了环境变量，且自身是第0号*/
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commIdEnv);
     if (nId > 1) {
       INFO(NCCL_INIT | NCCL_ENV, "NCCL_COMM_ID cannot be used with more than one ncclUniqueId");
-      job->nId = 1;/*仅使用一个*/
+      job->nId = 1;/*仅使用一个comm_id*/
     }
     // start the bootstrap root before bootstrapping, use only the first handle
     /*启动bootstrap线程*/
@@ -2173,7 +2186,8 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev/**gpu数量*/, const in
     // Ignore return codes .. we need to call ncclGroupEnd to clean up anyway
     int dev = devlist ? devlist[i] : i;/*取对应的gpu编号*/
     CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);/*设置当前gpu设备*/
-    ncclCommInitRankDev(comms+i/*i号gpu对应的comms*/, ndev/*gpu总数*/,1, &uniqueId, i/*索引*/, dev/*gpu编号*/, &config, __func__);
+    /*为每一个ndev设备初始化一个comms[i]*/
+    ncclCommInitRankDev(comms+i/*i号gpu对应的comms*/, ndev/*gpu总数*/,1/*1个uniqueId*/, &uniqueId, i/*自身rank*/, dev/*gpu编号*/, &config, __func__);
   }
   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);/*结束group*/
 

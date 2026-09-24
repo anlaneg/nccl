@@ -291,6 +291,7 @@ NVTX_DECLSPEC nvtxDomainHandle_t NVTX_API nvtxDomainCreateW(const wchar_t* messa
 NVTX_DECLSPEC void NVTX_API nvtxDomainDestroy(nvtxDomainHandle_t domain)
 {
 #ifndef NVTX_DISABLE
+	/*触发nvtxDomainDestroy_impl_fnptr*/
     nvtxDomainDestroy_impl_fntype local = NVTX_VERSIONED_IDENTIFIER(nvtxGlobals).nvtxDomainDestroy_impl_fnptr;
     if(local!=0)
         (*local)(domain);
@@ -300,6 +301,7 @@ NVTX_DECLSPEC void NVTX_API nvtxDomainDestroy(nvtxDomainHandle_t domain)
 NVTX_DECLSPEC void NVTX_API nvtxInitialize(const void* reserved)
 {
 #ifndef NVTX_DISABLE
+	/*触发nvtxInitialize_impl_fnptr*/
     nvtxInitialize_impl_fntype local = NVTX_VERSIONED_IDENTIFIER(nvtxGlobals).nvtxInitialize_impl_fnptr;
     if(local!=0)
         (*local)(reserved);

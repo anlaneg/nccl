@@ -649,7 +649,7 @@ struct ncclComm {
 
   ncclConfig_t config;/*配置*/
   // initState is to more conveniently reclaim resources when errors happen.
-  ncclResult_t initState;
+  ncclResult_t initState;/*指明初始化状态*/
   // flag to indicate if ncclCommFinalize() is called
   bool finalizeCalled;
   // shared structures for finalization

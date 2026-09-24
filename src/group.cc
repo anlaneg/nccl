@@ -47,12 +47,12 @@ ncclResult_t ncclAsyncLaunch(
 
   job->destroyFlag = comm->destroyFlag;
   if (ncclGroupDepth == 0) {
-	  /*depth为0，直接调用func*/
+	/*depth为0，直接调用func*/
     ret = func(job);
     if (ret != ncclSuccess && undo) undo(job);/*如果失败执行undo*/
     if (destructor) destructor(job);/*执行销毁*/
   } else {
-	  /*初始化job*/
+	/*初始化job*/
     job->func = func;
     job->undo = undo;
     job->destructor = destructor;

@@ -26,6 +26,7 @@ extern "C" {
     NAME##_v##VERSION##_bpl##COMPATID
 #define NVTX_EXT_PAYLOAD_VERSIONED_IDENTIFIER_L2(NAME, VERSION, COMPATID) \
     NVTX_EXT_PAYLOAD_VERSIONED_IDENTIFIER_L3(NAME, VERSION, COMPATID)
+/*拼出一个名称*/
 #define NVTX_EXT_PAYLOAD_VERSIONED_ID(NAME) \
     NVTX_EXT_PAYLOAD_VERSIONED_IDENTIFIER_L2(NAME, NVTX_VERSION, NVTX_EXT_PAYLOAD_COMPATID)
 
@@ -48,14 +49,16 @@ ret_val fn_name signature { \
  * initialized to `0` (`NVTX_EXTENSION_FRESH`).
  */
 #define NVTX_EXT_PAYLOAD_SLOT_COUNT 63
+/*定义数组，并初始化为0*/
 NVTX_LINKONCE_DEFINE_GLOBAL intptr_t
 NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots)[NVTX_EXT_PAYLOAD_SLOT_COUNT + 1]
     = {0};
 
 /* Avoid warnings about missing prototype. */
 NVTX_LINKONCE_FWDDECL_FUNCTION void NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadInitOnce)(void);
-NVTX_LINKONCE_DEFINE_FUNCTION void NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadInitOnce)()
+NVTX_LINKONCE_DEFINE_FUNCTION void NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadInitOnce)()/*初始化函数实现*/
 {
+	/*取1号元素*/
     intptr_t* fnSlots = NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots) + 1;
     nvtxExtModuleSegment_t segment = {
         0, /* unused (only one segment) */
@@ -74,19 +77,23 @@ NVTX_LINKONCE_DEFINE_FUNCTION void NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadI
 
     NVTX_INFO( "%s\n", __FUNCTION__  );
 
+    /*上面准备好了参数，这里触发调用*/
     NVTX_VERSIONED_IDENTIFIER(nvtxExtInitOnce)(&module,
         NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots));
 }
 
-#define NVTX_EXT_PAYLOAD_IMPL_FN_V1(ret_type, fn_name, signature, arg_names) \
-typedef ret_type (*fn_name##_impl_fntype)signature; \
-    NVTX_DECLSPEC ret_type NVTX_API fn_name signature { \
+#define NVTX_EXT_PAYLOAD_IMPL_FN_V1(ret_type/*返回值类型*/, fn_name/*函数名称*/, signature/*函数形参列表*/, arg_names/*函数实参列表*/) \
+typedef ret_type (*fn_name##_impl_fntype)signature; /*声明函数指针*/\
+    NVTX_DECLSPEC ret_type NVTX_API fn_name signature { /*定义函数fn_name*/\
+	/*定义数组*/\
     intptr_t slot = NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots)[NVTX3EXT_CBID_##fn_name + 1]; \
     if (slot != NVTX_EXTENSION_DISABLED) { \
         if (slot != NVTX_EXTENSION_FRESH) { \
+        	/*slot是此类型的函数指针，直接调用并返回*/\
             return (*(fn_name##_impl_fntype)slot) arg_names; \
         } else { \
             NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadInitOnce)(); \
+            /*初始化后重新检查，如有则调用*/\
             /* Re-read function slot after extension initialization. */ \
             slot = NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots)[NVTX3EXT_CBID_##fn_name + 1]; \
             if (slot != NVTX_EXTENSION_DISABLED && slot != NVTX_EXTENSION_FRESH) { \
