@@ -98,9 +98,9 @@ struct bootstrapRootArgs {
 };
 
 /* Init functions */
-static char bootstrapNetIfName[MAX_IF_NAME_SIZE + 1];
-static union ncclSocketAddress bootstrapNetIfAddr;
-static int bootstrapNetInitDone = 0;
+static char bootstrapNetIfName[MAX_IF_NAME_SIZE + 1];/*本机boot期间使用的netif名称*/
+static union ncclSocketAddress bootstrapNetIfAddr;/*使用的netif地址*/
+static int bootstrapNetInitDone = 0;/*标记是否以上地址已选出*/
 static std::mutex bootstrapNetMutex;
 
 NCCL_PARAM(BootstrapNetEnable, "OOB_NET_ENABLE", 0);
@@ -109,17 +109,17 @@ NCCL_PARAM(BootstrapNetEnable, "OOB_NET_ENABLE", 0);
 ncclResult_t bootstrapNetInit() {
   if (bootstrapNetInitDone == 0) {
     std::lock_guard<std::mutex> lock(bootstrapNetMutex);
-    if (bootstrapNetInitDone == 0) {
-      const char* env = ncclGetEnv("NCCL_COMM_ID");
+    if (bootstrapNetInitDone == 0) {/*加锁再查*/
+      const char* env = ncclGetEnv("NCCL_COMM_ID");/*指定一个ip地址+端口*/
       int nIfs = 0;
       if (env) {
     	  /*取此环境变量指定的地址及端口信息*/
         union ncclSocketAddress remoteAddr;
-        if (ncclSocketGetAddrFromString(&remoteAddr, env) != ncclSuccess) {
+        if (ncclSocketGetAddrFromString(&remoteAddr/*解析COMM_ID指定的远端地址*/, env) != ncclSuccess) {
           WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
           return ncclInvalidArgument;
         }
-        /*在本机选与环境变量指定地址在同一网段的接口及地址（仅找一个）*/
+        /*在本机选与远端地址在同一网段的接口及地址（仅找一个）*/
         NCCLCHECK(ncclFindInterfaceMatchSubnet(bootstrapNetIfName, &bootstrapNetIfAddr, &remoteAddr, MAX_IF_NAME_SIZE,
                                                &nIfs));
         if (nIfs <= 0) {
@@ -128,7 +128,7 @@ ncclResult_t bootstrapNetInit() {
           return ncclSystemError;
         }
       } else {
-    	  /*没有指定remote,找一个接口*/
+    	/*没有指定remote地址,找一个接口*/
         NCCLCHECK(ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1, &nIfs));
         if (nIfs <= 0) {
           WARN("Bootstrap : no socket interface found");
@@ -338,7 +338,7 @@ static void* bootstrapRoot(void* rargs) {
     NCCLCHECKGOTO(ncclSocketInit(&sock), res, out);/*初始化socket*/
     NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);/*指明listenSock,用于accept 新的 client socket*/
     NCCLCHECKGOTO(socketRecv(&sock, &info, sizeof(info)), res, out);/*从client socket收取info*/
-    NCCLCHECKGOTO(ncclSocketClose(&sock), res, out);/*关闭socket*/
+    NCCLCHECKGOTO(ncclSocketClose(&sock), res, out);/*然后关闭socket*/
 
     if (c == 0) {
       BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_ROOT_WAIT]);
@@ -426,6 +426,7 @@ out:
   return NULL;
 }
 
+/*负责监听listenSock，并启动线程处理bootstrapRoot*/
 ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv/*是否来自于env*/) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket* listenSock = NULL;
@@ -484,8 +485,9 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle, struct ncc
       NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
     }
     handle->nRanks = comm ? comm->nRanks : 0;
-    /*使用bootstrap网络地址*/
+    /*使用bootstrap选中的网络接口及地址(此时本机ip就是root)*/
     memcpy(&handle->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
+    /*创建root*/
     NCCLCHECK(bootstrapCreateRoot(handle, false));
   }
 

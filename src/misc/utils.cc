@@ -194,7 +194,10 @@ uint64_t getPidHash(void) {
   return getHash(pname, strlen(pname));/*以此计算hash*/
 }
 
-/**格式：前缀:端口号,前缀:端口号,...,前缀:端口号，解析串填充ifList的prefix和port */
+/**格式：prefix[:port[:rail[:plane]]],prefix[:port[:rail[:plane]]],...
+ * 条目以 ',' 分隔，每个条目内以 ':' 分隔字段。
+ * 只有 prefix 是必填，port/rail/plane 缺省或为空段（如 "eth0::1"）时置为 -1。
+ * 解析后填充 ifList 的 prefix / port / rail / plane 字段。 */
 int parseStringList(const char* string, struct netIf* ifList/**出参，接口列表*/, int maxList/**最大接口数 */) {
   if (!string) return 0;
 
@@ -208,13 +211,17 @@ int parseStringList(const char* string, struct netIf* ifList/**出参，接口�
     char* c = entry;
     char* tok = ncclOsStrSep(&c, ":");
     if (tok && tok[0] != '\0') {
+    	/*取接口名称*/
       snprintf(ifList[ifNum].prefix, sizeof(ifList[ifNum].prefix), "%s", tok);
       // port, rail, and plane will default to -1 if absent or empty
       tok = ncclOsStrSep(&c, ":");
+      /*取port*/
       ifList[ifNum].port = (tok && tok[0] != '\0') ? atoi(tok) : -1;
       tok = ncclOsStrSep(&c, ":");
+      /*取rail*/
       ifList[ifNum].rail = (tok && tok[0] != '\0') ? atoi(tok) : -1;
       tok = ncclOsStrSep(&c, ":");
+      /*取plane*/
       ifList[ifNum].plane = (tok && tok[0] != '\0') ? atoi(tok) : -1;
       ifNum++;
     }

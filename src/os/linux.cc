@@ -156,7 +156,7 @@ extern int ncclParamSetCpuStackSize();
 
 ncclResult_t ncclOsInitialize() {
   if (ncclParamSetCpuStackSize() != 0) {
-    NCCLCHECK(setCpuStackSize());
+    NCCLCHECK(setCpuStackSize());/*设置栈大小*/
   }
   return ncclSuccess;
 }

@@ -172,10 +172,10 @@ static ncclResult_t initResult = ncclSuccess;
 static std::once_flag initOnceFlag;
 
 static void initOnceFunc() {
-  NCCLCHECKGOTO(ncclOsInitialize(), initResult, exit);/*设置栈大小*/
+  NCCLCHECKGOTO(ncclOsInitialize(), initResult, exit);
   NCCLCHECKGOTO(initGdrCopy(), initResult, exit);/*初始化gdr copy*/
   // Always initialize bootstrap network
-  NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);/*确定bootstrap接口名称及地址*/
+  NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);/*确定bootstrap使用的接口名称及地址*/
 
   initNvtxRegisteredEnums();
 exit:;
@@ -2943,6 +2943,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
   comm->startMagic = comm->endMagic = NCCL_MAGIC; // Used to detect comm corruption.
   /*初始化引用计数为1*/
   *comm->abortFlagRefCount = 1;
+  /*初始化groupNext*/
   for (int i = 0; i < ncclGroupTaskTypeNum; i++) {
     comm->groupNext[i] = reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID);
   }
@@ -2973,7 +2974,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
 
   commIdEnv = ncclGetEnv("NCCL_COMM_ID");
   if (commIdEnv && myrank == 0) {
-	  /*设置了环境变量，且自身是第0号rank*/
+	/*设置了环境变量，且自身是第0号rank*/
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commIdEnv);
     if (nId > 1) {
       INFO(NCCL_INIT | NCCL_ENV, "NCCL_COMM_ID cannot be used with more than one ncclUniqueId");

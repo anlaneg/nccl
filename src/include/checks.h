@@ -155,7 +155,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
     } \
   } while (0)
 
-#define NCCLCHECKGOTO(call, RES/*记录返回值的变量*/, label/*失败时要跳转的label*/) \
+#define NCCLCHECKGOTO(call/*要调用的函数*/, RES/*记录返回值的变量*/, label/*失败时要跳转的label*/) \
   do { \
     RES = call;/*调这个函数*/ \
     if (RES != ncclSuccess && RES != ncclInProgress) { \
@@ -237,7 +237,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define STDTHREADCREATE_IMPL(var, func, error_action, ...) \
   do { \
     try { \
-      (var) = std::thread(func, __VA_ARGS__); \
+      (var) = std::thread(func, __VA_ARGS__);/*创建线程处理*/ \
     } catch (const std::exception& e) { \
       WARN("Thread creation failed: %s", e.what()); \
       error_action; \
@@ -264,7 +264,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
     } \
   } while (0)
 
-#define NEW_NOTHROW_GOTO(var, x, RES, label) \
+#define NEW_NOTHROW_GOTO(var/*变量名*/, x/*类型名*/, RES, label) \
   do { \
     (var) = new (std::nothrow) x{}; \
     if (!(var)) { \
