@@ -19,6 +19,7 @@ OBJECTS = $(SOURCES:.cc=.o)
 all: $(TARGET)
 
 # Build executable
+# 编译执行程序
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(OBJECTS) $(LIBRARIES) $(LDFLAGS) -o $@
 	@echo "Built target $@"

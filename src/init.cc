@@ -1855,19 +1855,20 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
   internalConfig.magic = 0;
   internalConfigPtr = &internalConfig;
   if (config) {
-    memcpy((void*)&realSize, (void*)config, sizeof(size_t));/*config第一个位置为size*/
+	/*config第一个位置为size*/
+    memcpy((void*)&realSize, (void*)config, sizeof(size_t));
     /*根据当前结构决定实际大小*/
     realSize = realSize > sizeof(ncclConfig_t) ? sizeof(ncclConfig_t) : realSize;
     /*复制到internalConfig*/
     memcpy((void*)internalConfigPtr, (void*)config, realSize);
     if (internalConfigPtr->magic != 0xcafebeef) {
-    	/*magic有误*/
+      /*magic有误*/
       WARN("ncclConfig_t argument not initialized via NCCL_CONFIG_INITIALIZER");
       ret = ncclInvalidArgument;
       goto fail;
     }
 
-    /*版本新增字段处理*/
+    /*版本新增字段默认值处理*/
     /* check version. */
     if (internalConfigPtr->version < NCCL_VERSION(2, 14, 0)) {
       internalConfigPtr->blocking = defaultConfig.blocking;
@@ -2074,22 +2075,22 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
   // ncclUniqueIds and ncclBootstrapHandle don't have the same alignment requirements.
   // Therefore the array of Ids coming from the user might not be properly aligned to be cast into a ncclBootstrapHandle
   // copying into allocated memory guarantees that the memory is properly aligned for any objects, removing that issue
-  NCCLCHECKGOTO(ncclCalloc(&job->commId, nId), res, fail);
+  NCCLCHECKGOTO(ncclCalloc(&job->commId, nId), res, fail);/*申请足量commId*/
   memcpy(job->commId, commId, nId * NCCL_UNIQUE_ID_BYTES);/*复制commId*/
 
   commIdEnv = ncclGetEnv("NCCL_COMM_ID");
   if (commIdEnv && myrank == 0) {
-	  /*设置了环境变量，且自身是第0号*/
+	  /*设置了环境变量，且自身是第0号rank*/
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commIdEnv);
     if (nId > 1) {
       INFO(NCCL_INIT | NCCL_ENV, "NCCL_COMM_ID cannot be used with more than one ncclUniqueId");
-      job->nId = 1;/*仅使用一个comm_id*/
+      job->nId = 1;/*仅容许使用一个comm_id*/
     }
     // start the bootstrap root before bootstrapping, use only the first handle
     /*启动bootstrap线程*/
     NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&job->commId[0], true), res, fail);
   }
-  /*初始化此job,并入队*/
+  /*初始化此job,并入队到当前线程对应的ncclAsyncJobs*/
   launchedJob = true;
   NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, ncclCommInitRankFunc, NULL, ncclCommInitJobFree, comm), res, fail);
 
@@ -2107,18 +2108,20 @@ fail:
   goto exit;
 }
 
+/*单个rank初始化函数（配置为空，设备取cudaGetDevice)*/
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank);
-ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks/*rank总数*/, ncclUniqueId commId, int myrank/*自身rank id*/) {
+ncclResult_t ncclCommInitRank(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*rank总数*/, ncclUniqueId commId, int myrank/*自身rank id*/) {
   NCCLCHECK(ncclInitEnv());
   NVTX3_RANGE(NcclNvtxParamsCommInitRank)
   // Load the CUDA driver and dlsym hooks (can fail on old drivers)
   (void)ncclCudaLibraryInit();
 
   int cudaDev;
-  ncclConfig_t config = NCCL_CONFIG_INITIALIZER;
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  ncclConfig_t config = NCCL_CONFIG_INITIALIZER;/*配置初始化为空*/
+  CUDACHECK(cudaGetDevice(&cudaDev));/*获取当前关联的cuda设备*/
 
-  NCCLCHECK(ncclCommInitRankDev(newcomm, nranks, 1, &commId, myrank, cudaDev, &config, __func__));
+  /*走ncclCommInitRankDev进行初始化*/
+  NCCLCHECK(ncclCommInitRankDev(newcomm, nranks, 1, &commId, myrank, cudaDev/*传入cuda设备id*/, &config, __func__));
 
   NVTX3_RANGE_ADD_PAYLOAD(CommInitRank, NcclNvtxParamsCommInitRankSchema,
     NVTX3_PAYLOAD((*newcomm)->commHash, nranks, myrank, cudaDev));
@@ -2126,8 +2129,9 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks/*rank总数*/, ncc
   return ncclSuccess;
 }
 
+/*一次性初始化所有rank*/
 NCCL_API(ncclResult_t, ncclCommInitAll, ncclComm_t* comms, int ndev, const int* devlist);
-ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev/**gpu数量*/, const int* devlist/**出参，gpu设备编号数组（无重复） */) {
+ncclResult_t ncclCommInitAll(ncclComm_t* comms/**出参，所有comm */, int ndev/**gpu数量*/, const int* devlist/**出参，gpu设备编号数组（无重复） */) {
   ncclResult_t ret = ncclSuccess;
   int totalnDev;
   int *gpuFlags = NULL;
@@ -2227,17 +2231,17 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t *newcomm, int nranks, ncclUniqueI
   NCCLCHECK(ncclGroupStartInternal());
 
   (void)ncclCudaLibraryInit();
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECK(cudaGetDevice(&cudaDev));/*取关联的cuda设备*/
 
   if (config == NULL)
-    internalConfigPtr = &internalConfig;
+    internalConfigPtr = &internalConfig;/*未指定配置，指为空*/
   else
     internalConfigPtr = config;
   NCCLCHECKGOTO(ncclCommInitRankDev(newcomm, nranks, 1, &commId, myrank, cudaDev, internalConfigPtr, __func__), ret, fail);
 
 exit:
-  ncclGroupErrCheck(ret);
-  NCCLCHECK(ncclGroupEndInternal());
+  ncclGroupErrCheck(ret);/*检查返回值*/
+  NCCLCHECK(ncclGroupEndInternal());/*group end处理*/
   if (newcomm && *newcomm) {
     if (!(*newcomm)->config.blocking) {
       (void) ncclCommGetAsyncError(*newcomm, &ret);
@@ -2251,8 +2255,9 @@ fail:
   goto exit;
 }
 
+/*与ncclCommInitRankConfig api的区别在于支持多个commid*/
 NCCL_API(ncclResult_t, ncclCommInitRankScalable, ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commId, ncclConfig_t* config);
-ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commId, ncclConfig_t* config) {
+ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId/*支持多commid*/, ncclUniqueId* commId, ncclConfig_t* config) {
   NCCLCHECK(ncclInitEnv());
   NVTX3_RANGE(NcclNvtxParamsCommInitRankScalable);
 
@@ -2263,10 +2268,10 @@ ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myran
   NCCLCHECK(ncclGroupStartInternal());
 
   (void)ncclCudaLibraryInit();
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECK(cudaGetDevice(&cudaDev));/*取关联的设备*/
 
   if (config == NULL)
-    internalConfigPtr = &internalConfig;
+    internalConfigPtr = &internalConfig;/*未指定配置，使用空配置*/
   else
     internalConfigPtr = config;
   NCCLCHECKGOTO(ncclCommInitRankDev(newcomm, nranks, nId, commId, myrank, cudaDev, internalConfigPtr, __func__), ret, fail);

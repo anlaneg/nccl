@@ -111,7 +111,7 @@ int main(int argc, char *argv[]) {
   // Allocate arrays to hold our per-device resources
   // We need one communicator, stream, and device ID per GPU
   devices = (int *)malloc(num_gpus * sizeof(int));
-  comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));
+  comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));/*每个gpu一个comm*/
   streams = (cudaStream_t *)malloc(num_gpus * sizeof(cudaStream_t));
 
   if (!devices || !comms || !streams) {
@@ -123,6 +123,7 @@ int main(int argc, char *argv[]) {
   // By default, we use all available devices (0, 1, 2, ...)
   printf("Available GPU devices:\n");
   for (int i = 0; i < num_gpus; i++) {
+	  /*设备编号*/
     devices[i] = i; // Use device i for communicator i
 
     // Query device properties for informational display
@@ -131,7 +132,7 @@ int main(int argc, char *argv[]) {
     printf("  GPU %d: %s (CUDA Device %d)\n", i, prop.name, devices[i]);
     printf("    Compute Capability: %d.%d\n", prop.major, prop.minor);
     printf("    Memory: %.1f GB\n",
-           prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
+           prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0)/*内存*/);
   }
 
   // Create a CUDA stream for each GPU
@@ -165,7 +166,7 @@ int main(int argc, char *argv[]) {
   //
   // All communicators will have the same 'size' (total number of
   // participants)
-  NCCLCHECK(ncclCommInitAll(comms, num_gpus, devices));
+  NCCLCHECK(ncclCommInitAll(comms, num_gpus, devices));/*初始化所有comm*/
   printf("All %d NCCL communicators initialized successfully\n\n", num_gpus);
 
   // =========================================================================

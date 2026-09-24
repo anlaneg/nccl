@@ -5,9 +5,11 @@
 #
 .PHONY: all clean
 
+#默认target为编译
 default: src.build
 install: src.install
 BUILDDIR ?= $(abspath ./build)
+#取builddir的绝对目录
 ABSBUILDDIR := $(abspath $(BUILDDIR))
 TARGETS := src pkg
 clean: ${TARGETS:%=%.clean}
@@ -21,9 +23,11 @@ ${BUILDDIR}/%.txt: %.txt
 	mkdir -p ${BUILDDIR}
 	install -m 644 $< $@
 
+#进入到src目录编译（target以$*指出）
 src.%:
 	${MAKE} -C src $* BUILDDIR=${ABSBUILDDIR}
 
+#进入examples目录编译
 examples: src.build
 	${MAKE} -C examples NCCL_HOME=${ABSBUILDDIR}
 

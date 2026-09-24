@@ -88,7 +88,7 @@ int main(int argc, char *argv[]) {
 
   // ncclCommInitAll creates communicators for all devices in one call
   // This is the simplest way to set up NCCL for single-process applications
-  NCCLCHECK(ncclCommInitAll(comms, num_gpus, NULL));
+  NCCLCHECK(ncclCommInitAll(comms, num_gpus, NULL));/**单进程初始化所有comm */
   printf("NCCL communicators initialized for all devices\n");
 
   // ========================================================================
@@ -105,15 +105,15 @@ int main(int argc, char *argv[]) {
     CUDACHECK(cudaStreamCreate(&streams[i]));
 
     // Allocate device memory for send and receive buffers
-    CUDACHECK(cudaMalloc((void **)&sendbuff[i], size * sizeof(float)));
-    CUDACHECK(cudaMalloc((void **)&recvbuff[i], size * sizeof(float)));
+    CUDACHECK(cudaMalloc((void **)&sendbuff[i], size * sizeof(float)));/**分配发送缓冲区 */
+    CUDACHECK(cudaMalloc((void **)&recvbuff[i], size * sizeof(float)));/**分配接收缓冲区 */
 
     // Initialize send buffer: zero the entire buffer, then set first element to
     // rank
-    CUDACHECK(cudaMemset(sendbuff[i], 0, size * sizeof(float)));
+    CUDACHECK(cudaMemset(sendbuff[i], 0, size * sizeof(float)));/**初始化发送缓冲区为0 */
     float rank_value = (float)i;
     CUDACHECK(cudaMemcpy(sendbuff[i], &rank_value, sizeof(float),
-                         cudaMemcpyHostToDevice));
+                         cudaMemcpyHostToDevice));/**将自身rank值复制到发送自身缓冲区位置 */
 
     printf("  Device %d initialized with data value %d\n", i, i);
   }
@@ -130,7 +130,7 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < num_gpus; i++) {
     // Each device performs combines all contributions and distributes result
     NCCLCHECK(ncclAllReduce(sendbuff[i], recvbuff[i], size, ncclFloat, ncclSum,
-                            comms[i], streams[i]));
+                            comms[i], streams[i]));/**执行AllReduce操作 */
   }
   NCCLCHECK(ncclGroupEnd());
 
@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
     CUDACHECK(cudaMemcpy(&result, recvbuff[i], sizeof(float),
                          cudaMemcpyDeviceToHost));
 
-    if (result != expected) {
+    if (result != expected) {/*校验是否期待的值*/
       printf("  Device %d received incorrect result: %.0f (expected %.0f)\n", i,
              result, expected);
       success = false;

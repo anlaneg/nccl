@@ -42,6 +42,7 @@ void *allReduce(int my_rank, int total_ranks, int local_device,
 
   ncclUniqueId nccl_unique_id;
   if (my_rank == 0) {
+	  /*仅0号rank输出*/
     printf("Starting AllReduce example with %d ranks\n", total_ranks);
     NCCLCHECK(ncclGetUniqueId(&nccl_unique_id));
   }
@@ -81,7 +82,7 @@ void *allReduce(int my_rank, int total_ranks, int local_device,
   // NCCL's allocator can provide optimized memory for communication
   void *d_sendbuff;
   void *d_recvbuff;
-  NCCLCHECK(ncclMemAlloc(&d_sendbuff, size_bytes));
+  NCCLCHECK(ncclMemAlloc(&d_sendbuff, size_bytes));/*申请cuda内存*/
   NCCLCHECK(ncclMemAlloc(&d_recvbuff, size_bytes));
 
   // ========================================================================
@@ -104,8 +105,9 @@ void *allReduce(int my_rank, int total_ranks, int local_device,
   // This creates a simple test pattern for verification
   float *h_data = (float *)malloc(size_bytes);
   for (size_t i = 0; i < count; i++) {
-    h_data[i] = (float)my_rank;
+    h_data[i] = (float)my_rank;/*全设置为自身*/
   }
+  /*复制到gpu*/
   CUDACHECK(cudaMemcpy(d_sendbuff, h_data, size_bytes, cudaMemcpyHostToDevice));
   printf("  Rank %d data initialized (value: %d)\n", my_rank, my_rank);
 
@@ -185,7 +187,7 @@ void *allReduce(int my_rank, int total_ranks, int local_device,
   // Deregister buffers from communicator
   // This must happen before freeing the buffers or destroying the
   // communicator
-  NCCLCHECK(ncclCommDeregister(comm, send_handle));
+  NCCLCHECK(ncclCommDeregister(comm, send_handle));/*移除注册*/
   NCCLCHECK(ncclCommDeregister(comm, recv_handle));
   printf("  Rank %d buffers deregistered\n", my_rank);
 
@@ -210,5 +212,5 @@ void *allReduce(int my_rank, int total_ranks, int local_device,
 int main(int argc, char *argv[]) {
   // Run example using the standard test framework
   // This handles MPI/pthread initialization, device assignment, and cleanup
-  return run_example(argc, argv, allReduce);
+  return run_example(argc, argv, allReduce/*并行执行allReduce*/);
 }

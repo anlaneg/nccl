@@ -79,7 +79,7 @@ void *thread_worker(void *arg) {
   // =========================================================================
   // Each thread creates its own communicator using the shared unique ID
   NCCLCHECK(ncclCommInitRank(&data->comms[thread_id], data->num_gpus, data->commId,
-                             thread_id));
+                             thread_id/*用线程id做为rank*/));
 
   printf("  Thread %d: NCCL communicator initialized\n", thread_id);
 
@@ -135,7 +135,7 @@ int main(int argc, char *argv[]) {
   // =========================================================================
 
   CUDACHECK(cudaGetDeviceCount(&num_gpus));
-  const char *nThreadsEnv = getenv("NTHREADS");
+  const char *nThreadsEnv = getenv("NTHREADS");/*线程数*/
   if (nThreadsEnv) {
     num_gpus = atoi(nThreadsEnv);
   }
@@ -153,7 +153,7 @@ int main(int argc, char *argv[]) {
 
   threads = (pthread_t *)malloc(num_gpus * sizeof(pthread_t));
   threadData = (threadData_t *)malloc(num_gpus * sizeof(threadData_t));
-  comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));
+  comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));/*每个线程一个comm*/
 
   // Generate unique ID for NCCL communicator initialization
   NCCLCHECK(ncclGetUniqueId(&commId));
@@ -164,8 +164,9 @@ int main(int argc, char *argv[]) {
 
   printf("Creating %d threads for NCCL communicators\n", num_gpus);
 
+  /*每个gpu一个线程*/
   for (int i = 0; i < num_gpus; i++) {
-    threadData[i].thread_id = i;
+    threadData[i].thread_id = i;/*线程编号*/
     threadData[i].num_gpus = num_gpus;
     threadData[i].commId = commId;
     threadData[i].comms = comms;

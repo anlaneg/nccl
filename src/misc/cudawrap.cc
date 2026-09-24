@@ -175,11 +175,11 @@ bool ncclCudaLaunchBlocking = false;
 #if CUDART_VERSION >= 11030
 
 #if CUDART_VERSION >= 13000
-#define LOAD_SYM(symbol, version, ignore) do {                           \
+#define LOAD_SYM(symbol/*符号名*/, version, ignore) do {                           \
     cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
     res = cudaGetDriverEntryPointByVersion(#symbol, (void **) (&pfn_##symbol), version, cudaEnableDefault, &driverStatus); \
     if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
-      if (!ignore) {                                                    \
+      if (!ignore) { /*加载失败*/                                                   \
         WARN("Retrieve %s version %d failed with %d status %d", #symbol, version, res, driverStatus); \
         return ncclSystemError; }                                       \
     } } while(0)
@@ -209,6 +209,7 @@ static ncclResult_t cudaPfnFuncLoader(void) {
 
   cudaError_t res;
 
+  /*加载以下符号*/
   LOAD_SYM(cuGetErrorString, 6000, 0);
   LOAD_SYM(cuGetErrorName, 6000, 0);
   LOAD_SYM(cuDeviceGet, 2000, 0);
@@ -287,6 +288,7 @@ static void initOnceFunc() {
 
   #if CUDART_VERSION >= 11030
   if (cudaPfnFuncLoader()) {
+	  /*加载时部分函数未找到*/
     WARN("CUDA some PFN functions not found in the library");
     goto error;
   }

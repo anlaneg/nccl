@@ -13,6 +13,7 @@ CATEGORIES := 01_communicators 02_point_to_point 03_collectives 04_user_buffer_r
 all: $(CATEGORIES)
 
 # Build all categories
+# 各子目录编译方法
 $(CATEGORIES):
 	@echo "Building $@..."
 	@$(MAKE) -C $@

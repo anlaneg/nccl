@@ -24,34 +24,37 @@ ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool isGraph, void** handle) {
+ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size/*内存长度*/, bool isGraph, void** handle) {
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
   struct ncclRegCache* cache = &comm->regCache;
   uintptr_t pageSize = cache->pageSize;
-  uintptr_t begAddr = (uintptr_t)data & -pageSize;
-  uintptr_t endAddr = ((uintptr_t)data + size + pageSize-1) & -pageSize;
+  uintptr_t begAddr = (uintptr_t)data & -pageSize;/*起始地址按页大小对齐*/
+  uintptr_t endAddr = ((uintptr_t)data + size + pageSize-1) & -pageSize;/*终止地址按页大小对齐*/
 
   if (comm->checkPointers) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
   INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
 
+  /*填充cache*/
   for (int slot=0; /*true*/; slot++) {
     if ((slot == cache->population) || (begAddr < cache->slots[slot]->begAddr)) {
       if (cache->population == cache->capacity) { // must grow cache
-        cache->capacity = cache->capacity < 32 ? 32 : 2*cache->capacity;
+        cache->capacity = cache->capacity < 32 ? 32 : 2*cache->capacity;/*增大容量*/
         NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));
       }
+      /*begAddr较小，放在cache->slots前面，先空出一格*/
       memmove(cache->slots+slot+1, cache->slots+slot, (cache->population-slot)*sizeof(struct ncclReg*));
-      NCCLCHECK(ncclCalloc(cache->slots+slot, 1));
+      NCCLCHECK(ncclCalloc(cache->slots+slot, 1));/*申请1个*/
       struct ncclReg* regSlot = cache->slots[slot];
       regSlot->begAddr = begAddr;
       regSlot->endAddr = endAddr;
       if (isGraph) regSlot->graphRefs = 1;
       else regSlot->localRefs = 1;
-      cache->population += 1;
+      cache->population += 1;/*population计数加1*/
       *handle = regSlot;
       goto exit;
     } else if ((cache->slots[slot]->begAddr <= begAddr) &&
                (cache->slots[slot]->endAddr >= endAddr)) {
+    	/*现有Cache已包含此地址段（仅增加引用计数）*/
       if (isGraph) cache->slots[slot]->graphRefs++;
       else cache->slots[slot]->localRefs++;
       *handle = cache->slots[slot];
@@ -132,7 +135,7 @@ ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t siz
     INFO(NCCL_REG, "Skipping graph registration for buffer %p size %zi (P2pUsesMemcpy=%d)",
          buff, size, ncclP2pUsesMemcpy());
   } else {
-    NCCLCHECK(ncclRegister(comm, buff, size, true, handle));
+    NCCLCHECK(ncclRegister(comm, buff, size, true/*指明为gpu内存注册*/, handle));
   }
   return ncclSuccess;
 }

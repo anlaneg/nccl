@@ -21,6 +21,7 @@ ncclUniqueId nccl_unique_id;
  */
 typedef struct {
   // Common variables
+	/*总rank数*/
   int total_ranks;      // Total number of MPI ranks or pthreads
   int devices_per_rank; // Number of devices per rank or thread
   int local_device;     // Node local rank or thread id (0 to total_ranks-1)
@@ -123,7 +124,7 @@ int util_broadcast(int root, int my_rank, ncclUniqueId *arg) {
   if (my_rank == root) {
     nccl_unique_id = *arg;
   }
-  int barrier_err = pthread_barrier_wait(&barrier);
+  int barrier_err = pthread_barrier_wait(&barrier);/*等待barrier*/
   if (barrier_err != 0 && barrier_err != PTHREAD_BARRIER_SERIAL_THREAD) {
     fprintf(stderr, "pthread_barrier_wait failed at %s:%d with error code %d\n",
             __FILE__, __LINE__, barrier_err);
@@ -173,12 +174,14 @@ int initialize(int argc, char *argv[], context_t *ctx) {
   ctx->total_ranks = num_gpus; // Default to all available GPUs
   const char *nThreadsEnv = getenv("NTHREADS");
   if (nThreadsEnv) {
+	  /*指定了线程，则以线程数为准*/
     ctx->total_ranks = atoi(nThreadsEnv);
   }
 
   printf("Creating %d threads for %d devices\n", ctx->total_ranks, num_gpus);
 
   if (ctx->total_ranks < 1) {
+	  /*总rank数过少*/
     printf("Invalid number of threads: %d\n", ctx->total_ranks);
     return 1;
   }
@@ -192,7 +195,7 @@ int initialize(int argc, char *argv[], context_t *ctx) {
   }
 
   // Thread synchronization needed for unique ID sharing later on
-  pthread_barrier_init(&barrier, NULL, ctx->total_ranks);
+  pthread_barrier_init(&barrier, NULL, ctx->total_ranks);/*初始化barrier*/
 
   // Generate NCCL unique ID (shared across all threads)
   NCCLCHECK(ncclGetUniqueId(&ctx->nccl_id));
@@ -219,7 +222,8 @@ void *thread_wrapper(void *arg) {
   context_t *ctx = (context_t *)arg;
   void *(*example_func)(int, int, int, int) =
       (void *(*)(int, int, int, int))ctx->func;
-  return example_func(ctx->my_rank, ctx->total_ranks, ctx->local_device,
+  /*调用func*/
+  return example_func(ctx->my_rank/*自身rank*/, ctx->total_ranks/*总rank*/, ctx->local_device/*设备编号*/,
                       ctx->devices_per_rank);
 }
 
@@ -258,12 +262,13 @@ int run_parallel(context_t *ctx, void *(*ncclExample)(int, int, int, int)) {
     thread_contexts[i].threads = NULL;
     thread_contexts[i].thread_ranks = NULL;
     thread_contexts[i].my_rank = i; // Set NCCL rank to thread id
-    thread_contexts[i].local_device = i;
+    thread_contexts[i].local_device = i;/*设备编号*/
     thread_contexts[i].total_ranks = ctx->total_ranks;
     thread_contexts[i].devices_per_rank = 1;
-    thread_contexts[i].func = (void *)ncclExample;
+    thread_contexts[i].func = (void *)ncclExample;/*线程执行函数*/
     thread_contexts[i].nccl_unique_id = nccl_unique_id;
     ctx->thread_ranks[i] = i;
+    /*创建线程*/
     pthread_create(&ctx->threads[i], NULL, thread_wrapper, &thread_contexts[i]);
   }
 
@@ -282,7 +287,7 @@ int run_parallel(context_t *ctx, void *(*ncclExample)(int, int, int, int)) {
  * Run the given NCCL example in parallel
  */
 int run_example(int argc, char *argv[],
-                void *(*ncclExample)(int, int, int, int)) {
+                void *(*ncclExample/*线程执行函数*/)(int, int, int, int)) {
 
   // 1. Allocate context
   context_t *ctx = (context_t *)calloc(1, sizeof(context_t));

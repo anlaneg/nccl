@@ -43,13 +43,13 @@ typedef const char* (*ncclGetEnvFunc_t)(const char*);
 // This function must be called with ncclDebugLock locked!
 static void ncclDebugInit() {
   ncclGetEnvFunc_t getEnvFunc = ncclEnvPluginInitialized() ? ncclGetEnv : (ncclGetEnvFunc_t)getenv;
-  const char* nccl_debug = getEnvFunc("NCCL_DEBUG");
+  const char* nccl_debug = getEnvFunc("NCCL_DEBUG");/*控制debug输出level*/
   int tempNcclDebugLevel = -1;
   uint64_t tempNcclDebugMask = NCCL_INIT | NCCL_BOOTSTRAP | NCCL_ENV; // Default debug sub-system mask
   if (ncclDebugLevel == NCCL_DEBUG_RESET_TRIGGERED && ncclDebugFile != stdout) {
     // Finish the reset initiated via ncclResetDebugInit().
     fclose(ncclDebugFile);
-    ncclDebugFile = stdout;
+    ncclDebugFile = stdout;/*默认指为stdout*/
   }
 
   if (nccl_debug == NULL) {
@@ -267,6 +267,7 @@ static void ncclDebugInit() {
 
   ncclEpoch = std::chrono::steady_clock::now();
   ncclDebugMask = tempNcclDebugMask;
+  /*指明debuglevel*/
   __atomic_store_n(&ncclDebugLevel, tempNcclDebugLevel, __ATOMIC_RELEASE);
 }
 

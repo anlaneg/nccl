@@ -9,6 +9,7 @@
 #include "group.h"
 #include "nvtx.h"
 
+/*cuda内存申请*/
 NCCL_API(ncclResult_t, ncclMemAlloc, void **ptr, size_t size);
 ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
   NCCL_NVTX3_FUNC_RANGE;
@@ -64,12 +65,12 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
       }
     } else {
       /* Allocate the physical memory on the device */
-      CUCHECK(cuMemCreate(&handle, handleSize, &memprop, 0));
+      CUCHECK(cuMemCreate(&handle, handleSize, &memprop, 0));/*申请物理内存*/
     }
     /* Reserve a virtual address range */
-    CUCHECK(cuMemAddressReserve((CUdeviceptr*)ptr, handleSize, memGran, 0, 0));
+    CUCHECK(cuMemAddressReserve((CUdeviceptr*)ptr, handleSize, memGran, 0, 0));/*预留虚拟地址*/
     /* Map the virtual address range to the physical allocation */
-    CUCHECK(cuMemMap((CUdeviceptr)*ptr, handleSize, 0, handle, 0));
+    CUCHECK(cuMemMap((CUdeviceptr)*ptr, handleSize, 0, handle, 0));/*使物理内存与虚拟地址映射*/
     /* Now allow RW access to the newly mapped memory */
     for (int i = 0; i < dcnt; ++i) {
       int p2p = 0;
@@ -77,7 +78,7 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
         accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         accessDesc.location.id = i;
         accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-        CUCHECK(cuMemSetAccess((CUdeviceptr)*ptr, handleSize, &accessDesc, 1));
+        CUCHECK(cuMemSetAccess((CUdeviceptr)*ptr, handleSize, &accessDesc, 1));/*设置读写权限*/
       }
       if (0 == p2p && i != cudaDev) INFO(NCCL_ALLOC, "P2P not supported between GPU%d and GPU%d", cudaDev, i);
     }
@@ -89,7 +90,7 @@ fallback:
   // Coverity is right to complain that we may pass a NULL ptr to cudaMalloc.  That's deliberate though:
   // we want CUDA to return an error to the caller.
   // coverity[var_deref_model]
-  CUDACHECKGOTO(cudaMalloc(ptr, size), ret, fail);
+  CUDACHECKGOTO(cudaMalloc(ptr, size), ret, fail);/*利用cuda申请内存*/
 
 exit:
   return ret;
@@ -97,6 +98,7 @@ fail:
   goto exit;
 }
 
+/*cuda内存释放*/
 NCCL_API(ncclResult_t, ncclMemFree, void *ptr);
 ncclResult_t  ncclMemFree(void *ptr) {
   NCCL_NVTX3_FUNC_RANGE;

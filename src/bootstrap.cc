@@ -329,15 +329,15 @@ static void* bootstrapRoot(void* rargs) {
   /* Receive addresses from all ranks */
   do {
     struct ncclSocket sock;
-    NCCLCHECKGOTO(ncclSocketInit(&sock), res, out);
-    NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);/*accept socket*/
-    NCCLCHECKGOTO(socketRecv(&sock, &info, sizeof(info)), res, out);/*收取info*/
+    NCCLCHECKGOTO(ncclSocketInit(&sock), res, out);/*初始化socket*/
+    NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);/*指明listenSock,用于accept 新的 client socket*/
+    NCCLCHECKGOTO(socketRecv(&sock, &info, sizeof(info)), res, out);/*从client socket收取info*/
     NCCLCHECKGOTO(ncclSocketClose(&sock), res, out);/*关闭socket*/
 
     if (c == 0) {
       BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_ROOT_WAIT]);
       BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_ROOT_RECV]);
-      nranks = info.nranks;
+      nranks = info.nranks;/*取得rank总数*/
       iroot = info.iroot;
       nroots = info.nroots;
       // if the number of root > 1, we will receive one extra info from the first local_id of the next root
@@ -416,8 +416,9 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   struct bootstrapRootArgs* args = NULL;
   pthread_t thread;
 
-  NCCLCHECK(ncclCalloc(&listenSock, 1));/*申请listenSock*/
-  /*初始化socket*/
+  /*申请listenSock*/
+  NCCLCHECK(ncclCalloc(&listenSock, 1));
+  /*初始化socket(bootstrap时期socket)*/
   NCCLCHECKGOTO(ncclSocketInit(listenSock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, NULL, 0), ret, fail);
   /*监听此地址*/
   NCCLCHECKGOTO(ncclSocketListen(listenSock), ret, fail);
