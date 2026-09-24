@@ -1,0 +1,103 @@
+src/misc/utils.cc
+  s_fe3d096c543e55::t_43ce0c6c041e1c 214
+src/misc/ibvwrap.cc
+  s_b638cab0dcddaf::t_947d78ddfc2b93 139
+  s_3c8bd254fb4280::t_86f9b042c0c4f7 125
+  s_015ced18ea478f::t_1a509ca6836e8b 171
+  s_f1d043c8267df0::t_933fc5c6401a24 157
+  s_07320ebb938081::t_edbc62accadef1 150
+  s_c6481a02eca7e3::t_fadbe587ee7fd5 130
+  s_e5398aa368646d::t_886d2f1af04ab5 118
+  s_68e62b86fb502c::t_430c0ce3a94a36 162
+  s_d1599e05e2ea5f::t_2281a0f02606fe 145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f60a1844b2010c792752cda0c50b61877a186a9e",
+  "prompts": {},
+  "sessions": {
+    "s_015ced18ea478f": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-a1101b61-07a2-41f7-bb49-b4f92323d67d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_07320ebb938081": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-648c968f-7fd0-4942-9fbc-df3e8dd0d60a",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_3c8bd254fb4280": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-086592c1-d6f2-407c-9ed2-9938dfcb6a34",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_68e62b86fb502c": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-7cafb1e1-d26e-4ebd-89ed-5faeb654cee8",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_b638cab0dcddaf": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-23ae9062-9854-4181-97e0-c505791e5a2d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_c6481a02eca7e3": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-51030da3-9930-4eb6-9073-df9f16c9e5eb",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_d1599e05e2ea5f": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-c3470b02-a481-4d25-8718-4f787f5ce47e",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_e5398aa368646d": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-45657df8-f52e-4a9a-9942-86d9a6b5144d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_f1d043c8267df0": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-2ce42c79-3120-4905-ae53-a67e598fd509",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    },
+    "s_fe3d096c543e55": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-4cbaa421-2656-4609-a503-4d9930d6c36d",
+        "model": "default"
+      },
+      "human_author": "logan <logan@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
