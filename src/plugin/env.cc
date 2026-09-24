@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include <errno.h>
 #include <stdlib.h>
@@ -15,33 +16,36 @@
 #include "param.h"
 #include "plugin.h"
 
+extern ncclEnv_t* getNcclEnv_v2(void* lib);
 extern ncclEnv_t* getNcclEnv_v1(void* lib);
 
 static void* envPluginLib = nullptr;
 static ncclEnv_t* ncclEnvPlugin = nullptr;
-extern ncclEnv_v1_t ncclIntEnv_v1;
+extern ncclEnv_v2_t ncclIntEnv_v2;
 
 #define EXT_ENV_PLUGIN 0
 #define INT_ENV_PLUGIN 1
 #define NUM_ENV_PLUGIN 2
 /*用于获取环境变量的插件*/
-static ncclEnv_t *ncclEnvPlugins[NUM_ENV_PLUGIN] = { nullptr/*容许定制（扩展）的插件位置*/, &ncclIntEnv_v1/*默认插件*/ };
+static ncclEnv_t* ncclEnvPlugins[NUM_ENV_PLUGIN] = {nullptr/*容许定制（扩展）的插件位置*/, &ncclIntEnv_v2/*默认插件*/ };
 
 enum {
-  envPluginLoadFailed  = -1,
-  envPluginLoadReady   =  0,
-  envPluginLoadSuccess =  1,
+  envPluginLoadFailed = -1,
+  envPluginLoadReady = 0,
+  envPluginLoadSuccess = 1,
 };
 static int envPluginStatus = envPluginLoadReady;
 
 /*加载用于获取env的插件*/
 static ncclResult_t ncclEnvPluginLoad(void) {
-  const char* envName;
+  const char* envName = nullptr;
   /*之前尝试过，已失败，直接返回不再尝试*/
+  bool envPluginRequested = false;
   if (envPluginStatus != envPluginLoadReady) goto exit;
 
-  if ((envName = getenv("NCCL_ENV_PLUGIN")) != nullptr) {
+  if ((envName = std::getenv("NCCL_ENV_PLUGIN")) != nullptr) {
 	  /*设置了env插件*/
+    envPluginRequested = true;
     INFO(NCCL_ENV, "NCCL_ENV_PLUGIN set by environment to %s", envName);
     if (strcasecmp(envName, "none") == 0) {
       goto fail;/*env插件名称不得为none*/
@@ -57,10 +61,14 @@ static ncclResult_t ncclEnvPluginLoad(void) {
   }
 
   /*取插件操作api结构体*/
-  ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v1(envPluginLib);
-  if (nullptr == ncclEnvPlugins[EXT_ENV_PLUGIN]) {
-    INFO(NCCL_INIT, "External env plugin %s is unsupported", envName);
-    goto fail;
+  ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v2(envPluginLib);
+  if (ncclEnvPlugins[EXT_ENV_PLUGIN] == nullptr) {
+    ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v1(envPluginLib);
+    if (ncclEnvPlugins[EXT_ENV_PLUGIN] == nullptr) {
+      if (envPluginRequested) ATTN("External env plugin %s is unsupported", envName);
+      else INFO(NCCL_INIT, "External env plugin %s is unsupported", envName);
+      goto fail;
+    }
   }
   INFO(NCCL_INIT, "Successfully loaded external env plugin %s", envName);
 
@@ -78,7 +86,7 @@ fail:
 
 static ncclResult_t ncclEnvPluginUnload(void) {
   if (ncclEnvPlugin) {
-    INFO(NCCL_INIT, "ENV/Plugin: Closing env plugin %s", ncclEnvPlugin->name);
+    INFO(NCCL_DESTROY, "ENV/Plugin: Closing env plugin %s", ncclEnvPlugin->name);
   }
   if (ncclEnvPlugins[EXT_ENV_PLUGIN]) {
     ncclEnvPlugin = ncclEnvPlugins[INT_ENV_PLUGIN];
@@ -98,12 +106,13 @@ ncclResult_t ncclEnvPluginInit(void) {
   /*加载env插件*/
   NCCLCHECK(ncclEnvPluginLoad());
   /*如果evn插件加载成功，则表示可以用扩展的env插件，否则用默认的env插件*/
-  ncclEnvPlugin = (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
+  ncclEnvPlugin =
+    (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
   /*env插件初始化*/
-  NCCLCHECK(ncclEnvPlugin->init(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH, NCCL_SUFFIX));
+  NCCLCHECK(ncclEnvPlugin->init(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH, NCCL_SUFFIX, ncclDebugLog));
   atexit(ncclEnvPluginFinalize);
   /*指明已初始化*/
-  __atomic_store_n(&initialized, true, __ATOMIC_RELEASE);
+  COMPILER_ATOMIC_STORE(&initialized, true, std::memory_order_release);
   return ncclSuccess;
 }
 
@@ -120,5 +129,5 @@ const char* ncclEnvPluginGetEnv(const char* name) {
 }
 
 bool ncclEnvPluginInitialized(void) {
-  return __atomic_load_n(&initialized, __ATOMIC_ACQUIRE);
+  return COMPILER_ATOMIC_LOAD(&initialized, std::memory_order_acquire);
 }

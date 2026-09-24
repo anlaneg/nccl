@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "argcheck.h" // Need some checks here since we access comm
 #include "nccl.h"
@@ -14,36 +15,65 @@
 
 NCCL_PARAM(LocalRegister, "LOCAL_REGISTER", 1);
 
-ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid) {
+ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid) {
   if (reg && isValid) {
-    if (reg->localRefs)
-      *isValid = true;
-    else
-      *isValid = false;
+    if (reg->localRefs) *isValid = true;
+    else *isValid = false;
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size/*内存长度*/, bool isGraph, void** handle) {
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
+
   struct ncclRegCache* cache = &comm->regCache;
   uintptr_t pageSize = cache->pageSize;
   uintptr_t begAddr = (uintptr_t)data & -pageSize;/*起始地址按页大小对齐*/
-  uintptr_t endAddr = ((uintptr_t)data + size + pageSize-1) & -pageSize;/*终止地址按页大小对齐*/
+  uintptr_t endAddr = ((uintptr_t)data + size + pageSize - 1) & -pageSize;/*终止地址按页大小对齐*/
 
-  if (comm->checkPointers) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
-  INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
+  if (comm->checkMode != ncclCheckModeDefault) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
+
+  bool hasSysmemSegment = false;
+  if (ncclCuMemEnable()) {
+    CUdeviceptr base;
+    size_t baseSize;
+    int numSegments;
+    int legacyIpcCap;
+    CUCHECK(cuMemGetAddressRange(&base, &baseSize, (CUdeviceptr)data));
+    CUmemorytype memType;
+    CUCHECK(cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, (CUdeviceptr)data));
+    if (memType == CU_MEMORYTYPE_HOST) {
+      hasSysmemSegment = true;
+    } else {
+      // Check for a Sysmem segment is only valid with cuMem based allocators, so a IS_LEGACY_CUDA_IPC check is
+      // required to ensure that we're calling ncclCuMemGetAddressRange only when necessary.
+      CUCHECK(cuPointerGetAttribute((void*)&legacyIpcCap, CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE,
+                                    (CUdeviceptr)base));
+      if (!legacyIpcCap) {
+        NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr)data, size, (CUdeviceptr*)&base, &baseSize, &numSegments,
+                                           &hasSysmemSegment));
+      }
+    }
+  }
+  if (hasSysmemSegment) {
+    INFO(NCCL_REG, "Skipping registration for buffer %p size %zi since it contains segments backed by CPU memory", data,
+         size);
+    return ncclSuccess;
+  } else {
+    INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
+  }
 
   /*填充cache*/
-  for (int slot=0; /*true*/; slot++) {
+  for (int slot = 0; /*true*/; slot++) {
     if ((slot == cache->population) || (begAddr < cache->slots[slot]->begAddr)) {
-      if (cache->population == cache->capacity) { // must grow cache
-        cache->capacity = cache->capacity < 32 ? 32 : 2*cache->capacity;/*增大容量*/
+      if (cache->population == cache->capacity) {
+        // must grow cache
+        cache->capacity = cache->capacity < 32 ? 32 : 2 * cache->capacity;/*增大容量*/
         NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));
       }
       /*begAddr较小，放在cache->slots前面，先空出一格*/
-      memmove(cache->slots+slot+1, cache->slots+slot, (cache->population-slot)*sizeof(struct ncclReg*));
-      NCCLCHECK(ncclCalloc(cache->slots+slot, 1));/*申请1个*/
+      memmove(cache->slots + slot + 1, cache->slots + slot, (cache->population - slot) * sizeof(struct ncclReg*));
+      NCCLCHECK(ncclCalloc(cache->slots + slot, 1));/*申请1个*/
       struct ncclReg* regSlot = cache->slots[slot];
       regSlot->begAddr = begAddr;
       regSlot->endAddr = endAddr;
@@ -52,8 +82,7 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size/*内存
       cache->population += 1;/*population计数加1*/
       *handle = regSlot;
       goto exit;
-    } else if ((cache->slots[slot]->begAddr <= begAddr) &&
-               (cache->slots[slot]->endAddr >= endAddr)) {
+    } else if ((cache->slots[slot]->begAddr <= begAddr) && (cache->slots[slot]->endAddr >= endAddr)) {
     	/*现有Cache已包含此地址段（仅增加引用计数）*/
       if (isGraph) cache->slots[slot]->graphRefs++;
       else cache->slots[slot]->localRefs++;
@@ -70,9 +99,10 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
   if (reg->state & NET_REG_COMPLETE) {
     struct ncclRegNetHandles* netHandle = reg->netHandleHead;
     struct ncclRegNetHandles* netHandlePrev;
-    while(netHandle) {
+    while (netHandle) {
       if (ncclNetDeregBuffer(comm, netHandle->proxyConn, netHandle->handle) != ncclSuccess) {
-        WARN("rank %d deregister NET buffer handle %p proxy rank %d failed\n", comm->rank, netHandle->handle, netHandle->proxyConn->rank);
+        ATTN("rank %d deregister NET buffer handle %p proxy rank %d failed", comm->rank, netHandle->handle,
+             netHandle->proxyConn->rank);
       }
       netHandlePrev = netHandle;
       netHandle = netHandle->next;
@@ -80,26 +110,28 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
     }
   }
   if (reg->state & NVLS_REG_COMPLETE) {
-    if (ncclNvlsDeregBuffer(comm, &reg->mcHandle, reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize) != ncclSuccess) {
-      WARN("rank %d deregister NVLS buffer %p dev %d ucsize %ld mcsize %ld failed", comm->rank, (void*)reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize);
-    }
-    reg->regAddr = (CUdeviceptr)NULL;
+    NCCLCHECK(ncclNvlsUbDeregister(comm, reg));
   }
   if (reg->state & COLLNET_REG_COMPLETE) {
     if (ncclCollnetDeregBuffer(comm, reg->collnetProxyconn, reg->collnetHandle) != ncclSuccess) {
-      WARN("rank %d deregister COLLNET buffer handle %p proxy rank %d failed", comm->rank, reg->collnetHandle, reg->collnetProxyconn->rank);
+      ATTN("rank %d deregister COLLNET buffer handle %p proxy rank %d failed", comm->rank, reg->collnetHandle,
+           reg->collnetProxyconn->rank);
     }
   }
   if (reg->state & IPC_REG_COMPLETE) {
-    for (int i = 0; i < NCCL_MAX_LOCAL_RANKS; ++i)
-      if (reg->ipcInfos[i]) {
-        if (ncclIpcDeregBuffer(comm, reg->ipcInfos[i]) != ncclSuccess) {
-          WARN("rank %d deregister IPC buffer %p peerRank %d failed", comm->rank, reg->ipcInfos[i]->baseAddr, reg->ipcInfos[i]->peerRank);
+    if (reg->ipcInfos) {
+      for (int i = 0; i < reg->ipcInfosSize; ++i)
+        if (reg->ipcInfos[i]) {
+          if (ncclIpcDeregBuffer(comm, reg->ipcInfos[i]) != ncclSuccess) {
+            ATTN("rank %d deregister IPC buffer %p peerRank %d failed", comm->rank, reg->ipcInfos[i]->baseAddr,
+                 reg->ipcInfos[i]->peerRank);
+          }
+          free(reg->ipcInfos[i]);
         }
-        free(reg->ipcInfos[i]);
-      }
+      free(reg->ipcInfos);
+    }
     if (reg->regIpcAddrs.hostPeerRmtAddrs) free(reg->regIpcAddrs.hostPeerRmtAddrs);
-    if (reg->regIpcAddrs.devPeerRmtAddrs) NCCLCHECK(ncclCudaFree(reg->regIpcAddrs.devPeerRmtAddrs));
+    if (reg->regIpcAddrs.devPeerRmtAddrs) NCCLCHECK(ncclCudaFree(reg->regIpcAddrs.devPeerRmtAddrs, comm->memManager));
   }
   return ncclSuccess;
 }
@@ -108,7 +140,8 @@ ncclResult_t ncclRegCleanup(struct ncclComm* comm) {
   struct ncclRegCache* cache = &comm->regCache;
   for (int i = 0; i < cache->population; i++) {
     struct ncclReg* reg = cache->slots[i];
-    INFO(NCCL_INIT, "Cleanup buffer %p pages %lx", (void*)reg->begAddr, (reg->endAddr-reg->begAddr)/cache->pageSize);
+    INFO(NCCL_DESTROY, "Cleanup buffer %p pages %lx", (void*)reg->begAddr,
+         (reg->endAddr - reg->begAddr) / cache->pageSize);
     NCCLCHECK(regCleanup(comm, reg));
     free(reg);
   }
@@ -121,8 +154,8 @@ NCCL_API(ncclResult_t, ncclCommRegister, const ncclComm_t comm, void* buff, size
 ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
   if (!ncclParamLocalRegister() || ncclP2pUsesMemcpy()) {
     *handle = NULL;
-    INFO(NCCL_REG, "Skipping registration for buffer %p size %zi (LocalRegister=%ld, P2pUsesMemcpy=%d)",
-         buff, size, ncclParamLocalRegister(), ncclP2pUsesMemcpy());
+    INFO(NCCL_REG, "Skipping registration for buffer %p size %zi (LocalRegister=%ld, P2pUsesMemcpy=%d)", buff, size,
+         ncclParamLocalRegister(), ncclP2pUsesMemcpy());
   } else {
     NCCLCHECK(ncclRegister(comm, buff, size, false, handle));
   }
@@ -132,15 +165,15 @@ ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, vo
 ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
   if (ncclP2pUsesMemcpy()) {
     *handle = NULL;
-    INFO(NCCL_REG, "Skipping graph registration for buffer %p size %zi (P2pUsesMemcpy=%d)",
-         buff, size, ncclP2pUsesMemcpy());
+    INFO(NCCL_REG, "Skipping graph registration for buffer %p size %zi (P2pUsesMemcpy=%d)", buff, size,
+         ncclP2pUsesMemcpy());
   } else {
     NCCLCHECK(ncclRegister(comm, buff, size, true/*指明为gpu内存注册*/, handle));
   }
   return ncclSuccess;
 }
 
-static ncclResult_t commDeregister(struct ncclComm *comm, bool isGraph, struct ncclReg* reg) {
+static ncclResult_t commDeregister(struct ncclComm* comm, bool isGraph, struct ncclReg* reg) {
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
   struct ncclRegCache* cache = &comm->regCache;
   int slot;
@@ -166,12 +199,12 @@ exit:
 }
 
 NCCL_API(ncclResult_t, ncclCommDeregister, const ncclComm_t comm, void* handle);
-ncclResult_t ncclCommDeregister(const ncclComm_t comm, void *handle) {
+ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle) {
   NCCLCHECK(commDeregister(comm, false, (struct ncclReg*)handle));
   return ncclSuccess;
 }
 
-ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg *handle) {
+ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg* handle) {
   NCCLCHECK(commDeregister(comm, true, handle));
   return ncclSuccess;
 }

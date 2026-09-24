@@ -9,6 +9,7 @@ To help ensure your contribution can be accepted smoothly:
 - **Open an issue first** for significant changes or new features. This allows us to discuss the approach before you invest significant time.
 - **Check existing issues** to see if someone else is already working on something similar.
 - **Ask questions** if you're unsure about anything. We're happy to help!
+- **License**: All contributions will only be accepted under the Apache-2.0 license.
 
 ## Getting Started
 
@@ -79,7 +80,7 @@ NCCL follows these coding conventions:
 
 ### General Guidelines
 - Use 2 spaces for indentation (no tabs)
-- Maximum line length: 100 characters
+- Maximum line length: 120 characters
 - Follow K&R brace style for C/CUDA code
 - Use clear, descriptive variable names
 
@@ -131,7 +132,7 @@ An example commit message is:
 Comment          | Commit message
 -----------------|--------------------------------------------------------
 Title            | Fix crash in proxy on systems with more than 2 GPUs
-Blank line       | 
+Blank line       |
 Problem          | When a system has more than 2 GPUs, the table we use to
                  | store addresses overflows.
 Solution         | This fix increases the size of the table to the maximum
@@ -149,6 +150,43 @@ git commit -s -m "Your commit message"
 This adds: `Signed-off-by: Your Name <your@email.com>`
 
 This certifies your agreement with the Developer Certificate of Origin (DCO).
+
+```
+Developer Certificate of Origin
+Version 1.1
+
+Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+
+Developer's Certificate of Origin 1.1
+
+By making a contribution to this project, I certify that:
+
+(a) The contribution was created in whole or in part by me and I
+    have the right to submit it under the open source license
+    indicated in the file; or
+
+(b) The contribution is based upon previous work that, to the best
+    of my knowledge, is covered under an appropriate open source
+    license and I have the right under that license to submit that
+    work with modifications, whether created in whole or in part
+    by me, under the same open source license (unless I am
+    permitted to submit under a different license), as indicated
+    in the file; or
+
+(c) The contribution was provided directly to me by some other
+    person who certified (a), (b) or (c) and I have not modified
+    it.
+
+(d) I understand and agree that this project and the contribution
+    are public and that a record of the contribution (including all
+    personal information I submit with it, including my sign-off) is
+    maintained indefinitely and may be redistributed consistent with
+    this project or the open source license(s) involved.
+```
 
 ## Code Review Process
 
@@ -180,4 +218,3 @@ We're committed to helping contributors succeed!
 We truly appreciate your time and effort in contributing to NCCL.
 
 Happy coding!
-

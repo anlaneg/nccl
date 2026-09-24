@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_CHANNEL_H_
 #define NCCL_CHANNEL_H_
@@ -14,7 +15,8 @@
 ncclResult_t initChannel(struct ncclComm* comm, int channelid);
 ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share);
 ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share);
-ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRanks, int nvlsNRanks);
+ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRanks, int nvlsNRanks,
+                         struct ncclComm* comm);
 
 inline uint8_t ncclP2pChannelBaseForRound(struct ncclComm* comm, int p2pRound) {
   int base;
@@ -22,8 +24,8 @@ inline uint8_t ncclP2pChannelBaseForRound(struct ncclComm* comm, int p2pRound) {
     int localSize = comm->p2pSchedGroupSize;
     int groupDelta = p2pRound / localSize;
     int localDelta = p2pRound % localSize;
-    base = groupDelta*divUp(localSize, NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
-    base += localDelta/NCCL_MAX_DEV_WORK_P2P_PER_BATCH;
+    base = groupDelta * divUp(localSize, NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
+    base += localDelta / NCCL_MAX_DEV_WORK_P2P_PER_BATCH;
   } else {
     base = p2pRound;/** 单节点时，每个round对应一个channel base */
   }

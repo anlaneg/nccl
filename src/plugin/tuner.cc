@@ -1,9 +1,10 @@
 /*************************************************************************
- * Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
- * Copyright (c) 2023, Meta Platforms, Inc. and affiliates.
+ * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023, Meta Platforms, Inc. and affiliates.
+ * SPDX-License-Identifier: Apache-2.0 and BSD-3
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include <errno.h>
 #include <stdlib.h>
@@ -18,6 +19,7 @@ extern ncclTuner_t* getNcclTuner_v2(void* lib);
 extern ncclTuner_t* getNcclTuner_v3(void* lib);
 extern ncclTuner_t* getNcclTuner_v4(void* lib);
 extern ncclTuner_t* getNcclTuner_v5(void* lib);
+extern ncclTuner_t* getNcclTuner_v6(void* lib);
 
 static std::mutex tunerPluginMutex;
 static int tunerPluginRefCount;
@@ -25,9 +27,9 @@ static void* tunerPluginLib = nullptr;
 static ncclTuner_t* tunerSymbol = nullptr;
 
 enum {
-  tunerPluginLoadFailed  = -1,
-  tunerPluginLoadReady   =  0,
-  tunerPluginLoadSuccess =  1,
+  tunerPluginLoadFailed = -1,
+  tunerPluginLoadReady = 0,
+  tunerPluginLoadSuccess = 1,
 };
 
 #define MAX_PLUGIN_LOAD 4
@@ -35,7 +37,8 @@ enum {
 static int status = tunerPluginLoadReady;
 
 ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
-  const char* tunerName;
+  const char* tunerName = nullptr;
+  bool tunerPluginRequested = false;
   // Initialize to nullptr by default if plugin tuner cannot be loaded.
   comm->tuner = nullptr;
   if (tunerPluginLoadFailed == status) {
@@ -54,9 +57,9 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
   }
 
   if ((tunerName = ncclGetEnv("NCCL_TUNER_PLUGIN")) != nullptr) {
-    INFO(NCCL_ENV|NCCL_TUNING, "NCCL_TUNER_PLUGIN set by environment to %s", tunerName);
-    if (strcasecmp(tunerName, "none") == 0)
-      goto fail;
+    tunerPluginRequested = true;
+    INFO(NCCL_ENV | NCCL_TUNING, "NCCL_TUNER_PLUGIN set by environment to %s", tunerName);
+    if (strcasecmp(tunerName, "none") == 0) goto fail;
   }
   tunerPluginLib = ncclOpenTunerPluginLib(tunerName);
   if (nullptr == tunerPluginLib) {
@@ -69,7 +72,10 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
     tunerName = ncclPluginLibPaths[ncclPluginTypeTuner];
   }
 
-  tunerSymbol = getNcclTuner_v5(tunerPluginLib);
+  tunerSymbol = getNcclTuner_v6(tunerPluginLib);
+  if (tunerSymbol == NULL) {
+    tunerSymbol = getNcclTuner_v5(tunerPluginLib);
+  }
   if (tunerSymbol == NULL) {
     tunerSymbol = getNcclTuner_v4(tunerPluginLib);
   }
@@ -80,10 +86,13 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
     tunerSymbol = getNcclTuner_v2(tunerPluginLib);
   }
   if (tunerSymbol == NULL) {
-    if (tunerName) INFO(NCCL_INIT|NCCL_TUNING, "External tuner plugin %s is unsupported", tunerName);
+    if (tunerName) {
+      if (tunerPluginRequested) ATTN("External tuner plugin %s is unsupported", tunerName);
+      else INFO(NCCL_INIT | NCCL_TUNING, "External tuner plugin %s is unsupported", tunerName);
+    }
     goto fail;
   }
-  if (tunerName) INFO(NCCL_INIT|NCCL_TUNING, "Successfully loaded external tuner plugin %s", tunerName);
+  if (tunerName) INFO(NCCL_INIT | NCCL_TUNING, "Successfully loaded external tuner plugin %s", tunerName);
 
   comm->tuner = tunerSymbol;
   ++tunerPluginRefCount;
@@ -102,7 +111,7 @@ fail:
 ncclResult_t ncclTunerPluginUnload(struct ncclComm* comm) {
   std::lock_guard<std::mutex> lock(tunerPluginMutex);
   if (comm->tunerPluginLoaded && 0 == (--tunerPluginRefCount)) {
-    INFO(NCCL_INIT|NCCL_TUNING, "TUNER/Plugin: Closing tuner: '%s'", tunerSymbol->name);
+    INFO(NCCL_DESTROY | NCCL_TUNING, "TUNER/Plugin: Closing tuner: '%s'", tunerSymbol->name);
     NCCLCHECK(ncclClosePluginLib(tunerPluginLib, ncclPluginTypeTuner));
     tunerPluginLib = nullptr;
     tunerSymbol = nullptr;

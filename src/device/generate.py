@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+
 import os
 import sys
 import shutil
 
 # Order of redops, tys, protos, algos must match src/include/device.h
-all_colls =  ["Broadcast","Reduce","AllGather","ReduceScatter","AllReduce","SendRecv"]
+all_colls =  ["Broadcast","Reduce","AllGather","AllGatherV", "ReduceScatter","AllReduce","SendRecv"]
 all_redops = ["Sum","Prod","MinMax","PreMulSum","SumPostDiv"]
 all_tys =    ["i8","u8","i32","u32","i64","u64","f16","f32","f64","bf16","f8e4m3","f8e5m2"]
 all_protos = ["LL","LL128","SIMPLE"]
@@ -22,8 +28,6 @@ if os.path.exists(gensrc):
     path = os.path.join(gensrc, name)
     if os.path.isfile(path):
       os.remove(path)
-    elif os.path.isdir(path):
-      shutil.rmtree(path)
 else:
   os.mkdir(gensrc)
 
@@ -60,9 +64,29 @@ make ONLY_FUNCS="AllReduce MinMax i32 NVLS *"
 make ONLY_FUNCS="AllReduce Sum f32 RING LL128"
 """
 
+################################################################################
+# NCCL_EXACT_KERNEL_NAMES enables exact kernel naming. When enabled, the generator
+# maps each primary device-function variant to its own ncclDevKernel entry
+# instead of using the compact representative-kernel mapping.
+def str_to_bool(s):
+  s = s.lower()
+  if s in ("1", "true", "on", "yes"):
+    return True
+  if s in ("", "0", "false", "off", "no"):
+    return False
+  raise ValueError("Invalid boolean value: " + s)
+exact_kernel_names = str_to_bool(os.environ.get("NCCL_EXACT_KERNEL_NAMES", "0"))
+
 # Paste all non-None arguments together with `sep`.
 def paste(sep, *args):
   return sep.join(x for x in args if x is not None)
+
+def kernel_suffix(kfn):
+  # paste skips None
+  return paste("_", *(kfn if exact_kernel_names else (kfn[0], None, kfn[2], kfn[3])))
+
+def kernel_full_name(kfn):
+  return paste("_", "ncclDevKernel", kernel_suffix(kfn))
 
 func_pattern = sys.argv[2:3]
 if func_pattern and func_pattern[0]:
@@ -80,6 +104,7 @@ else:
 
 algos_of_coll = {
   "AllGather":     ["RING","COLLNET_DIRECT","NVLS","PAT"],
+  "AllGatherV":    ["RING"],
   "AllReduce":     ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE"],
   "Broadcast":     ["RING"],
   "Reduce":        ["RING"],
@@ -89,6 +114,7 @@ algos_of_coll = {
 
 coll_camel_to_lower = {
   "AllGather":     "all_gather",
+  "AllGatherV":    "all_gather_v",
   "AllReduce":     "all_reduce",
   "Broadcast":     "broadcast",
   "Reduce":        "reduce",
@@ -148,7 +174,8 @@ def best_kernel(coll, redop, ty, algo, proto):
     # Modify this logic to control how many kernels are specialized.
     if coll=="Nop": return ("Generic", None, None, None, None)
     if coll=="SendRecv": return ("SendRecv", None, None, None, None)
-    if coll in ("AllGather","Broadcast"): return (coll, None, None, "RING", "LL")
+    if exact_kernel_names: return (coll, redop, ty, algo, proto)
+    if coll in ("AllGather","Broadcast","AllGatherV"): return (coll, None, None, "RING", "LL")
     return (coll, "Sum", ty, ("TREE" if algo=="TREE" else "RING"), "LL")
   # Need to ensure kernel is specialize for a primary function
   kfn = equivalent_primary(*best(coll, redop, ty, algo, proto))
@@ -159,7 +186,7 @@ def best_kernel(coll, redop, ty, algo, proto):
 # Order rows are enumerated must match formula of `ncclDevFuncId()`:
 def enumerate_func_rows():
   yield ("SendRecv", None, None, None, None)
-  for coll in ("AllGather", "Broadcast"):
+  for coll in ("AllGather", "Broadcast", "AllGatherV"):
     algos = algos_of_coll[coll]
     for algo in algos:
       for proto in all_protos:
@@ -199,6 +226,11 @@ primary_funcs = sorted(set(equivalent_primary(*fn) for fn in func_rows if fn is 
 primary_to_index = {fn: i for (i,fn) in zip(range(len(primary_funcs)), primary_funcs)}
 
 kernel_funcs = sorted(set(best_kernel(*fn) for fn in primary_funcs))
+# sanity check (conflicting names)
+kernel_names = [kernel_full_name(kfn) for kfn in kernel_funcs]
+duplicate_kernel_names = sorted(set(k for k in kernel_names if kernel_names.count(k) > 1))
+if duplicate_kernel_names:
+  raise RuntimeError("Duplicate generated kernel names: " + ", ".join(duplicate_kernel_names))
 
 ################################################################################
 
@@ -218,7 +250,14 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
       out("#endif\n")
   out("\n")
 
-  out("__device__ ncclDevFuncPtr_t const ncclDevFuncTable[] = {\n");
+  # On Windows/MSVC, extern arrays of unknown size are invalid (C2133), so we use
+  # an internal array + pointer alias.  On Linux/GCC the array is named directly
+  # to avoid an extra device-memory indirection on every kernel dispatch.
+  out("#if defined(NCCL_OS_WINDOWS)\n")
+  out("__device__ ncclDevFuncPtr_t const ncclDevFuncTableData[] = {\n")
+  out("#else\n")
+  out("__device__ ncclDevFuncPtr_t const ncclDevFuncTable[] = {\n")
+  out("#endif\n")
   index = 0
   for fn in primary_funcs:
     sym = paste("_", "ncclDevFunc", *fn)
@@ -232,6 +271,11 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
   out("nullptr};\n")
   out("\n")
 
+  out("#if defined(NCCL_OS_WINDOWS)\n")
+  out("__device__ ncclDevFuncPtr_t const * ncclDevFuncTable = ncclDevFuncTableData;\n")
+  out("#endif\n")
+  out("\n")
+
   out("// Workaround for https://reviews.llvm.org/D55580\n"
       "__device__ void ncclWorkaroundClangD55580() {}\n")
 
@@ -239,6 +283,10 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
 with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out = f.write
   out('#include "device.h"\n')
+  out("\n")
+
+  out("static_assert(%d <= (1 << NCCL_DEV_WORK_BATCH_FUNC_ID_BITS), " % len(primary_funcs))
+  out('"Device function IDs must fit in ncclDevWorkBatch");\n')
   out("\n")
 
   out("extern int const ncclDevFuncIdCount = %d;\n" % len(primary_funcs))
@@ -259,7 +307,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   # Forward declarations of kernels.
   for kfn in kernel_funcs:
     cudart, _ = required_cuda(*kfn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = kernel_full_name(kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
     # __global__ below gets removed by the host compiler, which results in
     # Coverity diagnosing a specifiers inconsistency.
@@ -274,7 +322,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   index = 0
   for kfn in kernel_funcs:
     cudart, _ = required_cuda(*kfn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = kernel_full_name(kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
     out("/*%4d*/ (void*)%s,\n" % (index, sym));
     if cudart != 0: out("#else\n" "/*%4d*/ nullptr,\n" "#endif\n" % index)
@@ -285,7 +333,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out("int ncclDevKernelRequirements[] = {\n")
   for index,kfn in enumerate(kernel_funcs):
     cudart,_ = required_cuda(*kfn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = kernel_full_name(kfn)
     out("  %7d, /*%4d %s*/\n" % (cudart or 0, index, sym));
   out("};\n")
   out("\n")
@@ -295,7 +343,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   index = 0
   for fn in primary_funcs:
     kfn = best_kernel(*fn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = kernel_full_name(kfn)
     cudart, _ = required_cuda(*kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
     out("/*%4d*/ (void*)%s,\n" % (index, sym))
@@ -341,29 +389,30 @@ for name in sorted(name_to_funcs.keys()):
 files += "device_table.cu;"
 files += "host_table.cc"
 
-# Do not print files when running make
+# Output file list for CMake (excludes rules.mk since it's not generated for CMake)
 if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
     print(files)
 
-# Generate <gensrc>/rules.mk
-with open(os.path.join(gensrc, "rules.mk"), "w") as f:
-  out = f.write
-  impl_names = sorted(name_to_funcs.keys())
-  names = impl_names + ["host_table.cc", "device_table.cu"]
-  out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n"
-      .format(names=" ".join(names)))
-  out("\n")
+# Generate <gensrc>/rules.mk (only needed for Makefile builds, not CMake)
+if os.environ.get("NCCL_USE_CMAKE", "0") != "1":
+  with open(os.path.join(gensrc, "rules.mk"), "w") as f:
+    out = f.write
+    impl_names = sorted(name_to_funcs.keys())
+    names = impl_names + ["host_table.cc", "device_table.cu"]
+    out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n"
+        .format(names=" ".join(names)))
+    out("\n")
 
-  # For each <coll>_<op>_<ty>.cu compile to a .cu.o file. Notice the dependencies
-  # come from the suffix-erased file (e.g. 'gensrc/all_reduce.cu')
-  for name in impl_names:
-    coll = name_to_funcs[name][0]
-    out(
-      "$(OBJDIR)/genobj/{name}.o: $(OBJDIR)/gensrc $(OBJDIR)/genobj/{lower_coll}.cu.d\n"
-      "\t" "$(call COMPILE,$@,$(OBJDIR)/gensrc/{name})\n"
-      "\n"
-      .format(name=name, lower_coll=coll_camel_to_lower[coll])
-    )
+    # For each <coll>_<op>_<ty>.cu compile to a .cu.o file. Notice the dependencies
+    # come from the suffix-erased file (e.g. 'gensrc/all_reduce.cu')
+    for name in impl_names:
+      coll = name_to_funcs[name][0]
+      out(
+        "$(OBJDIR)/genobj/{name}.o: $(OBJDIR)/gensrc $(OBJDIR)/genobj/{lower_coll}.cu.d\n"
+        "\t" "$(call COMPILE,$@,$(OBJDIR)/gensrc/{name})\n"
+        "\n"
+        .format(name=name, lower_coll=coll_camel_to_lower[coll])
+      )
 
 # Add the suffix-erased .cu's which are used only for dependency scraping.
 for coll in set(coll for (coll,_,_,_,_) in primary_funcs if coll!="Nop"):
@@ -410,7 +459,7 @@ for name in name_to_funcs.keys():
     (_, kfns) = name_to_kernels.get(name) or (None, [])
     for kfn in kfns:
       (coll, redop, ty, algo, proto) = kfn
-      sym = paste("_", coll, redop, ty, algo, proto)
+      sym = kernel_suffix(kfn)
       fn_id = primary_to_index[kfn]
       cudart, arch = required_cuda(*kfn)
       s = "DEFINE_ncclDevKernel({sym}, ncclFunc{coll}, {redop_cxx}, {ty_cxx}, NCCL_ALGO_{algo}, NCCL_PROTO_{proto}, {fn_id})\n"

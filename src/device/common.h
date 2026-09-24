@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_DEVICE_COMMON_H_
 #define NCCL_DEVICE_COMMON_H_
@@ -17,26 +18,31 @@
 
 #if __CUDA_ARCH__ >= 700
 // __grid_constant__ appears to break cuda-gdb
-//#define NCCL_GRID_CONSTANT __grid_constant__
-#define NCCL_GRID_CONSTANT
+#define NCCL_GRID_CONSTANT __grid_constant__
 #else
 #define NCCL_GRID_CONSTANT
 #endif
 
-typedef void(*ncclDevFuncPtr_t)();
+typedef void (*ncclDevFuncPtr_t)();
+#if defined(NCCL_OS_WINDOWS)
+/* MSVC C2133: extern array of unknown size needs a complete type; use pointer instead. */
+extern __device__ ncclDevFuncPtr_t const* ncclDevFuncTable;
+#else
 extern __device__ ncclDevFuncPtr_t const ncclDevFuncTable[];
+#endif
 
 struct ncclShmemGroup {
-  ncclConnInfo *recvConns[NCCL_MAX_ARITY];
-  ncclConnInfo *sendConns[NCCL_MAX_ARITY];
+  ncclConnInfo* recvConns[NCCL_MAX_ARITY];
+  ncclConnInfo* sendConns[NCCL_MAX_ARITY];
   void* userInput;
   void* userOutput;
-  void* srcs[NCCL_MAX_ARITY+1];
-  void* dsts[NCCL_MAX_ARITY+1];
+  void* srcs[NCCL_MAX_ARITY + 1];
+  void* dsts[NCCL_MAX_ARITY + 1];
   union {
     unpackGroupShmem unpack;
   } devicePlugin;
-  int32_t dstSizes[NCCL_MAX_ARITY+1];
+  int32_t dstSizes[NCCL_MAX_ARITY + 1];
+  uint64_t redOpArgs;
 };
 
 struct ncclShmemData {
@@ -54,10 +60,11 @@ struct ncclShmemData {
   int workSize;
   uint64_t workCounter;
   bool profilerEnabled;
+  // ncclFunc_t this batch's completions are counted under.
+  uint8_t func;
   struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
-  uint64_t redOpArgs[NCCL_MAX_NVLS_ARITY+1];
 
-  alignas(16) char workStorage[1024];
+  alignas(16) char workStorage[ncclMaxDevWorkBatchBytes()];
 
   alignas(16) union {
     unpackShmem unpack;
@@ -66,92 +73,96 @@ struct ncclShmemData {
 
 extern __shared__ ncclShmemData ncclShmem;
 #if __CUDA_ARCH__ >= 700
-  extern __shared__ ulong2 ncclShmemPerWarp[/*ncclShmemDynamicSize()/sizeof(ulong2)*/];
+extern __shared__ ulong2 ncclShmemPerWarp[/*ncclShmemDynamicSize()/sizeof(ulong2)*/];
 #else
-  extern __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
+extern __shared__ ulong2
+  ncclShmemPerWarp[ncclShmemScratchWarpSize() * (NCCL_MAX_NTHREADS / WARP_SIZE) / sizeof(ulong2)];
 #endif
 
 __device__ inline void* ncclScratchForWarp(int warp) {
-  return (char*)ncclShmemPerWarp + warp*ncclShmemScratchWarpSize();
+  return (char*)ncclShmemPerWarp + warp * ncclShmemScratchWarpSize();
 }
 
 __device__ inline void barrier_sync(int name) {
-  #if 0
+#if 0
   asm volatile("barrier.sync %0;" :: "r"(name) : "memory");
-  #else
-  asm volatile("barrier.sync.aligned %0;" :: "r"(name) : "memory");
-  #endif
+#else
+  asm volatile("barrier.sync.aligned %0;" ::"r"(name) : "memory");
+#endif
 }
 __device__ inline void barrier_sync(int name, int nThreads) {
-  #if 0
+#if 0
   asm volatile("barrier.sync %0, %1;" :: "r"(name), "r"(nThreads) : "memory");
-  #else
-  asm volatile("barrier.sync.aligned %0, %1;" :: "r"(name), "r"(nThreads) : "memory");
-  #endif
+#else
+  asm volatile("barrier.sync.aligned %0, %1;" ::"r"(name), "r"(nThreads) : "memory");
+#endif
 }
 __device__ inline void barrier_sync_aligned(int name) {
-  asm volatile("barrier.sync.aligned %0;" :: "r"(name) : "memory");
+  asm volatile("barrier.sync.aligned %0;" ::"r"(name) : "memory");
 }
 __device__ inline void barrier_sync_aligned(int name, int nThreads) {
-  asm volatile("barrier.sync.aligned %0, %1;" :: "r"(name), "r"(nThreads) : "memory");
+  asm volatile("barrier.sync.aligned %0, %1;" ::"r"(name), "r"(nThreads) : "memory");
 }
 
 __device__ inline bool barrier_red_or(bool vote, int name) {
   int ans;
   asm volatile("{ .reg .pred p;"
-      "  setp.ne.s32 p, %1, 0;"
-      "  barrier.red.or.pred p, %2, p; "
-      "  selp.s32 %0, 1, 0, p; }"
-      : "=r"(ans) : "r"((int)vote), "r"(name) : "memory");
+               "  setp.ne.s32 p, %1, 0;"
+               "  barrier.red.or.pred p, %2, p; "
+               "  selp.s32 %0, 1, 0, p; }"
+               : "=r"(ans)
+               : "r"((int)vote), "r"(name)
+               : "memory");
   return bool(ans);
 }
 __device__ inline bool barrier_red_or(bool vote, int name, int nThreads) {
   int ans;
   asm volatile("{ .reg .pred p;"
-      "  setp.ne.s32 p, %1, 0;"
-      "  barrier.red.or.pred p, %2, %3, p; "
-      "  selp.s32 %0, 1, 0, p; }"
-      : "=r"(ans) : "r"((int)vote), "r"(name), "r"(nThreads) : "memory");
+               "  setp.ne.s32 p, %1, 0;"
+               "  barrier.red.or.pred p, %2, %3, p; "
+               "  selp.s32 %0, 1, 0, p; }"
+               : "=r"(ans)
+               : "r"((int)vote), "r"(name), "r"(nThreads)
+               : "memory");
   return bool(ans);
 }
 
 // Copy 16-byte aligned data. You must call with at least `(bytes+15)/16` threads.
 inline __device__ void copyToShmem16(int tid, void* dst, void const* src, int bytes) {
-  int offset = 16*tid;
+  int offset = 16 * tid;
   if (offset < bytes) {
-    uint64_t a=0, b=0;
-    asm volatile("ld.v2.u64 {%0,%1},[%2];" : "=l"(a),"=l"(b) : "l"((char const*)src + offset) : "memory");
+    uint64_t a = 0, b = 0;
+    asm volatile("ld.v2.u64 {%0,%1},[%2];" : "=l"(a), "=l"(b) : "l"((char const*)src + offset) : "memory");
     uint32_t udst = (uint32_t)__cvta_generic_to_shared(dst);
-    asm volatile("st.shared.v2.u64 [%0],{%1,%2};" :: "r"(udst + offset), "l"(a), "l"(b) : "memory");
+    asm volatile("st.shared.v2.u64 [%0],{%1,%2};" ::"r"(udst + offset), "l"(a), "l"(b) : "memory");
   }
 }
 
 // Must run with at least 64 threads
-__device__ __forceinline__ void loadWorkBatchToShmem(
-    int tid, int tn, struct ncclDevKernelArgs const* args, int batchIx
-  ) {
-  int lane = tid%WARP_SIZE;
+__device__ __forceinline__ void loadWorkBatchToShmem(int tid, int tn, struct ncclDevKernelArgs const* args,
+                                                     int batchIx) {
+  int lane = tid % WARP_SIZE;
   int workCursor = 0; // num works written in previous loop iterations.
   while (true) {
-    struct ncclDevWorkBatch batch = ((struct ncclDevWorkBatch*)(args+1))[batchIx];
+    struct ncclDevWorkBatch batch = ((struct ncclDevWorkBatch*)(args + 1))[batchIx];
 
     // fnsOfBitset[n] = index of n'th set bit in batch.offsetBitset.
     // PTX has instruction "fns" (find n-th set) but it expands to a lot of SASS,
     // since we know all lanes will be querying the same bitmask we can compute
     // much faster using shared memory.
-    uint8_t* fnsOfBitset = (uint8_t*)ncclScratchForWarp(threadIdx.x/WARP_SIZE);
+    uint8_t* fnsOfBitset = (uint8_t*)ncclScratchForWarp(threadIdx.x / WARP_SIZE);
     __syncwarp();
-    if (uint32_t(batch.offsetBitset) & (1u<<lane)) {
-      int nWorksBelow = __popc(uint32_t(batch.offsetBitset) & ((1u<<lane)-1));
+    if (uint32_t(batch.offsetBitset) & (1u << lane)) {
+      int nWorksBelow = __popc(uint32_t(batch.offsetBitset) & ((1u << lane) - 1));
       fnsOfBitset[nWorksBelow] = lane;
     }
     int nWorksLow32 = __popc(uint32_t(batch.offsetBitset)); // just of low 32 bits
-    if (uint32_t(batch.offsetBitset>>32) & (1u<<lane)) {
+    if (uint32_t(batch.offsetBitset >> 32) & (1u << lane)) {
       int nWorksBelow = nWorksLow32;
-      nWorksBelow += __popc(uint32_t(batch.offsetBitset>>32) & ((1u<<lane)-1));
+      nWorksBelow += __popc(uint32_t(batch.offsetBitset >> 32) & ((1u << lane) - 1));
       fnsOfBitset[nWorksBelow] = 32 + lane;
     }
-    int nWorks = nWorksLow32 + __popc(uint32_t(batch.offsetBitset>>32)); // add high 32 bits
+    int nWorks = nWorksLow32 + __popc(uint32_t(batch.offsetBitset >> 32)); // add high 32 bits
     __syncwarp();
 
     int workSize;
@@ -161,22 +172,28 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
     switch (batch.workType) {
     case (int)ncclDevWorkTypeP2p:
       workSize = sizeof(struct ncclDevWorkP2p);
-      nPacks = nWorks*(workSize/16);
-      packInWork = tid%(workSize/16);
-      dstWork = tid/(workSize/16);
+      nPacks = nWorks * (workSize / 16);
+      packInWork = tid % (workSize / 16);
+      dstWork = tid / (workSize / 16);
       break;
     case (int)ncclDevWorkTypeColl:
       workSize = sizeof(struct ncclDevWorkColl);
-      nPacks = nWorks*(workSize/16);
-      packInWork = tid%(workSize/16);
-      dstWork = tid/(workSize/16);
+      nPacks = nWorks * (workSize / 16);
+      packInWork = tid % (workSize / 16);
+      dstWork = tid / (workSize / 16);
+      break;
+    case (int)ncclDevWorkTypeBcast:
+      workSize = sizeof(struct ncclDevWorkBcast);
+      nPacks = nWorks * (workSize / 16);
+      packInWork = tid % (workSize / 16);
+      dstWork = tid / (workSize / 16);
       break;
     case (int)ncclDevWorkTypeCollReg:
     default:
       workSize = sizeof(struct ncclDevWorkCollReg);
-      nPacks = nWorks*(workSize/16);
-      packInWork = tid%(workSize/16);
-      dstWork = tid/(workSize/16);
+      nPacks = nWorks * (workSize / 16);
+      packInWork = tid % (workSize / 16);
+      dstWork = tid / (workSize / 16);
       break;
     }
     if (tid == 0) {
@@ -191,7 +208,7 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
     // here which is the per batch maximum.
     if (tid < nPacks) {
       int srcWork = fnsOfBitset[dstWork]; // find n'th set bit in batch.offsetBitset
-      ulong2 tmp;
+      ulonglong2 tmp;
       // The loads done in these two cases must be kept separate since we are
       // relying on the compiler to use "ld.param" in the first one. The parameter
       // space is not generically addressable, so any attempt to load through
@@ -211,15 +228,16 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
       // }
       // memcpy(dst, src, n);
       if (ncclShmem.args.workStorageType == ncclDevWorkStorageTypeArgs) {
-        char* src = (char*)args + (batch.offsetBase + srcWork*workSize + packInWork*16);
-        tmp = *(ulong2*)src; // becomes ld.param.v2.u64
+        char* src = (char*)args + (batch.offsetBase + srcWork * workSize + packInWork * 16);
+        tmp = *(ulonglong2*)src; // becomes ld.param.v2.u64
       } else {
-        char* src = (char*)ncclShmem.args.workBuf + ((batch.offsetBase + srcWork*workSize + packInWork*16) & ncclShmem.args.workMask);
-        tmp = *(ulong2*)src; // becomes ld.v2.u64
+        char* src = (char*)ncclShmem.args.workBuf +
+                    ((batch.offsetBase + srcWork * workSize + packInWork * 16) & ncclShmem.args.workMask);
+        tmp = *(ulonglong2*)src; // becomes ld.v2.u64
       }
       char* dst = ncclShmem.workStorage;
-      dst += (workCursor + dstWork)*workSize + packInWork*16;
-      *(ulong2*)dst = tmp;
+      dst += (workCursor + dstWork) * workSize + packInWork * 16;
+      *(ulonglong2*)dst = tmp;
     }
     workCursor += nWorks;
 
@@ -230,10 +248,11 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
     } else {
       if (tid == 0) {
         ncclShmem.batchIx = batchIx;
-        ncclShmem.nextBatchIx = (batch.nextJump == 0) ? -1 : batchIx + batch.nextJump;
+        ncclShmem.nextBatchIx = (batch.nextJump == 0) ? -1 : (int)(batchIx + batch.nextJump);
         ncclShmem.workType = (enum ncclDevWorkType)batch.workType;
         ncclShmem.nWorks = workCursor;
         ncclShmem.funcId = batch.funcId;
+        ncclShmem.func = batch.func;
       }
       break;
     }
@@ -246,22 +265,41 @@ __device__ __forceinline__ unsigned long long int globaltimer() {
   return timer;
 }
 
-template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
+template <ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
 struct RunWorkColl {
   __device__ void run(int tid, int tn, struct ncclDevWorkColl* work) {
     // Put NOT IMPLEMENTED behavior here.
   }
 };
 
-template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
+template <ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
 struct RunWorkBatch;
 
 // Specialized for P2p in sendrecv.h
-template<typename T, typename RedOp>
+template <typename T, typename RedOp>
 struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE>;
 
+template <typename T, typename RedOp, int Proto>
+struct RunWorkBatch<ncclFuncAllGatherV, T, RedOp, NCCL_ALGO_RING, Proto>;
+
+#define START 0
+#define STOP 1
+#define FINI 2
+
+// These kernels record only KernelCh start/stop. KernelPhase instrumentation is
+// symmetric-only: the open/close barriers it measures exist in the symmetric
+// kernels, so stamping them here would report boundaries that carry no meaning.
+// Items are strided by workSize, not sizeof(ncclDevWorkColl), which is smaller for
+// registered collectives. Bcast work carries no profiling bit.
+__device__ __forceinline__ bool profilerEnabled(int workItemIdx) {
+  char* work = ncclShmem.workStorage + workItemIdx * ncclShmem.workSize;
+  if (ncclShmem.workType == ncclDevWorkTypeP2p) return ((struct ncclDevWorkP2p*)work)->profilerEnabled;
+  if (ncclShmem.workType == ncclDevWorkTypeBcast) return false;
+  return ((struct ncclDevWorkColl*)work)->profilerEnabled;
+}
+
 // Specialized here for non-P2p (Coll and CollReg)
-template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
+template <ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
 struct RunWorkBatch {
   // This __forceinline__ is necessary. The compiler was inserting a function call
   // here from the LL ncclKernel.
@@ -271,8 +309,8 @@ struct RunWorkBatch {
 
     if (RedOpArg<RedOp>::ArgUsed) {
       int nWorks = ncclShmem.nWorks;
-      for (int w=tid; w < nWorks; w += tn) {
-        struct ncclDevWorkColl* work = (ncclDevWorkColl*)(ncclShmem.workStorage + w*ncclShmem.workSize);
+      for (int w = tid; w < nWorks; w += tn) {
+        struct ncclDevWorkColl* work = (ncclDevWorkColl*)(ncclShmem.workStorage + w * ncclShmem.workSize);
         if (work->redOpArgIsPtr) {
           work->redOpArg = RedOpArg<RedOp>::loadArg(reinterpret_cast<void*>(work->redOpArg));
         }
@@ -280,14 +318,15 @@ struct RunWorkBatch {
       __syncthreads();
     }
 
-    #pragma unroll 1
-    for (int w=0; w < ncclShmem.nWorks; w++) {
-      struct ncclDevWorkColl* work = (struct ncclDevWorkColl*)(ncclShmem.workStorage + w*ncclShmem.workSize);
+    NVCC_PRAGMA_UNROLL_DISABLED
+    for (int w = 0; w < ncclShmem.nWorks; w++) {
+      struct ncclDevWorkColl* work = (struct ncclDevWorkColl*)(ncclShmem.workStorage + w * ncclShmem.workSize);
       if (w != 0) {
-        struct ncclDevWorkColl* workPrev = (struct ncclDevWorkColl*)(ncclShmem.workStorage + (w-1)*ncclShmem.workSize);
+        struct ncclDevWorkColl* workPrev =
+          (struct ncclDevWorkColl*)(ncclShmem.workStorage + (w - 1) * ncclShmem.workSize);
         if (work->nWarps != workPrev->nWarps) __syncthreads();
       }
-      int subtn = work->nWarps*WARP_SIZE;
+      int subtn = work->nWarps * WARP_SIZE;
       // Coverity reports a possible thread divergence due to not all threads participating in the collective.
       // However, the code ensures that the participation is on a per-warp basis.
       // coverity[device_thread_diverged:FALSE]
@@ -296,14 +335,43 @@ struct RunWorkBatch {
   }
 };
 
-#define START 0
-#define STOP  1
-#define FINI  2
+static_assert(NCCL_NUM_PROGRESS_COUNTERS <= 64, "Progress-counter slots must fit in collOpActive's bitmask");
 
-__device__ __forceinline__ bool profilerEnabled(int workItemIdx) {
-  return (ncclShmem.workType == ncclDevWorkTypeP2p) ?
-    ((struct ncclDevWorkP2p*)ncclShmem.workStorage)[workItemIdx].profilerEnabled :
-    ((struct ncclDevWorkColl*)ncclShmem.workStorage)[workItemIdx].profilerEnabled;
+// Return this batch's progress-counter slot, or -1 for an empty batch.
+// START and STOP see the same batch until loadWorkBatchToShmem runs.
+__device__ __forceinline__ int progressCounterBatchSlot() {
+  if (ncclShmem.nWorks == 0) return -1;
+  return (int)ncclShmem.func;
+}
+
+// Count completed work owned by this channel at STOP/FINI while workStorage is stable.
+__device__ __forceinline__ uint32_t progressCounterScanBatch() {
+  uint32_t count = 0;
+  if (ncclShmem.workType == ncclDevWorkTypeBcast) {
+    // Batched Broadcast completion is owned by channel 0.
+    return ncclShmem.channelId == 0 ? (uint32_t)ncclShmem.nWorks : 0;
+  }
+  if (ncclShmem.workType == ncclDevWorkTypeP2p) {
+    for (int w = 0; w < ncclShmem.nWorks; w++) {
+      struct ncclDevWorkP2p* work = (struct ncclDevWorkP2p*)(ncclShmem.workStorage + w * ncclShmem.workSize);
+      if ((int)ncclShmem.channelId == (int)work->channelBase) count++;
+    }
+  } else {
+    for (int w = 0; w < ncclShmem.nWorks; w++) {
+      struct ncclDevWorkColl* work = (struct ncclDevWorkColl*)(ncclShmem.workStorage + w * ncclShmem.workSize);
+      if ((int)ncclShmem.channelId == (int)work->channelLo) count++;
+    }
+  }
+  return count;
+}
+
+__device__ __forceinline__ void progressCounterPublishCompletedSlot(int slot, uint32_t count) {
+  struct ncclProgressCountersBlock* counters = ncclShmem.comm.progressCounters;
+  if (count == 0 || counters == nullptr) return;
+  counters->completedTimeNs[slot] = globaltimer();
+  // Publish the count after the timestamp. Future consumers that require
+  // stronger snapshot ordering may need a device fence here.
+  asm volatile("red.global.add.u64 [%0], %1;" : : "l"(&counters->completedWorkCount[slot]), "l"((uint64_t)count));
 }
 
 __device__ __forceinline__ void profiler(int action) {
@@ -311,31 +379,51 @@ __device__ __forceinline__ void profiler(int action) {
     int idx = 0;
     uint64_t wc = ncclShmem.channel.workCounter + 1;
     if (action == START) {
+      // timestamp+counter share one 16B slot (single cache line), so publishing
+      // them together needs no fence.
+      // Resolve this batch's progress-counter slot and mark the channel active.
+      if (ncclShmem.comm.progressCounters != nullptr) {
+        int slot = progressCounterBatchSlot();
+        if (slot >= 0) ncclShmem.comm.progressCounters->collOpActive[ncclShmem.channelId] = 1ull << slot;
+      }
       for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
         if (!profilerEnabled(idx++)) continue;
-        ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp = globaltimer();
-        ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc%MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
+        uint64_t ts = globaltimer();
+        int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
+        ncclShmem.comm.workStarted[ncclShmem.channelId].data[slot].timestamp = ts;
+        ncclShmem.comm.workStarted[ncclShmem.channelId].data[slot].counter = wc;
       }
     } else {
       for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
         if (!profilerEnabled(idx++)) continue;
-        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp = globaltimer();
-        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc%MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
+        uint64_t ts = globaltimer();
+        int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
+        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[slot].timestamp = ts;
+        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[slot].counter = wc;
       }
       ncclShmem.channel.workCounter += ncclShmem.nWorks;
-      if (action == FINI) ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter = ncclShmem.channel.workCounter;
+      // Do not report aborted work as completed; leave its active mask set.
+      if (ncclShmem.aborted == 0 && ncclShmem.comm.progressCounters != nullptr) {
+        int slot = progressCounterBatchSlot();
+        if (slot >= 0) ncclShmem.comm.progressCounters->collOpActive[ncclShmem.channelId] = 0;
+        progressCounterPublishCompletedSlot(slot, progressCounterScanBatch());
+        // No system fence; counter-monitor snapshots are diagnostic and may be stale.
+      }
+      if (action == FINI)
+        ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter =
+          ncclShmem.channel.workCounter;
     }
   }
 }
 
-template<int SpecializedFnId, typename SpecializedRunWorkBatch>
+template <int SpecializedFnId, typename SpecializedRunWorkBatch>
 __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* args) {
   int tid = threadIdx.x;
   int tn = blockDim.x;
 
   // Copy kernel args to shmem and then only read those. Otherwise the compiler
   // will end up putting the args into thread local stack which is very wasteful.
-  if (tid < sizeof(ncclDevKernelArgs)/sizeof(uint32_t)) {
+  if (tid < sizeof(ncclDevKernelArgs) / sizeof(uint32_t)) {
     ((uint32_t*)&ncclShmem.args)[tid] = ((uint32_t*)args)[tid];
   }
 
@@ -343,42 +431,50 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   // is the inverse of counting the number of set bits among the the first n.
   // PTX has the fns instruction which does this but is extremely slow. We can
   // do better when we know all threads are querying the same bitmask.
-  if (tid < MAXCHANNELS && (args->channelMask & (1ull<<tid))) {
-    int n = __popcll(args->channelMask & ((1ull<<tid)-1));
+  if (tid < MAXCHANNELS && (args->channelMask & (1ull << tid))) {
+    int n = __popcll(args->channelMask & ((1ull << tid) - 1));
     if (blockIdx.x == n) ncclShmem.channelId = tid;
   }
   __syncthreads(); // publish ncclShmem.{args, channelId}
   /* set abort flag to 0 */
   if (tid == 0) {
     ncclShmem.aborted = 0;
-    ncclShmem.channel.workCounter = ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter;
+    ncclShmem.channel.workCounter =
+      ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter;
   }
 
   // Use first 2 warps to load comm and channel, and remaining load work batch.
-  switch (tid/WARP_SIZE) {
+  switch (tid / WARP_SIZE) {
   case 0:
-    { void* dst = &ncclShmem.comm;
+    {
+      void* dst = &ncclShmem.comm;
       void* src = ncclShmem.args.comm;
       int bytes = sizeof(ncclKernelComm);
-      static_assert(sizeof(ncclKernelComm) <= 16*WARP_SIZE, "ncclKernelComm cannot be loaded by a single warp in one insn.");
+      static_assert(sizeof(ncclKernelComm) <= 16 * WARP_SIZE,
+                    "ncclKernelComm cannot be loaded by a single warp in one insn.");
       copyToShmem16(tid, dst, src, bytes);
-    } break;
+    }
+    break;
   case 1:
     { // Get address of channel without incurring indirect load from ncclKernelComm::channels
       void* dst = &ncclShmem.channel;
       void* src = &((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId];
       int bytes = sizeof(ncclDevChannel);
-      static_assert(sizeof(ncclDevChannel) <= 16*WARP_SIZE, "ncclDevChannel cannot be loaded by a single warp in one insn.");
-      copyToShmem16(tid-WARP_SIZE, dst, src, bytes);
-    } break;
+      static_assert(sizeof(ncclDevChannel) <= 16 * WARP_SIZE,
+                    "ncclDevChannel cannot be loaded by a single warp in one insn.");
+      copyToShmem16(tid - WARP_SIZE, dst, src, bytes);
+    }
+    break;
   default:
-    { int subtid = tid - 2*WARP_SIZE;
-      int subtn = tn - 2*WARP_SIZE;
+    {
+      int subtid = tid - 2 * WARP_SIZE;
+      int subtn = tn - 2 * WARP_SIZE;
       // Coverity reports a possible thread divergence due to not all threads participating in the collective.
       // However, the code ensures that the participation is on a per-warp basis.
       // coverity[device_thread_diverged:FALSE]
       loadWorkBatchToShmem(subtid, subtn, args, /*batchIx=*/blockIdx.x);
-    } break;
+    }
+    break;
   }
   __syncthreads(); // publish ncclShmem
 
@@ -394,9 +490,13 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
     int batchIx = ncclShmem.nextBatchIx;
     __syncthreads();
     profiler(STOP);
+    // Keep workStorage stable until thread 0 finishes counting.
+    if (ncclShmem.comm.progressCounters != nullptr) __syncthreads();
     loadWorkBatchToShmem(tid, tn, args, batchIx);
     __syncthreads();
   }
+  // Publish progress-counter completion for the last batch only after every thread has left the work body.
+  if (ncclShmem.comm.progressCounters != nullptr) __syncthreads();
   profiler(FINI);
 }
 

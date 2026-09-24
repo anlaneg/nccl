@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+
 # Source files
 set(LIBSRCFILES
     bootstrap.cc
@@ -5,17 +10,24 @@ set(LIBSRCFILES
     ce_coll.cc
     collectives.cc
     debug.cc
-    enqueue.cc
     group.cc
     init.cc
-    init_nvtx.cc
     proxy.cc
     transport.cc
     mnnvl.cc
     allocator.cc
     sym_kernels.cc
     dev_runtime.cc
+    cft_dev_runtime.cc
+    dev_runtime_segments.cc
+    mem_manager.cc
+    plugin/net.cc
 )
+
+# Add NVTX support if enabled
+if(NVTX)
+    list(APPEND LIBSRCFILES init_nvtx.cc)
+endif()
 
 # Add compatibility shim if using static cudart
 if(CUDARTLIB STREQUAL "cudart_static")
@@ -30,89 +42,185 @@ configure_file(
 )
 
 # Add files from subdirectories
+add_subdirectory(config)
 add_subdirectory(transport)
 add_subdirectory(misc)
 add_subdirectory(register)
 add_subdirectory(graph)
+add_subdirectory(enqueue)
+
+if (NCCL_OS_LINUX)
 add_subdirectory(plugin)
+add_subdirectory(ras)
+add_subdirectory(diagnostics)
+endif()
+
 add_subdirectory(device)
 add_subdirectory(nccl_device)
-add_subdirectory(ras)
 add_subdirectory(scheduler)
-add_subdirectory(gin)
+add_subdirectory(os)
+add_subdirectory(rma)
+add_subdirectory(param)
+add_subdirectory(devcomm)
+add_subdirectory(tuning)
 
-add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+# GIN is Linux-only (requires InfiniBand verbs)
+if(NCCL_OS_LINUX)
+    add_subdirectory(gin)
+endif()
+
+if(NCCL_OS_LINUX)
+    add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+endif()
 
 # Add all source files
 list(APPEND LIBSRCFILES
+    ${CONFIG_SOURCES}
     ${TRANSPORT_SOURCES}
     ${MISC_SOURCES}
     ${REGISTER_SOURCES}
     ${GRAPH_SOURCES}
+    ${ENQUEUE_SOURCES}
     ${PLUGIN_SOURCES}
     ${RAS_SOURCES}
     ${SYM_SOURCES}
     ${SCHEDULER_SOURCES}
-    ${GIN_SOURCES}
+    ${OS_SOURCES}
     ${DOCA_SOURCES}
+    ${RMA_SOURCES}
+    ${PARAM_SOURCES}
+    ${DEVCOMM_SOURCES}
+    ${TUNING_SOURCES}
 )
+
+# Add GIN sources only on Linux
+if(NCCL_OS_LINUX)
+    list(APPEND LIBSRCFILES ${GIN_SOURCES})
+    list(APPEND LIBSRCFILES diagnostics.cc ${DIAGNOSTICS_SOURCES})
+endif()
 
 ###################### Create a shared NCCL library ############################
 add_library(nccl SHARED)
+if(NCCL_OS_WINDOWS)
+    target_compile_definitions(nccl PRIVATE NCCL_BUILD_SHARED_LIB)
+endif()
 
 target_sources(nccl PRIVATE ${LIBSRCFILES})
+if(NCCL_OS_WINDOWS)
+    target_link_libraries(nccl PRIVATE nccl_device)
+else()
+    target_sources(nccl PRIVATE $<TARGET_OBJECTS:nccl_device>)
+endif()
+if(NCCL_OS_LINUX)
+    target_sources(nccl PRIVATE $<TARGET_OBJECTS:nccl_diagnostics_device>)
+endif()
 
-# Include directories
-target_include_directories(nccl PUBLIC
+# Include directories; add DOCA only on non-Windows (skip for Windows platform)
+set(NCCL_PRIVATE_INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${CUDAToolkit_INCLUDE_DIRS}
-    ${DOCA_HOME}/include
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
+    ${CMAKE_BINARY_DIR}/obj/include
+)
+if(NOT NCCL_OS_WINDOWS AND DOCA_HOME)
+    list(APPEND NCCL_PRIVATE_INCLUDES ${DOCA_HOME}/include)
+endif()
+target_include_directories(nccl
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
+    ${NCCL_PRIVATE_INCLUDES}
 )
 
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/include/nccl.h
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/include
-    COMMAND sed -e "s/\\\$$\\{nccl:Major\\}/${NCCL_MAJOR}/g"
-                -e "s/\\\$$\\{nccl:Minor\\}/${NCCL_MINOR}/g"
-                -e "s/\\\$$\\{nccl:Patch\\}/${NCCL_PATCH}/g"
-                -e "s/\\\$$\\{nccl:Suffix\\}/${NCCL_SUFFIX}/g"
-                -e "s/\\\$$\\{nccl:Version\\}/${NCCL_VERSION_CODE}/g"
-                ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${CMAKE_BINARY_DIR}/include/nccl.h
-    BYPRODUCTS ${CMAKE_BINARY_DIR}/include/nccl.h
+    COMMAND ${CMAKE_COMMAND} -DNCCL_MAJOR=${NCCL_MAJOR} -DNCCL_MINOR=${NCCL_MINOR} -DNCCL_PATCH=${NCCL_PATCH} -DNCCL_SUFFIX=${NCCL_SUFFIX} -DNCCL_VERSION_CODE=${NCCL_VERSION_CODE} -DINPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in -DOUTPUT_FILE=${CMAKE_BINARY_DIR}/include/nccl.h -P ${CMAKE_CURRENT_SOURCE_DIR}/generate_header.cmake
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in ${CMAKE_CURRENT_SOURCE_DIR}/generate_header.cmake
 )
 
 file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
+# On Windows, do not copy GIN device headers (GIN is Linux-only).
+# Exclude nccl_device/gin.h and nccl_device/gin/* but keep nccl_device/gin_barrier.h etc.
+if(NCCL_OS_WINDOWS)
+    list(FILTER SRC_DEVICE_HEADERS EXCLUDE REGEX "nccl_device/gin\\.h")
+    list(FILTER SRC_DEVICE_HEADERS EXCLUDE REGEX "nccl_device/gin/")
+endif()
 
 # Copy all device header files to the destination
+# Note: The only public headers are nccl.h and nccl_device.h (and, by extension, nccl_device/*).
+# Adding any other headers to this list should be discussed widely.
 foreach(HEADER_FILE ${SRC_DEVICE_HEADERS})
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${HEADER_FILE} ${CMAKE_BINARY_DIR}/${HEADER_FILE} COPYONLY)
     list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/${HEADER_FILE})
 endforeach()
 
+# On Windows, do not use gin.h; install the GIN device stub as gin_win_stub.h only (headers include it by name)
+if(NCCL_OS_WINDOWS)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/gin_win_stub.h ${CMAKE_BINARY_DIR}/include/nccl_device/gin_win_stub.h COPYONLY)
+    list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/include/nccl_device/gin_win_stub.h)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/gin/gin_host_win_stub.h ${CMAKE_BINARY_DIR}/include/gin/gin_host_win_stub.h COPYONLY)
+endif()
+
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h ${CMAKE_BINARY_DIR}/include/nccl_device.h COPYONLY)
 
-add_custom_target(nccl_header DEPENDS
-    ${CMAKE_BINARY_DIR}/include/nccl.h
-    ${CMAKE_BINARY_DIR}/include/nccl_device.h
-    ${DEVICE_HEADERS}
-    ${DEVICE_DOCA_HEADERS}
-)
+# Skip DOCA device headers for Windows platform; use on other platforms when set
+set(NCCL_HEADER_DEPS ${CMAKE_BINARY_DIR}/include/nccl.h ${CMAKE_BINARY_DIR}/include/nccl_device.h ${DEVICE_HEADERS}
+    ${PARAM_HEADERS})
+if(NOT NCCL_OS_WINDOWS AND DEVICE_DOCA_HEADERS)
+    list(APPEND NCCL_HEADER_DEPS ${DEVICE_DOCA_HEADERS})
+endif()
+if(NOT NCCL_OS_WINDOWS AND DEVICE_EFA_DP_HEADERS)
+    list(APPEND NCCL_HEADER_DEPS ${DEVICE_EFA_DP_HEADERS})
+endif()
+add_custom_target(nccl_header DEPENDS ${NCCL_HEADER_DEPS})
 
 add_dependencies(nccl nccl_header)
 add_dependencies(nccl_device nccl_header)
+if(NCCL_OS_LINUX)
+    add_dependencies(nccl_diagnostics_device nccl_header)
+endif()
 
 # Set version and output name
+# On Windows, use nccl.dll/nccl.lib (no "lib" prefix) so the import library matches what linkers expect
+# On Linux, use libnccl.so (PREFIX "lib" for Unix convention)
 set_target_properties(nccl PROPERTIES
     VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
     SOVERSION ${NCCL_MAJOR}
     OUTPUT_NAME "nccl"
-    PREFIX "lib"
 )
+if(NCCL_OS_LINUX)
+    set_target_properties(nccl PROPERTIES PREFIX "lib")
+endif()
 
-# Set CUDA specific flags
+#
+# Generate nccl_git_version.h
+#
+set(GIT_VERSION_FILE "${CMAKE_BINARY_DIR}/obj/include/nccl_git_version.h")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/obj/include")
+add_custom_target(generate_git_version ALL
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/src/misc/generate_git_version.py ${GIT_VERSION_FILE}
+  COMMENT "Checking git version"
+  BYPRODUCTS ${GIT_VERSION_FILE}
+)
+add_dependencies(nccl generate_git_version)
+
+# Git version overrides (set via cmake -DNCCL_GIT_BRANCH=xxx -DNCCL_GIT_COMMIT_HASH=yyy)
+set(NCCL_GIT_BRANCH "" CACHE STRING "Override git branch name")
+set(NCCL_GIT_COMMIT_HASH "" CACHE STRING "Override git commit hash")
+if(NCCL_GIT_BRANCH)
+    target_compile_definitions(nccl PRIVATE NCCL_GIT_BRANCH="${NCCL_GIT_BRANCH}")
+endif()
+if(NCCL_GIT_COMMIT_HASH)
+    target_compile_definitions(nccl PRIVATE NCCL_GIT_COMMIT_HASH="${NCCL_GIT_COMMIT_HASH}")
+endif()
+
+# Set CUDA specific flags (separable compilation + device link for cross-TU device symbols).
 set_target_properties(nccl PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
@@ -123,18 +231,18 @@ set_target_properties(nccl PROPERTIES
 # Link libraries
 target_link_libraries(nccl
     PRIVATE
-    nccl_device
-    pthread
-    rt
-    dl
-    ${CUDAToolkit_LIBRARIES}
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+    CUDA::cudart
     ${EXTRA_LIBS}
 )
 
-# Add version script for symbol visibility control
-target_link_options(nccl PRIVATE
-    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
-)
+# Add version script for symbol visibility control on linkers that support it.
+if(NOT NCCL_OS_WINDOWS)
+    target_link_options(nccl PRIVATE
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
+    )
+endif()
 
 # Set output directories for nccl shared library
 set_target_properties(nccl PROPERTIES
@@ -142,12 +250,19 @@ set_target_properties(nccl PROPERTIES
 )
 
 ###################### Create a ras binary executable ############################
-set(RAS_BINSRCFILES ras/client.cc)
+if(NOT NCCL_OS_WINDOWS)
+set(RAS_BINSRCFILES ras/client.cc ras/ras_param.cc)
 
 add_executable(ncclras ${RAS_BINSRCFILES})
 
-target_include_directories(ncclras PUBLIC
-    ${CMAKE_BINARY_DIR}/include
+target_compile_definitions(ncclras PRIVATE NCCL_RAS_CLIENT)
+
+target_include_directories(ncclras
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
 )
 
@@ -156,43 +271,92 @@ add_dependencies(ncclras nccl_header)
 target_link_libraries(ncclras
     PRIVATE
     pthread
-    rt
-    dl
+    ${CMAKE_DL_LIBS}
 )
 
 # Set output directory for ncclras executable
 set_target_properties(ncclras PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+endif()
 
-###################### Create a static NCCL library ############################
-add_library(nccl_static STATIC ${LIBSRCFILES})
+###################### Create a param tool binary executable #####################
+if(NOT NCCL_OS_WINDOWS)
+add_executable(ncclparam param/ncclparam.cc)
 
-# Include directories
-target_include_directories(nccl_static PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/device
+target_include_directories(ncclparam
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${CUDAToolkit_INCLUDE_DIRS}
-    transport/gdaki/doca-gpunetio/include
+)
+
+add_dependencies(ncclparam nccl_header)
+
+target_link_libraries(ncclparam
+    PRIVATE
+    nccl
+    CUDA::cudart
+)
+
+set_target_properties(ncclparam PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+endif()
+
+###################### Create a static NCCL library ############################
+add_library(nccl_static STATIC ${LIBSRCFILES})
+if(NCCL_OS_WINDOWS)
+    target_link_libraries(nccl_static PRIVATE nccl_device)
+else()
+    target_sources(nccl_static PRIVATE $<TARGET_OBJECTS:nccl_device>)
+endif()
+if(NCCL_OS_LINUX)
+    target_sources(nccl_static PRIVATE $<TARGET_OBJECTS:nccl_diagnostics_device>)
+endif()
+
+# Include directories
+target_include_directories(nccl_static
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/device
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
+    transport/net_ib/gdaki/doca-gpunetio/include
+    ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
+    ${CMAKE_BINARY_DIR}/obj/include
 )
 
 # Add dependency on nccl_header
 add_dependencies(nccl_static nccl_header)
+add_dependencies(nccl_static generate_git_version)
+
+# Git version overrides for static lib
+if(NCCL_GIT_BRANCH)
+    target_compile_definitions(nccl_static PRIVATE NCCL_GIT_BRANCH="${NCCL_GIT_BRANCH}")
+endif()
+if(NCCL_GIT_COMMIT_HASH)
+    target_compile_definitions(nccl_static PRIVATE NCCL_GIT_COMMIT_HASH="${NCCL_GIT_COMMIT_HASH}")
+endif()
 
 # Link libraries
 target_link_libraries(nccl_static
-    PRIVATE
-    nccl_device
-    pthread
-    rt
-    dl
-    ${CUDAToolkit_LIBRARIES}
+    PUBLIC
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+    CUDA::cudart
     ${EXTRA_LIBS}
 )
 
-# Set CUDA specific flags
+# Set CUDA specific flags (match nccl shared library for consistency).
 set_target_properties(nccl_static PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
@@ -203,4 +367,36 @@ set_target_properties(nccl_static PROPERTIES
 # Set output directory for nccl_static library
 set_target_properties(nccl_static PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+)
+
+###################### Install targets / headers / pkg-config ############################
+install(TARGETS nccl nccl_static
+  EXPORT NCCLTargets
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+)
+# On Windows, nccl/nccl_static link to nccl_device (STATIC); export set must include it.
+if(NCCL_OS_WINDOWS)
+  install(TARGETS nccl_device
+    EXPORT NCCLTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  )
+endif()
+
+# Install tools, but do not export them as linkable imported targets.
+if(NOT NCCL_OS_WINDOWS)
+install(TARGETS ncclras ncclparam
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+endif()
+
+# Install generated + copied public headers from the build tree.
+install(DIRECTORY "${CMAKE_BINARY_DIR}/include/"
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+# Install pkg-config metadata generated during configure.
+install(FILES "${CMAKE_BINARY_DIR}/lib/pkgconfig/nccl.pc"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )

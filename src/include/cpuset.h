@@ -1,65 +1,76 @@
 /*************************************************************************
- * Copyright (c) 2018-2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_CPUSET_H_
 #define NCCL_CPUSET_H_
 
 #include "nccl.h"
+#include "utils.h" // strtok_r -> strtok_s shim on Windows
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <sched.h>
+#include <cstring>
 
-// Convert local_cpus, e.g. 0003ff,f0003fff to cpu_set_t.
+#ifdef NCCL_OS_LINUX
+#include <sched.h>
+#elif defined(NCCL_OS_WINDOWS)
+#define CPU_SETSIZE NCCL_WINDOWS_MAX_CPUS
+#endif
+
+// Convert local_cpus, e.g. 0003ff,f0003fff to ncclAffinity.
 // The bitmask is divided into chunks of 32 bits, each of them represented by 8 hex number.
 #define U32_LEN 32 // using uint32_t
 #define CPU_SET_N_U32 (CPU_SETSIZE / U32_LEN)
 
-static ncclResult_t ncclStrToCpuset(const char* maskStr, cpu_set_t* set) {
+static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set, int cpuOffset = 0) {
+  if (cpuOffset < 0 || cpuOffset >= CPU_SETSIZE) return ncclInvalidArgument;
   uint32_t cpumasks[CPU_SET_N_U32] = {0};
 
   // transform the string into an array of 32 bit masks, starting with the highest mask
   int m = CPU_SET_N_U32;
   char* str = strdup(maskStr);
-  char* token = strtok(str, ",");
+  char* savePtr = NULL;
+  char* token = strtok_r(str, ",", &savePtr);
   while (token != NULL && m > 0) {
     cpumasks[--m] = strtoul(token, NULL, /*base = hex*/ 16);
-    token = strtok(NULL, ",");
+    token = strtok_r(NULL, ",", &savePtr);
   }
   free(str);
 
   // list all the CPUs as part of the CPU set, starting with the lowest mask (= current value of m)
-  CPU_ZERO(set);
+  ncclOsCpuZero(*set);
   for (int a = 0; (a + m) < CPU_SET_N_U32; a++) {
     // each mask is U32_LEN CPUs, list them all if the bit is on
     for (int i = 0; i < U32_LEN; ++i) {
-      if (cpumasks[a + m] & (1UL << i)) CPU_SET(i + a * U32_LEN, set);
+      int cpu = cpuOffset + i + a * U32_LEN;
+      if (cpu < CPU_SETSIZE && (cpumasks[a + m] & (1UL << i))) ncclOsCpuSet(*set, cpu);
     }
   }
   return ncclSuccess;
 }
 
-static char* ncclCpusetToRangeStr(cpu_set_t* mask, char* str, size_t len) {
+static char* ncclCpusetToRangeStr(ncclAffinity* mask, char* str, size_t len) {
   int c = 0;
   int start = -1;
   // Iterate through all possible CPU bits plus one extra position
   for (int cpu = 0; cpu <= CPU_SETSIZE; cpu++) {
-    int isSet = (cpu == CPU_SETSIZE) ? 0 : CPU_ISSET(cpu, mask);
+    int isSet = (cpu == CPU_SETSIZE) ? 0 : ncclOsCpuIsSet(*mask, cpu);
     // Start of a new range
     if (isSet && start == -1) {
       start = cpu;
     }
     // End of a range, add comma between ranges
     if (!isSet && start != -1) {
-      if (cpu-1 == start) {
-        c += snprintf(str+c, len-c, "%s%d", c ? "," : "", start);
+      if (cpu - 1 == start) {
+        c += snprintf(str + c, len - c, "%s%d", c ? "," : "", start);
       } else {
-        c += snprintf(str+c, len-c, "%s%d-%d", c ? "," : "", start, cpu-1);
+        c += snprintf(str + c, len - c, "%s%d-%d", c ? "," : "", start, cpu - 1);
       }
-      if (c >= len-1) break;
+      if (c >= len - 1) break;
       start = -1;
     }
   }
@@ -68,29 +79,29 @@ static char* ncclCpusetToRangeStr(cpu_set_t* mask, char* str, size_t len) {
 }
 
 /*userStr是一串以','分隔的cpu串，按序转换并填充进cpu set*/
-static ncclResult_t ncclStrListToCpuset(const char* userStr, cpu_set_t* mask) {
+static ncclResult_t ncclStrListToCpuset(const char* userStr, ncclAffinity* mask) {
   // reset the CPU set
-  CPU_ZERO(mask);
-  const char delim[] = ",";
+  ncclOsCpuZero(*mask);
   char* str = strdup(userStr);
-  char* token = strtok(str, delim);
+  char* savePtr = NULL;
+  char* token = strtok_r(str, ",", &savePtr);
   while (token != NULL) {
     uint64_t cpu = strtoull(token, NULL, 0);
-    CPU_SET(cpu, mask);
-    token = strtok(NULL, delim);
+    ncclOsCpuSet(*mask, cpu);
+    token = strtok_r(NULL, ",", &savePtr);
   }
   free(str);
   return ncclSuccess;
 }
 
 /*按cpuset中指出的内容格式化并输出到str中*/
-static ncclResult_t ncclCpusetToStrList(cpu_set_t* mask, char* str, size_t len) {
+static ncclResult_t ncclCpusetToStrList(ncclAffinity* mask, char* str, size_t len) {
   if (len == 0) return ncclSuccess;
   str[0] = '\0';
   int count = 0;
   for (uint64_t id = 0; id < CPU_SETSIZE; ++id) {
-    if (CPU_ISSET(id, mask)) {
-      snprintf(str + strlen(str), len - strlen(str), "%s%lu", (count++ == 0) ? "" : ",", id);
+    if (ncclOsCpuIsSet(*mask, id)) {
+      snprintf(str + strlen(str), len - strlen(str), "%s%llu", (count++ == 0) ? "" : ",", (unsigned long long)id);
     }
   }
   return ncclSuccess;

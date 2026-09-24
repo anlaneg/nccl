@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef _NCCL_DEVICE_COMM__TYPES_H_
 #define _NCCL_DEVICE_COMM__TYPES_H_
@@ -11,8 +12,8 @@
 #include "ll_a2a__types.h"
 #include "lsa_barrier__types.h"
 #include "gin_barrier__types.h"
+#include "cft_barrier__types.h"
 
-struct ncclDevCommWindowTable;
 #if __cplusplus
 struct ncclDevCommWindowTable {
   struct Entry {
@@ -22,30 +23,58 @@ struct ncclDevCommWindowTable {
   struct ncclDevCommWindowTable* next;
 };
 #endif
+typedef struct ncclDevCommWindowTable* ncclDevCommWindowTable_t;
 
 struct ncclDevComm {
+  // Internal NCCL structure versioning metadata.  Do not modify.
+  unsigned int magic;
+  unsigned int version;
+
   int rank, nRanks;
   uint32_t nRanks_rcp32;
   int lsaRank, lsaSize;
   uint32_t lsaSize_rcp32;
 
-  struct ncclDevCommWindowTable* windowTable;
+  ncclDevCommWindowTable_t windowTable;
 
   ncclWindow_t resourceWindow;
-  struct ncclWindow_vidmem resourceWindow_inlined;
+  ncclResourceWindow_vidmem_t resourceWindow_inlined;
+
+  ncclGinBarrierHandle_t hybridDenseGinBarrier;
 
   ncclMultimemHandle_t lsaMultimem;
   ncclLsaBarrierHandle_t lsaBarrier;
   ncclGinBarrierHandle_t railGinBarrier;
 
-  uint8_t ginContextCount;
-  uint8_t ginTypes[4];
-  void* ginHandles[4];
-  uint32_t ginSignalBase;
+  uint8_t ginConnectionCount;
+  uint8_t backendIndex;
+  uint8_t ginNetDeviceTypes[NCCL_GIN_MAX_CONNECTIONS];
+  void* ginHandles[NCCL_GIN_MAX_CONNECTIONS];
   int ginSignalCount;
-  uint32_t ginCounterBase;
   int ginCounterCount;
   uint64_t* ginSignalShadows;
+  uint32_t ginContextCount;
+  int ginConnectionStride;
+  int ginContextStride; // Stride according to world team, not according to connected ranks
+  bool ginStrongLegacySignals;
+
+  // FT related
+  uint32_t* abortFlag;
+
+  ncclLsaBarrierHandle_t hybridLsaBarrier;
+  ncclGinBarrierHandle_t hybridRailGinBarrier;
+
+  ncclGinBarrierHandle_t worldGinBarrier;
+  uint32_t ginConnectionStride_rcp32;
+
+  // CFT
+  int cftRank, cftSize;
+  int cftMultimemRank, cftMultimemSize;
+  uint32_t cftMultimemSize_rcp32;
+  ncclCftLeId ucLeId; // base UC LE ID, +cftSize for counted UC LE ID base
+  ncclCftLeId mcLeId; // MC LE ID, +1 for counted MC LE ID
+  ncclCftBarrierHandle_t cftBarrier;
+  ncclCftBarrierHandle_t cftMultimemBarrier;
 };
 
 #endif // _NCCL_DEVICE_COMM__TYPES_H_

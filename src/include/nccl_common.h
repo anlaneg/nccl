@@ -1,18 +1,28 @@
 /*************************************************************************
- * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_DEBUG_H_
 #define NCCL_DEBUG_H_
 
-// Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
+#ifdef NCCL_OS_LINUX
+  // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in
+  // libnccl.so.
 #include <bits/c++config.h>
 #undef _GLIBCXX_VISIBILITY
 #define _GLIBCXX_VISIBILITY(V)
+#endif
 
 #include <cstdint>
+
+// Windows compatibility: define ssize_t if not available
+#ifdef NCCL_OS_WINDOWS
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 
 typedef enum {
   NCCL_LOG_NONE = 0,
@@ -20,7 +30,9 @@ typedef enum {
   NCCL_LOG_WARN = 2,
   NCCL_LOG_INFO = 3,
   NCCL_LOG_ABORT = 4,
-  NCCL_LOG_TRACE = 5
+  NCCL_LOG_TRACE = 5,
+  // Appended for ABI compatibility; logically between WARN and INFO.
+  NCCL_LOG_ATTN = 6
 } ncclDebugLogLevel;
 
 typedef enum {
@@ -40,10 +52,13 @@ typedef enum {
   NCCL_REG = 0x2000,
   NCCL_PROFILE = 0x4000,
   NCCL_RAS = 0x8000,
+  NCCL_DESTROY = 0x10000,
+  NCCL_ALLOC_HOST = 0x20000,
   NCCL_ALL = ~0
 } ncclDebugLogSubSys;
 
-typedef void (*ncclDebugLogger_t)(ncclDebugLogLevel level, unsigned long flags, const char *file, int line, const char *fmt, ...);
+typedef void (*ncclDebugLogger_t)(ncclDebugLogLevel level, unsigned long flags, const char* file, int line,
+                                  const char* fmt, ...);
 
 // NCCL core profiler callback for network defined events instrumentation
 enum {
@@ -53,7 +68,8 @@ enum {
   ncclProfilerNetEventUpdateAndStop,
 };
 
-typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);
+typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* pHandle, int64_t pluginId,
+                                               void* extData);
 
 #define NCCL_NUM_FUNCTIONS 5 // Send/Recv not included for now
 typedef enum {
@@ -68,8 +84,15 @@ typedef enum {
   ncclFuncAlltoAll = 8,
   ncclFuncScatter = 9,
   ncclFuncGather = 10,
-  ncclNumFuncs = 11
+  ncclFuncAllGatherV = 11,
+  ncclFuncPutSignal = 12,
+  ncclFuncSignal = 13,
+  ncclFuncWaitSignal = 14,
+  ncclNumFuncs = 15
 } ncclFunc_t;/** 操作符类型 */
 
+// Progress-counter slots use ncclFunc_t values plus one synthetic P2P slot.
+#define NCCL_PROGRESS_P2P_COUNTER_INDEX ncclNumFuncs
+#define NCCL_NUM_PROGRESS_COUNTERS (ncclNumFuncs + 1)
 
 #endif

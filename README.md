@@ -29,7 +29,7 @@ NCCL will be compiled and installed in `build/` unless `BUILDDIR` is set.
 
 By default, NCCL is compiled for all supported architectures. To accelerate the compilation and reduce the binary size, consider redefining `NVCC_GENCODE` (defined in `makefiles/common.mk`) to only include the architecture of the target platform :
 ```shell
-$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
+$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
 ```
 
 ## Install
@@ -58,6 +58,16 @@ OS-agnostic tarball :
 ```shell
 $ make pkg.txz.build
 $ ls build/pkg/txz/
+```
+
+Python wheel :
+```shell
+$ # Install uv to create the Python wheel (uv manages Python deps in a venv)
+$ # See: https://docs.astral.sh/uv/getting-started/installation/
+$ curl -LsSf https://astral.sh/uv/install.sh | sh
+$ # Build NCCL Python wheel (this also builds the .txz archive as an intermediate)
+$ make pkg.python_wheel.build
+$ ls build/pkg/python_wheel/
 ```
 
 ## Tests

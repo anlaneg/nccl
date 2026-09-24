@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_DEVICE_RUNTIME_H_
 #define NCCL_DEVICE_RUNTIME_H_
@@ -17,6 +18,19 @@
 // ncclDevr[_]: runtime implements for symmetric API.
 
 struct ncclDevrMemory;
+
+// No public NCCL_WIN_REGISTER_* flag means all capabilities. Specifying one or more
+// registration flags selects only those capabilities. Add future public flags here.
+enum ncclDevrRegisterCapability {
+  ncclDevrRegisterGin = 1 << 0,
+  ncclDevrRegisterLsa = 1 << 1,
+  ncclDevrRegisterCft = 1 << 2,
+  ncclDevrRegisterRma = 1 << 3,
+  ncclDevrRegisterAll = ncclDevrRegisterGin | ncclDevrRegisterLsa | ncclDevrRegisterCft | ncclDevrRegisterRma,
+};
+
+bool ncclDevrWinRegEnabled(int winFlags, enum ncclDevrRegisterCapability capability);
+
 struct ncclDevrWindow {
   struct ncclDevrMemory* memory;
   void* userPtr;
@@ -24,13 +38,15 @@ struct ncclDevrWindow {
   size_t bigOffset; // Offset in big VA space.
   int winFlags;
   void* localRegHandle;
-  struct ncclWindow_vidmem* vidmem;
+  struct ncclWindow_vidmem* vidmem; // key for intrusive map
+  struct ncclDevrWindow* next; // next for intrusive map
+  struct ncclComm* comm; // comm for intrusive map window <> comm look up
 };
 struct ncclDevrWindowSorted;
 struct ncclDevrTeam;
 
 struct ncclDevrRegTask {
-  struct ncclDevrRegTask *next;
+  struct ncclDevrRegTask* next;
   void* userPtr;
   size_t userSize;
   int winFlags;
@@ -38,9 +54,14 @@ struct ncclDevrRegTask {
 };
 
 struct ncclDevrCommCreateTask {
-  struct ncclDevrCommCreateTask *next;
+  struct ncclDevrCommCreateTask* next;
   struct ncclDevCommRequirements* reqs;
   struct ncclDevComm* outDevComm;
+  uint32_t deviceCodeVersion;
+};
+
+struct ncclDevrStateCftUc {
+  ncclCftLeId baseId;
 };
 
 struct ncclDevrState {
@@ -50,10 +71,19 @@ struct ncclDevrState {
   int lsaSelf;
   int lsaSize;
   int* lsaRankList;
+  int nLsaTeams;
+
+  int cftSelf;
+  int cftSize;
+  int cftMcSelf;
+  int cftMcSize;
+  struct ncclDevrStateCftUc le[2]; // 0: UC LE ID base, 1: Counted UC LE ID base (rank_i le = base + i)
 
   size_t granularity; // cuMemGetAllocationGranularity
   bool ginEnabled;
+  bool rmaProxyEnabled;
   struct ncclDevrMemory* memHead;
+  uint64_t nextRegistryId; // next value for ncclDevrMemory::registryId
   struct ncclDevrWindowSorted* winSorted;
   int winSortedCapacity, winSortedCount;
   struct ncclDevrTeam* teamHead;
@@ -67,6 +97,25 @@ struct ncclDevrState {
   struct ncclIntruQueue<struct ncclDevrCommCreateTask, &ncclDevrCommCreateTask::next> commCreateTaskQueue;
 };
 
+struct ncclDevCommCompat {
+  int minVersion, maxVersion;
+  ncclResult_t (*commPropertiesFilter)(ncclComm_t comm, struct ncclCommProperties* props);
+  ncclResult_t (*devCommRequirementsFilter)(ncclComm_t comm, ncclDevCommRequirements_t* reqs);
+  ncclResult_t (*devCommCopyNewToOld)(ncclComm_t comm, void* oldDevComm, struct ncclDevComm const* newDevComm);
+  ncclResult_t (*devCommCopyOldToNew)(ncclComm_t comm, struct ncclDevComm* newDevComm, void const* oldDevComm);
+};
+
+// Check if GIN resources have been requested as part of `reqs`.
+bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
+
+// Check if there is only one LSA team. This function uses the cached value of comm or computes the
+// value from the comm topology.
+bool ncclDevrIsOneLsaTeam(struct ncclComm* comm);
+
+// Returns the CUDA version supported by CFT on this GPU, or 0 when CFT is unsupported.
+ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport, bool* gpuCftMulticastSupport,
+                               bool* gpuCftCountedSupport);
+
 // We assume ncclComm has a `ncclDevrState symState` member.
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm);
 ncclResult_t ncclDevrFinalize(struct ncclComm* comm);
@@ -74,20 +123,31 @@ ncclResult_t ncclDevrFinalize(struct ncclComm* comm);
 // If found *outWinHost will be populated and *outWinId >= 0, otherwise *outWinId == -1
 ncclResult_t ncclDevrFindWindow(struct ncclComm* comm, void const* userPtr, struct ncclDevrWindow** outWin);
 
-ncclResult_t ncclDevrWindowRegisterInGroup(
-  struct ncclComm* comm, void* ptr, size_t size, int winFlags, ncclWindow_t* outWinDev
-);
+ncclResult_t ncclDevrWindowRegisterInGroup(struct ncclComm* comm, void* ptr, size_t size, int winFlags,
+                                           ncclWindow_t* outWinDev);
 
-ncclResult_t ncclDevrCommCreateInternal(
-  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* outDevComm
-);
-void freeDevCommRequirements(
-  struct ncclDevCommRequirements* reqs
-);
+ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCommRequirements* reqs,
+                                        struct ncclDevComm* outDevComm, bool isInternal, uint32_t deviceCodeVersion);
+void freeDevCommRequirements(struct ncclDevCommRequirements* reqs);
+
+bool ncclDevrWindowIsMultiSegment(struct ncclDevrWindow* win);
+bool ncclDevrWindowHasSysmemSegment(struct ncclDevrWindow* win);
 
 // Get the corresponding pointer in another lsa rank's symmetric memory window
-ncclResult_t ncclDevrGetLsaRankPtr(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, int lsaRank, void** outPtr);
+ncclResult_t ncclDevrGetLsaRankPtr(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, int lsaRank,
+                                   void** outPtr);
+
+// Convert a world rank to an LSA rank.
+ncclResult_t ncclDevrWorldToLsaRank(struct ncclComm* comm, int peerWorldRank, int* peerLsaRank);
+
+// Get the RMA window handle for a specific context
+void* ncclDevrGetRmaWin(struct ncclDevrWindow* winHost, int ctx);
+
+// Get the byte offset of a window within its backing memory allocation.
+size_t ncclDevrGetWinOffset(struct ncclDevrWindow* winHost);
 
 // Get the multicast address for a given team
-ncclResult_t ncclDevrGetLsaTeamPtrMC(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, struct ncclTeam lsaTeam, void** outPtr);
+ncclResult_t ncclDevrGetLsaTeamPtrMC(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset,
+                                     struct ncclTeam lsaTeam, void** outPtr);
+
 #endif
