@@ -33,7 +33,7 @@ ncclResult_t ncclMgmtTaskEnqueue(struct ncclAsyncJob* task, ncclResult_t (*func)
     ret = ncclInvalidArgument;
   }
   if (ret == ncclSuccess) {
-    ncclIntruQueueEnqueue(&comm->mgmtTaskQueue, task);
+    ncclIntruQueueEnqueue(&comm->mgmtTaskQueue, task);/*入队列mgmtTaskQueue*/
   } else {
     // the task hasn't run
     if (destructor) destructor(task);

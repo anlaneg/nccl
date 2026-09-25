@@ -1076,6 +1076,7 @@ fail:
 }
 
 static ncclResult_t groupLaunch(struct ncclAsyncJob* job_, ncclSimInfo_t* simInfo = NULL) {
+	/*依据开关，走不同的job运行机制*/
   return ncclParamEnqueueRearchEnable() ? groupLaunchEnqueueRearch(job_, simInfo) : groupLaunchLegacy(job_, simInfo);
 }
 

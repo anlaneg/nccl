@@ -171,6 +171,7 @@ ncclResult_t rasClientInitSocket() {
   const int opt = 1;
   if (const char* env = ncclGetEnv("NCCL_RAS_ADDR")) clientAddr = env;
   NCCLCHECKGOTO(ncclSocketGetAddrFromString(&addr, clientAddr), ret, fail);
+  /*创建tcp socket*/
   SYSCHECKGOTO(rasClientListeningSocket = socket(addr.sa.sa_family, SOCK_STREAM, 0), "socket", ret, fail);
   SYSCHECKGOTO(setsockopt(rasClientListeningSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt", ret,
                fail);
@@ -178,6 +179,7 @@ ncclResult_t rasClientInitSocket() {
   SYSCHECKGOTO(setsockopt(rasClientListeningSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)), "setsockopt", ret,
                fail);
 #endif
+  /*绑定地址*/
   SYSCHECKGOTO(bind(rasClientListeningSocket, &addr.sa,
                     (addr.sa.sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))),
                "bind", ret, fail);

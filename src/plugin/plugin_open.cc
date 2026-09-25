@@ -168,9 +168,11 @@ void* ncclOpenEnvPluginLib(const char* name) {
   return openPluginLib(ncclPluginTypeEnv, name);
 }
 
+/*取得此类型的so handle*/
 void* ncclGetGinPluginLib(enum ncclPluginType type) {
   if (libNames[ncclPluginTypeGin]) {
     // increment the reference counter of the gin library
+	  /*复用gin信息*/
     libNames[type] = strdup(libNames[ncclPluginTypeGin]);
     ncclPluginLibPaths[type] = strdup(ncclPluginLibPaths[ncclPluginTypeGin]);
     libHandles[type] = ncclOsDlopen(libNames[ncclPluginTypeGin]);
@@ -181,6 +183,7 @@ void* ncclGetGinPluginLib(enum ncclPluginType type) {
 void* ncclGetNetPluginLib(enum ncclPluginType type) {
   if (libNames[ncclPluginTypeNet]) {
     // increment the reference counter of the net library
+	  /*复用net信息*/
     libNames[type] = strdup(libNames[ncclPluginTypeNet]);
     ncclPluginLibPaths[type] = strdup(ncclPluginLibPaths[ncclPluginTypeNet]);
     libHandles[type] = ncclOsDlopen(libNames[ncclPluginTypeNet]);

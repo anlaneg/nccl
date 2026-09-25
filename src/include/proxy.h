@@ -343,13 +343,13 @@ struct ncclProxyState {
   // Service threads
   std::thread thread;
   std::thread threadUDS;
-  struct ncclSocket* listenSock;
+  struct ncclSocket* listenSock;/*记录proxy监听的地址*/
   struct ncclIpcSocket ipcSock;
   int stop;
   ncclResult_t asyncResult;
 
   // Used by main thread
-  union ncclSocketAddress* peerAddresses;
+  union ncclSocketAddress* peerAddresses;/*各rank监听的地址*/
   struct ncclSocket* peerSocks;
   struct ncclProxyOps* proxyOps;
   void** sharedDevMems;

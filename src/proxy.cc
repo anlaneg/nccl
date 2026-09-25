@@ -2170,7 +2170,7 @@ void* ncclProxyServiceUDS(void* _args) {
   return NULL;
 }
 
-ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union ncclSocketAddress* peerAddresses,
+ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock/*自身proxySocket*/, union ncclSocketAddress* peerAddresses,
                            uint64_t* peerAddressesUDS) {
   if (comm->sharedRes->proxyState != nullptr) {
     WARN("Proxy state is already initialized");

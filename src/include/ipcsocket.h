@@ -27,8 +27,8 @@ typedef int ncclIpcFd;
 
 struct ncclIpcSocket {
   ncclIpcFd fd;
-  char socketName[NCCL_IPC_SOCKNAME_LEN];
-  volatile uint32_t* abortFlag;
+  char socketName[NCCL_IPC_SOCKNAME_LEN];/*socket地址名称*/
+  volatile uint32_t* abortFlag;/*abort变量指针*/
 };
 
 ncclResult_t ncclIpcSocketInit(struct ncclIpcSocket* handle, int rank, uint64_t hash, volatile uint32_t* abortFlag);

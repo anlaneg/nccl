@@ -459,6 +459,7 @@ fail:
   goto exit;
 }
 
+/*如果指定了NCCL_COMM_ID环境变量，则由环境变量设置root地址；否则自身创建root*/
 ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle, struct ncclComm* comm) {
   memset(handle, 0, sizeof(ncclBootstrapHandle));
 
@@ -561,9 +562,9 @@ struct bootstrapState {
   struct bootstrapRing_t ring;/**ring型环收发信息 */
   struct bootstrapListen_t listen;/**监听socket，用于接收client的连接 */
   ncclNet_t* net;/*对应的net插件*/
-  uint64_t* peerProxyAddressesUDS;
-  union ncclSocketAddress* peerProxyAddresses;
-  union ncclSocketAddress* peerP2pAddresses;
+  uint64_t* peerProxyAddressesUDS;/*指出每个rank随机生成的一个id，用于unix domain socket地址(见getUDS）*/
+  union ncclSocketAddress* peerProxyAddresses;/*指出每个rank绑定的地址（各rank监听了此地址）*/
+  union ncclSocketAddress* peerP2pAddresses;/*指出每个rank绑定的地址（各rank为p2p监听了此地址）*/
   struct unexConn* unexpectedConnections;/**挂接非预期的连接 */
   int cudaDev;/*对应的gpu*/
   int rank;
@@ -581,18 +582,18 @@ struct bootstrapState {
 #define STATE_LISTEN(s, f) (s->listen.f)
 
 // helper functions
-static ncclResult_t createListenSocket(struct ncclComm* comm, uint64_t magic, struct ncclSocket* socket,
+static ncclResult_t createListenSocket(struct ncclComm* comm, uint64_t magic, struct ncclSocket* socket/*出参，监听socket*/,
                                        union ncclSocketAddress* addr/*出参，监听的地址*/, ncclSocketType type) {
-  /*创建listen socket,取listen的地址*/
-  NCCLCHECK(ncclSocketInit(socket, &bootstrapNetIfAddr, magic, type, comm->abortFlag));
+  /*创建listen socket,取listen的地址（可能绑定时指定了0）*/
+  NCCLCHECK(ncclSocketInit(socket, &bootstrapNetIfAddr/*绑定bootstrap接口地址*/, magic, type, comm->abortFlag));
   NCCLCHECK(ncclSocketListen(socket));
   NCCLCHECK(ncclSocketGetAddr(socket, addr));
   return ncclSuccess;
 }
 static ncclResult_t getUDS(uint64_t* peerUDS) {
   uint64_t randId;
-  NCCLCHECK(getRandomData(&randId, sizeof(randId)));
-  *peerUDS = getPidHash() + randId;
+  NCCLCHECK(getRandomData(&randId, sizeof(randId)));/*取一个随机id*/
+  *peerUDS = getPidHash() + randId;/*合上本进程hash*/
   return ncclSuccess;
 }
 #define MAX_OOB_DEVS 16
@@ -780,6 +781,7 @@ exit:
   return ncclSuccess;
 }
 
+/*向bootstrap root线程发送extInfo结构体*/
 static ncclResult_t sendToRoot(struct ncclBootstrapHandle* handle, struct ncclComm* comm, struct extInfo* info) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket sock;
@@ -854,7 +856,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   } else {
     // create socket for ring neightbor to contact mee
     NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, socket), &info.connectInfo.addr/*监听的地址*/,
-                                 ncclSocketTypeBootstrap));
+                                 ncclSocketTypeBootstrap));/*创建listen socket*/
   }
   // Create socket for root to contact me using the root's magic
   // For grow operations, offset is parent->nRanks - 1 (last existing rank joins the root)
@@ -900,7 +902,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   if (curr_root >= 0) NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, curr_root), comm, &info));
   if (parent && comm->isGrow && rank != 0) {
     // Grow: Ranks 1 to N-1 use the parent bootstrap to send connection information to the previous rank
-    NCCLCHECK(bootstrapSend(parent->bootstrap, rank - 1, 0, &info.connectInfo, sizeof(info.connectInfo)));
+    NCCLCHECK(bootstrapSend(parent->bootstrap, rank - 1/*前一个*/, 0/*tag指定为0*/, &info.connectInfo, sizeof(info.connectInfo)));
   }
   // if needed, send the connection info to the previous root
   // commGrow with more than = 1 rank in the parent comm is a special case of multiroot
@@ -929,7 +931,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   if (parent && comm->isGrow && rank != parent->nRanks - 1) {
     // Grow: Ranks 0 to N-2 use the parent bootstrap to recv connection information to the next rank.
     // This is consistent with the bootstrapSend above.
-    NCCLCHECK(bootstrapRecv(parent->bootstrap, rank + 1, 0, &nextPeer, sizeof(nextPeer)));
+    NCCLCHECK(bootstrapRecv(parent->bootstrap, rank + 1/*后一个*/, 0, &nextPeer, sizeof(nextPeer)));
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_RECV]);
 
@@ -949,13 +951,15 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
 
   // AllGather all listen handlers
   // in case of failure, those resources will be free'd when calling bootstrapDestroy, so we can return immediatly
-  NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));
+  NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));/*申请peerProxyAddresses*/
   NCCLCHECK(ncclCalloc(&proxySocket, 1));
-  NCCLCHECKGOTO(createListenSocket(comm, comm->magic, proxySocket, state->peerProxyAddresses + rank/*监听的地址*/,
+  /*只填充自身peerProxyAddresses*/
+  NCCLCHECKGOTO(createListenSocket(comm, comm->magic, proxySocket, state->peerProxyAddresses + rank/*出参，监听的地址*/,
                                    ncclSocketTypeProxy),
                 result, fail);
 
-  NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddressesUDS, nranks), result, fail);
+  NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddressesUDS, nranks), result, fail);/*申请peerProxyAddressesUDS*/
+  /*只填充自身peerProxyAddressesUDS(这是一个随机id)*/
   NCCLCHECKGOTO(getUDS(state->peerProxyAddressesUDS + rank), result, fail);
 
   // create a socket for others to reach out (P2P)
@@ -970,7 +974,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   // Initialize RAS
   if (ncclParamRasEnable() == 1) {
     // The RAS thread will take ownership after ncclRasAddRanks succeeds.
-    NCCLCHECKGOTO(ncclCalloc(&rasRanks, nranks), result, fail);
+    NCCLCHECKGOTO(ncclCalloc(&rasRanks, nranks), result, fail);/*申请rasRanks*/
     memcpy(&rasRanks[rank].addr, &bootstrapNetIfAddr, sizeof(rasRanks[rank].addr));
     rasRanks[rank].pid = ncclOsGetPid();
     rasRanks[rank].cudaDev = comm->cudaDev;
@@ -993,7 +997,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_RING]);/*获得allInfo用时差值*/
 
   // Create the service proxy and get the UDS
-  NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS), result,
+  NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket/*自身的proxySocket*/, state->peerProxyAddresses, state->peerProxyAddressesUDS), result,
                 fail);
 
   if (ncclParamRasEnable() == 1 && performRasAddRanks) {
@@ -1134,7 +1138,7 @@ fail:
   (void)ncclSocketClose(sock);
   return ret;
 }
-static ncclResult_t bootstrapSendSync(void* commState, int peer, int tag, void* data, int size) {
+static ncclResult_t bootstrapSendSync(void* commState, int peer/*对端*/, int tag, void* data, int size) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket sock;
   TRACE(NCCL_BOOTSTRAP, "Sending to peer=%d tag=%d size=%d", peer, tag, size);

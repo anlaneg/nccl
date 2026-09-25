@@ -33,6 +33,7 @@ getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v16, getNcclRma_v
 typedef enum ncclRmaPluginState {
   ncclRmaPluginStateDisabled = -2,       // Plugin library failed to initialize
   ncclRmaPluginStateLoadFailed = -1,       // Plugin library failed to load
+  /*准备load*/
   ncclRmaPluginStateLoadReady = 0,        // Plugin library is ready to be loaded
   ncclRmaPluginStateInitReady = 1,        // Plugin library is loaded and ready to be initialized
   ncclRmaPluginStateEnabled = 2,        // Plugin library is loaded and initialized
@@ -40,16 +41,20 @@ typedef enum ncclRmaPluginState {
 
 #define MAX_STR_LEN 255
 typedef struct rmaPluginLib {
+	/*rma插件名称*/
   char name[MAX_STR_LEN];                       // Name of the plugin library
   void* dlHandle;                               // Handle to the plugin library
   ncclRma_t* ncclRma;                           // Pointer to the plugin structure
   int version;                                  // Version of the plugin
+  /*状态*/
   ncclRmaPluginState_t state;                   // State of the plugin
   int refCount;                                 // Reference count
   int physDevs;                                 // Number of physical devices
 } rmaPluginLib_t;
 
+/*记录rma插件有效数目*/
 static int pluginCount = 0;
+/*记录各rma插件*/
 static rmaPluginLib_t pluginLibs[NCCL_RMA_MAX_PLUGINS] = {0};
 static std::mutex pluginMutex;
 static std::once_flag initPluginLibsOnceFlag;
@@ -80,11 +85,11 @@ static ncclResult_t ncclRmaPluginLoad(rmaPluginLib_t* pluginLib) {
   // load rma
   for (int i = 0; i < NCCL_RMA_VERSION_COUNT; i++) {
     pluginLib->version = ncclRmaVersion[i];
-    pluginLib->ncclRma = getNcclRma[i](pluginLib->dlHandle);
+    pluginLib->ncclRma = getNcclRma[i](pluginLib->dlHandle);/*从so中取各版本插件*/
     if (pluginLib->ncclRma) break;
   }
 
-  if (pluginLib->ncclRma == nullptr) goto fail;
+  if (pluginLib->ncclRma == nullptr) goto fail;/*一个有效版本都没有*/
 
   pluginLib->state = ncclRmaPluginStateInitReady;
   INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Successfully loaded external plugin %s",
@@ -107,17 +112,19 @@ static ncclResult_t ncclRmaPluginInit(struct ncclComm* comm, rmaPluginLib_t* plu
   bool initCompleted = false;
   // Init must be called for each new comm to set the right context
   if (pluginLib->state >= ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
+	  /*调用插件的init函数*/
     if (pluginLib->ncclRma->init(&comm->rmaContext, comm->commHash, ncclDebugLog) != ncclSuccess) goto fail;
     initCompleted = true;
   }
 
   // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->state == ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
+	  /*取设备数目*/
     if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) goto fail;
     pluginLib->physDevs = ndev;
   }
 
-  pluginLib->state = ncclRmaPluginStateEnabled;
+  pluginLib->state = ncclRmaPluginStateEnabled;/*指明插件开启*/
   INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Initialized plugin %s", pluginLib->name);
 
 exit:
@@ -176,14 +183,16 @@ static void initPluginLibsOnceFunc() {
   memset(pluginLibs, 0, NCCL_RMA_MAX_PLUGINS * sizeof(rmaPluginLib_t));
   envRmaPlugin = ncclGetEnv("NCCL_RMA_PLUGIN");
   if (envRmaPlugin) {
+	  /*通过环境变量指明了rma插件*/
     INFO(NCCL_ENV | NCCL_NET, "NCCL_RMA_PLUGIN set by environment to %s", envRmaPlugin);
-    if (strcasecmp(envRmaPlugin, "none") == 0) envRmaPlugin = "";
+    if (strcasecmp(envRmaPlugin, "none") == 0) envRmaPlugin = "";/*如指定为none,按未指定处理*/
     envRmaPluginList = strdup(envRmaPlugin);
     // Iterate over list until the list is empty
-    rmaPluginName = strtok_r(envRmaPluginList, ",", &savePtr);
+    rmaPluginName = strtok_r(envRmaPluginList, ",", &savePtr);/*环境变量指定的是一组逗号分隔的列表*/
     while (rmaPluginName) {
       // So, we can have at most( NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_RESERVED_PLUGINS)) in the NCCL_RMA_PLUGIN list
       if (pluginCounter >= (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS)) {
+    	  /*指定数量过多*/
         INFO(NCCL_NET | NCCL_ENV, "NCCL_RMA_PLUGIN list contains more than %d plugins, ignoring the rest",
              (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS));
         break;
@@ -191,7 +200,7 @@ static void initPluginLibsOnceFunc() {
       // need to leave space for the name + "\n"
       if ((strlen(rmaPluginName) + 1) <= MAX_STR_LEN) {
         pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
-        pluginLibs[pluginCounter].refCount = ncclParamRmaPluginRefCount();
+        pluginLibs[pluginCounter].refCount = ncclParamRmaPluginRefCount();/*设置初始计数*/
         strcpy(pluginLibs[pluginCounter].name, rmaPluginName);
         pluginCounter++;
       } else {
@@ -203,6 +212,7 @@ static void initPluginLibsOnceFunc() {
     }
     if (envRmaPluginList) free(envRmaPluginList);
   } else {
+	  /*环境变量未指明，使用默认插件名称*/
     // Add default rma plugin
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
     pluginLibs[pluginCounter].refCount = ncclParamRmaPluginRefCount();
@@ -221,13 +231,13 @@ static void initPluginLibsOnceFunc() {
   }
 
   // Add internal ib plugin
-  pluginLibs[pluginCounter].ncclRma = &ncclRmaIbProxy;
+  pluginLibs[pluginCounter].ncclRma = &ncclRmaIbProxy;/*增加ib代理*/
   pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclRmaVersion[0];
   pluginCounter++;
 
   // Add internal socket RMA plugin.
-  pluginLibs[pluginCounter].ncclRma = &ncclRmaSocketProxy;
+  pluginLibs[pluginCounter].ncclRma = &ncclRmaSocketProxy;/*增加socket代理*/
   pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclRmaVersion[0];
   pluginCounter++;
@@ -261,6 +271,7 @@ ncclResult_t ncclRmaInit(struct ncclComm* comm) {
       NCCLCHECK(ncclRmaPluginInit(comm, &pluginLibs[pluginIndex]));
       if (pluginLibs[pluginIndex].state == ncclRmaPluginStateEnabled) {
         bool isAssigned = false;
+        /*插件开启，将其assign到comm*/
         NCCLCHECK(ncclRmaPluginAssignToComm(comm, pluginIndex, &isAssigned));
         if (isAssigned) {
           // If one external plugin is assigned to a comm, then disable all other external plugins

@@ -613,7 +613,7 @@ struct ncclComm {
   ncclNetDeviceType netDeviceType;
   ncclCollNet_t* ncclCollNet;
   void* collNetContext;
-  void* bootstrap;
+  void* bootstrap;/*记录bootstrap阶段状态struct bootstrapState*/
   bool isGrow; // true if this comm is created via ncclCommGrow
   // Bitmasks for ncclTransportP2pSetup
   uint64_t* connectSend;/*数组，每个元素指出发送可使用的channel id*/
@@ -629,7 +629,7 @@ struct ncclComm {
   uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect
                   // mismatches.
 
-  uint64_t commHash;
+  uint64_t commHash;/*依据commId生成commHash*/
   /*当前gpu在communicator中的编号(自身）*/
   int rank;    // my rank in the communicator
   /*communicator中gpu的数目*/
@@ -675,7 +675,7 @@ struct ncclComm {
   ncclNvlDomainInfo_v5_t nvlDomainInfo;
 
   ncclCheckMode_t checkMode;
-  bool dmaBufSupport;
+  bool dmaBufSupport;/*是否支持dma buffer*/
   bool ccEnable;
 
   // Counter for tracking CUDA launches (P2P and collectives included)
@@ -829,7 +829,7 @@ struct ncclComm {
   struct ncclGroupJob* groupJob;/*指向所属的groupJob*/
 
   // Flag indicating if this communicator shares resources with parent or children
-  bool shareResources;
+  bool shareResources;/*是否与父子share资源*/
 
   // Tuning plugin
   int tunerPluginLoaded;

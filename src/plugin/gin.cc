@@ -205,6 +205,7 @@ static void initPluginLibsOnceFunc() {
   memset(pluginLibs, 0, NCCL_GIN_MAX_PLUGINS * sizeof(ginPluginLib_t));
   envGinPlugin = ncclGetEnv("NCCL_GIN_PLUGIN");
   if (envGinPlugin) {
+	  /*环境变量指明了gin插件*/
     INFO(NCCL_ENV | NCCL_NET, "NCCL_GIN_PLUGIN set by environment to %s", envGinPlugin);
     if (strcasecmp(envGinPlugin, "none") == 0) envGinPlugin = "";
     envGinPluginList = strdup(envGinPlugin);
@@ -236,7 +237,7 @@ static void initPluginLibsOnceFunc() {
     // Add default gin plugin
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
     pluginLibs[pluginCounter].refCount = ncclParamGinPluginRefCount();
-    strcpy(pluginLibs[pluginCounter++].name, defaultGinPlugin);
+    strcpy(pluginLibs[pluginCounter++].name, defaultGinPlugin);/*使用默认的gin插件*/
   }
 
   // Also check if the NET plugin has GIN support
@@ -246,12 +247,12 @@ static void initPluginLibsOnceFunc() {
   }
 
   // Add internal ib plugin
-  pluginLibs[pluginCounter].ncclGin = &ncclGinIbGdaki;
+  pluginLibs[pluginCounter].ncclGin = &ncclGinIbGdaki;/*添加内置ib插件*/
   pluginLibs[pluginCounter].state = ncclGinPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclGinVersion[0];
   pluginCounter++;
   // Add gin proxy as fallback
-  pluginLibs[pluginCounter].ncclGin = &ncclGinProxy;
+  pluginLibs[pluginCounter].ncclGin = &ncclGinProxy;/*添加gin代理*/
   pluginLibs[pluginCounter].state = ncclGinPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclGinProxyVersion;
   pluginCounter++;

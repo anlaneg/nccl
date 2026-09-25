@@ -12,6 +12,10 @@
 
 enum ncclPluginType {
   ncclPluginTypeNet,
+  /*GIN = GPU‑Initiated Networking（GPU 发起的网络通信）
+   * GIN 模式：GPU 设备核函数内部直接发起远程
+   *  RMA (Put/Get、signal、barrier)，不需要 CPU 介入每一次数据收发。
+   * */
   ncclPluginTypeGin,
   ncclPluginTypeRma,
   ncclPluginTypeTuner,

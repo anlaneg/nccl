@@ -36,6 +36,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, v
 
   handle->fd = NCCL_INVALID_SOCKET;
   handle->socketName[0] = '\0';
+  /*创建unix socket*/
   if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) {
     WARN("UDS: Socket creation error : %s (%d)", strerror(errno), errno);
     return ncclSystemError;
@@ -45,6 +46,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, v
   cliaddr.sun_family = AF_UNIX;
 
   // Create unique name for the socket.
+  /*创建地址（合入rank与hash)*/
   int len = snprintf(temp, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_SOCKNAME_STR, rank, hash);
   if (len > (int)(sizeof(cliaddr.sun_path) - 1)) {
     WARN("UDS: Cannot bind provided name to socket. Name too large");
@@ -60,10 +62,11 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, v
 
   TRACE(NCCL_INIT | NCCL_P2P, "UDS: Creating socket %s%s", temp, useAbstractSocket ? " (abstract)" : "");
 
-  strcpy(cliaddr.sun_path, temp);
+  strcpy(cliaddr.sun_path, temp);/*填地址*/
   if (useAbstractSocket) {
     cliaddr.sun_path[0] = '\0'; // Linux abstract socket trick
   }
+  /*绑定此地址*/
   if (bind(fd, (struct sockaddr*)&cliaddr, sizeof(cliaddr)) < 0) {
     WARN("UDS: Binding to socket %s failed : %s (%d)", temp, strerror(errno), errno);
     close(fd);

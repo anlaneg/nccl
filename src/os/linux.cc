@@ -49,6 +49,7 @@ static void saveDlError() {
   }
 }
 
+/*打开so*/
 ncclOsLibraryHandle ncclOsDlopen(const char* filename) {
   ncclOsLibraryHandle handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
   if (handle == NULL) {
@@ -93,6 +94,7 @@ uint64_t ncclOsGetTid() {
 }
 
 size_t ncclOsGetPageSize() {
+	/*取页大小*/
   return (size_t)sysconf(_SC_PAGESIZE);
 }
 

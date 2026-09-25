@@ -12,7 +12,7 @@
 // TODO: switch from pipe() to socketpair(AF_UNIX, SOCK_STREAM, 0) to align with the Windows implementation
 ncclResult_t ncclOsSocketPairCreate(ncclSocketPairDescriptor pair[2]) {
   int fds[2];
-  SYSCHECK(pipe(fds), "pipe");
+  SYSCHECK(pipe(fds), "pipe");/*创建pipe*/
   pair[0] = fds[0];
   pair[1] = fds[1];
   return ncclSuccess;

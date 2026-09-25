@@ -31,11 +31,11 @@ uint64_t ncclSocketDefaultMagic(void) {
   std::call_once(once, []() {
     const char* env = ncclGetEnv("NCCL_SOCKET_MAGIC");
     bool fromEnv = false;
-    if (env != NULL && env[0] != '\0') {
+    if (env != NULL && env[0] != '\0') {/*环境变量有设置magic*/
       char* endptr = NULL;
-      unsigned long long v = std::strtoull(env, &endptr, 0);
+      unsigned long long v = std::strtoull(env, &endptr, 0);/*转数字*/
       if (endptr != env && endptr != NULL && *endptr == '\0') {
-        cached = (uint64_t)v;
+        cached = (uint64_t)v;/*缓存*/
         fromEnv = true;
       } else {
         INFO(NCCL_ENV, "NCCL_SOCKET_MAGIC invalid value \"%s\", using built-in default", env);
@@ -44,7 +44,7 @@ uint64_t ncclSocketDefaultMagic(void) {
     INFO(NCCL_ENV, "Socket handshake magic 0x%016llx (%s)", (unsigned long long)cached,
          fromEnv ? "NCCL_SOCKET_MAGIC" : "built-in default");
   });
-  return cached;
+  return cached;/*返回缓存值*/
 }
 
 void ncclSocketMove(struct ncclSocket* dst, struct ncclSocket* src) {
@@ -99,6 +99,7 @@ static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int s
   return ncclSuccess;
 }
 
+/*由socket地址获取port*/
 uint16_t ncclSocketToPort(union ncclSocketAddress* addr) {
   return ntohs(addr->sa.sa_family == AF_INET ? addr->sin.sin_port : addr->sin6.sin6_port);
 }
@@ -131,6 +132,7 @@ ncclResult_t ncclSocketSetFd(ncclSocketDescriptor socketDescriptor, struct ncclS
   return ncclSuccess;
 }
 
+/*绑定socket中设置的地址*/
 ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   if (sock == NULL) {
     WARN("ncclSocketListen: pass NULL socket");
@@ -143,7 +145,7 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
 
   if (ncclSocketToPort(&sock->addr)) {
     // Port is forced by env. Make sure we get the port.
-    /*设置port reuse*/
+    /*已知设置了port,设置port reuse*/
     int opt = 1;
 #if defined(NCCL_OS_LINUX)
     SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt");
@@ -159,12 +161,12 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   }
 
   // addr port should be 0 (Any port)
-/*绑定此port（可能为0）*/
+  /*绑定此port（可能为0）*/
   SYSCHECK(bind(sock->socketDescriptor, &sock->addr.sa, sock->salen), "bind");
 
   /* Get the assigned Port */
   socklen_t size = sock->salen;
-/*取设置的port地址（0时分配的port）*/
+  /*取设置的port地址（0时分配的port）*/
   SYSCHECK(getsockname(sock->socketDescriptor, &sock->addr.sa, &size), "getsockname");
 
 #ifdef ENABLE_TRACE
@@ -194,7 +196,7 @@ const char* ncclSocketToString(const union ncclSocketAddress* addr, char* buf, c
    * (When not set, this will still happen in case the node's name cannot be determined.)
    */
   if (getnameinfo(saddr, sizeof(union ncclSocketAddress), host, NI_MAXHOST, service, NI_MAXSERV, flag)) goto fail;
-  sprintf(buf, "%s<%s>", host, service);
+  sprintf(buf, "%s<%s>", host, service);/*显示绑定地址*/
   return buf;
 fail:
   if (buf) buf[0] = '\0';

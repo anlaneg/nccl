@@ -473,7 +473,7 @@ NCCL_PARAM(WorkFifoBytes, "WORK_FIFO_BYTES", NCCL_WORK_FIFO_BYTES_DEFAULT);
 NCCL_PARAM(WorkArgsBytes, "WORK_ARGS_BYTES", INT64_MAX);
 enum ncclLaunchMode ncclParamLaunchMode;
 
-NCCL_PARAM(DmaBufEnable, "DMABUF_ENABLE", 1);
+NCCL_PARAM(DmaBufEnable, "DMABUF_ENABLE", 1);/*默认dmabuf开启*/
 
 // Detect DMA-BUF support
 static ncclResult_t dmaBufSupported(struct ncclComm* comm) {
@@ -522,6 +522,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
     return ncclInvalidArgument;
   }
   if (rank >= ndev || rank < 0) {
+	  /*校验rank编号*/
     WARN("rank %d exceeds ndev=%d", rank, ndev);
     return ncclInvalidArgument;
   }
@@ -552,9 +553,10 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
     comm->sharedRes = sharedRes;
     sharedRes->refCount = 1;
     NCCLCHECK(ncclNetInit(comm));/*为comm绑定网络插件*/
-    NCCLCHECK(ncclRmaInit(comm));
-    NCCLCHECK(ncclGinInit(comm));
+    NCCLCHECK(ncclRmaInit(comm));/*为comm绑定rma插件*/
+    NCCLCHECK(ncclGinInit(comm));/*为comm绑定gin插件*/
   } else {
+	/*复用parent信息*/
     comm->sharedRes = parent->sharedRes;
     ncclAtomicRefCountIncrement(&parent->sharedRes->refCount);
     NCCLCHECK(ncclNetInitFromParent(comm, parent));
@@ -564,6 +566,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   INFO(NCCL_INIT, "Using network %s", comm->ncclNet->name);
 
   if (parent && parent->shareResources) {
+	  /*parent在share资源情况下，parent与child之间net插件不相同*/
     if (parent->ncclNet != comm->ncclNet) {
       WARN("Split shares resources, but parent comm netName %s is different from child comm netName %s",
            parent->ncclNet->name, comm->ncclNet->name);
@@ -574,12 +577,12 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   // Initialize memory manager
   if (parent && parent->shareResources && parent->memManager) {
     // Share parent's memory manager
-    comm->memManager = parent->memManager;
+    comm->memManager = parent->memManager;/*共享memManager*/
     ncclAtomicRefCountIncrement(&comm->memManager->refCount);
     INFO(NCCL_INIT, "MemManager: Shared from parent, refCount=%d", comm->memManager->refCount);
   } else {
     // Create new memory manager
-    NCCLCHECK(ncclMemManagerInit(comm));
+    NCCLCHECK(ncclMemManagerInit(comm));/*初始化MemManager*/
   }
 
   NCCLCHECK(ncclCudaContextTrack(&comm->context, comm->config.launchOrderImplicit, comm->commHash));
@@ -587,9 +590,9 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   NCCLCHECK(getBusId(comm->cudaDev, &comm->busId));/**取当前gpu的bdf号 */
   nvmlDevice_t nvmlDev;
   char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
-  NCCLCHECK(int64ToBusId(comm->busId, busId));
+  NCCLCHECK(int64ToBusId(comm->busId, busId));/*bdf转字符串*/
   NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
-  NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&comm->nvmlDev));
+  NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&comm->nvmlDev));/*取设备id*/
 
   TRACE(NCCL_INIT, "comm %p rank %d nranks %d cudaDev %d busId %lx compCap %d", comm, rank, ndev, comm->cudaDev,
         comm->busId, comm->compCap);
@@ -2215,7 +2218,7 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
            comm->commHash, baseMagic, job->nranks);
     } else {
       // obtain a unique hash using the first commId
-      comm->commHash = commIdHash = getHash(job->commId->internal, NCCL_UNIQUE_ID_BYTES);
+      comm->commHash = commIdHash = getHash(job->commId->internal, NCCL_UNIQUE_ID_BYTES);/*依据commId生成commHash*/
     }
     timers[TIMER_INIT_ALLOC] = clockNano();
     NCCLCHECKGOTO(commAlloc(comm, NULL, job->nranks, job->myrank), res, fail);
@@ -2925,7 +2928,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
   NCCLCHECKGOTO(PtrCheck(newcomm, "CommInitRank", "newcomm"), res, fail);
   NCCLCHECKGOTO(PtrCheck(config, "CommInitRank", "config"), res, fail);
   if (nranks < 1 || myrank < 0 || myrank >= nranks) {
-	  /*校验myrank是否合适*/
+	/*校验myrank是否合适*/
     WARN("Invalid rank requested : %d/%d", myrank, nranks);
     res = ncclInvalidArgument;
     goto fail;
@@ -2984,12 +2987,14 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
     /*启动bootstrap线程*/
     NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&job->commId[0], true), res, fail);
   }
-  /*初始化此job,并入队到当前线程对应的ncclAsyncJobs*/
+
   launchedJob = true;
   if (ncclParamEnqueueRearchEnable()) {
+	  /*初始化此job，并入队列comm->mgmtTaskQueue*/
     NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, ncclCommInitRankFunc, ncclCommInitJobFree, comm), res,
                   fail);
   } else {
+	  /*初始化此job,并入队到当前线程对应的ncclAsyncJobs*/
     NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, ncclCommInitRankFunc, NULL, ncclCommInitJobFree, comm),
                   res, fail);
   }
@@ -3064,7 +3069,6 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms/**出参，所有comm */, int nde
   CUDACHECKGOTO(cudaGetDeviceCount(&totalnDev), ret, fail);/**取总设备数 */
   /*检查devlist中是否有重复的设备id*/
   if (devlist/*提供了设备列表*/) {
-
 	/*为每个gpu设备申请一个gpuFlags*/
     NCCLCHECKGOTO(ncclCalloc(&gpuFlags, totalnDev), ret, fail);
     for (int i = 0; i < ndev; ++i) {
@@ -3101,7 +3105,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms/**出参，所有comm */, int nde
     /*为每一个ndev设备初始化一个comms[i]*/
     ncclCommInitRankDev(comms + i/*i号gpu对应的comms*/, ndev/*gpu总数*/, 1/*1个uniqueId*/, &uniqueId, i/*自身rank*/, dev/*gpu编号*/, &config, __func__);
   }
-  NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);/*结束group*/
+  NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);/*结束group(上述处理均在此执行）*/
 
   NVTX3_RANGE_ADD_PAYLOAD(CommInitAll, NcclNvtxParamsCommInitAllSchema, NVTX3_PAYLOAD(comms[0]->commHash, ndev));
 

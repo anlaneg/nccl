@@ -611,7 +611,7 @@ __host__ __device__ constexpr int ncclShmemDynamicSize(int cudaArch = NCCL_CUDA_
 }
 
 // Host-side table of kernel function pointers.
-extern int const ncclDevKernelCount;
+extern int const ncclDevKernelCount;/*ncclDevKernelList数组大小*/
 extern void* ncclDevKernelList[/*ncclDevKernelCount*/];
 extern int ncclDevKernelRequirements[/*ncclDevKernelCount*/];
 

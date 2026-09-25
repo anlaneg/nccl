@@ -102,15 +102,18 @@ ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank) 
   ncclResult_t ret = ncclSuccess;
   if (!rasInitialized) {
     std::lock_guard<std::mutex> lock(rasInitMutex);
-    if (!rasInitialized) {
+    if (!rasInitialized) {/*加锁再查*/
       union ncclSocketAddress addr;
 
       memcpy(&addr, &myRank->addr, sizeof(addr));
       (addr.sa.sa_family == AF_INET ? addr.sin.sin_port : addr.sin6.sin6_port) = htons(0);
+      /*初始化rasNetwork类型的socket*/
       NCCLCHECKGOTO(ncclSocketInit(&rasNetListeningSocket, &addr, ncclSocketDefaultMagic(), ncclSocketTypeRasNetwork,
                                    /*abortFlag*/ nullptr, /*asyncFlag*/ 1),
                     ret, fail);
+      /*绑定地址*/
       NCCLCHECKGOTO(ncclSocketListen(&rasNetListeningSocket), ret, fail);
+      /*显示绑定地址*/
       INFO(NCCL_RAS, "RAS network listening socket at %s", ncclSocketToString(&rasNetListeningSocket.addr, rasLine));
 
       (void)rasClientInitSocket();

@@ -53,7 +53,7 @@ ncclResult_t ncclMemManagerInit(struct ncclComm* comm) {
 
   COMPILER_ATOMIC_STORE(&mgr->initialized, 1, std::memory_order_release);
 
-  comm->memManager = mgr;
+  comm->memManager = mgr;/*以上初始化并设置MemManager*/
 
   INFO(NCCL_ALLOC, "MemManager: Initialized for device %d", comm->cudaDev);
   return ncclSuccess;

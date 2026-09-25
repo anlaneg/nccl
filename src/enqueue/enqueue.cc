@@ -62,31 +62,36 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
   NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
 
   for (int sym = 0; sym <= 1; sym++) {
-    int kcount = sym == 0 ? ncclDevKernelCount : ncclSymkKernelCount;
-    void** kptrs = sym == 0 ? ncclDevKernelList : ncclSymkKernelList;
+	  /*如上，分两次遍历devKernel和symkKernel，devkernelRequirements,symkKernelRequirements*/
+    int kcount/*符号数*/ = sym == 0 ? ncclDevKernelCount : ncclSymkKernelCount;
+    void** kptrs/*符号名称*/ = sym == 0 ? ncclDevKernelList : ncclSymkKernelList;
     // Symmetric kernels have a parallel list of instrumented variants (indexed
     // identically). They share requirements/smem, so configure both here.
-    void** kptrsProfile = sym == 0 ? nullptr : ncclSymkKernelListProfile;
-    int* krequires = sym == 0 ? ncclDevKernelRequirements : ncclSymkKernelRequirements;
+    void** kptrsProfile = sym == 0 ? nullptr/*首次不遍历*/ : ncclSymkKernelListProfile;
+    int* krequires/*需求版本号*/ = sym == 0 ? ncclDevKernelRequirements : ncclSymkKernelRequirements;
     for (int k = 0; k < kcount; k++) {
       if (kptrs[k] != nullptr && driverVersion < krequires[k]) {
+    	  /*此项有，但驱动版本小于要求的版本*/
         INFO(NCCL_INIT, "Skipping %skernel %d which requires driver %d", sym ? "symmetric " : "", k, krequires[k]);
         kptrs[k] = nullptr;
+        /*强制关闭掉此profile*/
         if (kptrsProfile != nullptr) kptrsProfile[k] = nullptr;
       }
 
       // Configure the default and, for sym kernels, the instrumented variant. Smem is
       // recorded once from the default (v==0) and shared (identical footprints).
       void* variants[2] = {kptrs[k], kptrsProfile != nullptr ? kptrsProfile[k] : nullptr};
-      int nVariants = kptrsProfile != nullptr ? 2 : 1;
+      int nVariants = kptrsProfile != nullptr ? 2 : 1;/*profile为null情况下，参数为1*/
       for (int v = 0; v < nVariants; v++) {
         void* fn = variants[v];
         cudaFuncAttributes attr = {0};
         if (fn == nullptr) continue;
 
+        /*查询一个已经编译好的 GPU 核函数 (kernel) 的属性信息。*/
         if (!CUDASUCCESS(cudaFuncGetAttributes(&attr, fn))) continue; // Silently ignore failures
 
         if (maxStackSize) {
+        	/*更新最大栈大小*/
           if (attr.localSizeBytes > *maxStackSize) *maxStackSize = attr.localSizeBytes;
         }
         if (carveout) {
