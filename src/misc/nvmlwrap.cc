@@ -472,6 +472,7 @@ ncclResult_t ncclNvmlDeviceGetPlatformInfo(nvmlDevice_t device, nvmlPlatformInfo
 ncclResult_t ncclNvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t* pciInfo) {
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
+  /*取设备属性*/
   NVMLCHECK(nvmlDeviceGetPciInfo_v3, device, pciInfo);
   return ncclSuccess;
 }

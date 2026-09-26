@@ -25,7 +25,7 @@ NCCL_PARAM(IpcUseAbstractSocket, "IPC_USE_ABSTRACT_SOCKET", 1);
 /*
  * Create a Unix Domain Socket
  */
-ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, volatile uint32_t* abortFlag) {
+ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank/*当前rank*/, uint64_t hash/*当前uds编号*/, volatile uint32_t* abortFlag) {
   int fd = NCCL_INVALID_SOCKET;
   struct sockaddr_un cliaddr;
   char temp[NCCL_IPC_SOCKNAME_LEN] = "";
@@ -46,7 +46,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, v
   cliaddr.sun_family = AF_UNIX;
 
   // Create unique name for the socket.
-  /*创建地址（合入rank与hash)*/
+  /*创建地址（合入rank与hash)，hash保证了进程唯一，rank增加后，保证了唯一性*/
   int len = snprintf(temp, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_SOCKNAME_STR, rank, hash);
   if (len > (int)(sizeof(cliaddr.sun_path) - 1)) {
     WARN("UDS: Cannot bind provided name to socket. Name too large");
@@ -57,13 +57,14 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, v
   int useAbstractSocket = ncclParamIpcUseAbstractSocket();
   if (!useAbstractSocket) {
     // For regular Unix domain sockets, unlink any existing socket file
-    (void)unlink(temp);
+    (void)unlink(temp);/*针对这种，直接删除防之前有残存*/
   }
 
   TRACE(NCCL_INIT | NCCL_P2P, "UDS: Creating socket %s%s", temp, useAbstractSocket ? " (abstract)" : "");
 
   strcpy(cliaddr.sun_path, temp);/*填地址*/
   if (useAbstractSocket) {
+	  /*不产生具体文件*/
     cliaddr.sun_path[0] = '\0'; // Linux abstract socket trick
   }
   /*绑定此地址*/
@@ -81,6 +82,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, v
   if (handle->abortFlag) {
     int flags;
     SYSCHECK(flags = fcntl(fd, F_GETFL), "fcntl");
+    /*指定非阻塞*/
     SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
   }
 

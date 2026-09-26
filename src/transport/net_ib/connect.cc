@@ -59,16 +59,18 @@ struct ncclIbHandle {
   union ibv_gid listenGids[2];
 };
 
-NCCL_PARAM(IbQpsPerConn, "IB_QPS_PER_CONNECTION", 1);
+NCCL_PARAM(IbQpsPerConn, "IB_QPS_PER_CONNECTION", 1);/*每个连接多少个QP*/
 NCCL_PARAM(IbSubnetAwareRouting, "IB_SUBNET_AWARE_ROUTING", 0);
 NCCL_PARAM(IbSubnetPrefixLen, "IB_SUBNET_PREFIX_LEN", 24);
 
+/*初始化base*/
 ncclResult_t ncclIbInitCommDevBase(int ibDevN, struct ncclIbNetCommDevBase* base, void* cq_context, int cqSize) {
   base->ibDevN = ibDevN;
-  ncclIbDev* ibDev = ncclIbDevs + ibDevN;
+  ncclIbDev* ibDev = ncclIbDevs + ibDevN;/*取对应的ib设备*/
   {
     std::lock_guard<std::mutex> lock(ibDev->mutex);
     if (0 == ibDev->pdRefs++) {
+    	/*创建pd*/
       NCCLCHECK(wrap_ibv_alloc_pd(&ibDev->pd, ibDev->context));
     }
     base->pd = ibDev->pd;
@@ -76,6 +78,7 @@ ncclResult_t ncclIbInitCommDevBase(int ibDevN, struct ncclIbNetCommDevBase* base
 
   ncclIbGidInfoSnapshot(base, ibDev);
 
+  /*创建cq*/
   NCCLCHECK(wrap_ibv_create_cq(&base->cq, ibDev->context, cqSize, cq_context, NULL, 0));
 
   NCCLCHECK(ncclIbGetPkeyIndex(ibDev->context, ibDev->portNum, &ibDev->portAttr, &base->pkeyIndex));
@@ -635,8 +638,11 @@ ncclResult_t ncclIbListen(void* ctx, int dev, void* opaqueHandle, void** listenC
   memset(handle, 0, sizeof(struct ncclIbHandle));
   comm->dev = dev;
   handle->magic = ncclSocketDefaultMagic();
+  /*初始化socket*/
   NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclIbIfAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1), ret, fail);
+  /*执行listen(容许listen 0号port来自动分配)*/
   NCCLCHECKGOTO(ncclSocketListen(&comm->sock), ret, fail);
+  /*取此socket绑定的地址（即远端连接地址）*/
   NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr), ret, fail);
 
   // Embed GIDs of all PFs in the handle so the connector can find a local NIC
@@ -855,10 +861,11 @@ ncclResult_t ncclIbConnectImpl(void* ctx, int dev, void* opaqueHandle, void** se
   }
   stage->buffer = NULL;
 
+  /*申请SendComm空间（cpu内存）*/
   NCCLCHECK(ncclIbMalloc((void**)&comm, sizeof(struct ncclIbSendComm)));
   NCCLCHECKGOTO(ncclIbSendCommInit(comm), ret, fail);
   NCCLCHECKGOTO(ncclIbStatsInit(&comm->base.stats), ret, fail);
-  NCCLCHECKGOTO(ncclSocketInit(&comm->base.sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1),
+  NCCLCHECKGOTO(ncclSocketInit(&comm->base.sock, &handle->connectAddr/*设置连接的地址*/, handle->magic, ncclSocketTypeNetIb, NULL, 1),
                 ret, fail);
   stage->comm = comm;
   stage->state = ncclIbCommStateConnect;
@@ -866,12 +873,13 @@ ncclResult_t ncclIbConnectImpl(void* ctx, int dev, void* opaqueHandle, void** se
 
 ib_connect_check:
   /* since ncclSocketConnect is async, we must check if connection is complete */
-  NCCLCHECKGOTO(ncclSocketReady(&comm->base.sock, &ready), ret, fail);
+  NCCLCHECKGOTO(ncclSocketReady(&comm->base.sock, &ready), ret, fail);/*连接到对端*/
   if (!ready) return ncclSuccess;
 
   // IB Setup
   struct ncclIbMergedDev* mergedDev;
   if (dev >= ncclNMergedIbDevs) {
+	  /*ib设备编号超限*/
     WARN("NET/IB : Trying to use non-existent virtual device %d", dev);
     return ncclInternalError;
   }
@@ -880,6 +888,7 @@ ib_connect_check:
   comm->base.vProps = mergedDev->vProps;
   stage->state = ncclIbCommStateSendDevList;
   stage->offset = 0;
+  /*申请buffer，填充设备vProps属性*/
   struct ncclIbConnectionMetadata meta;
   NCCLCHECKGOTO(ncclIbMalloc((void**)&stage->buffer, sizeof(meta)), ret, fail);
   memcpy(stage->buffer, &mergedDev->vProps, sizeof(ncclNetVDeviceProps_t));
@@ -896,14 +905,16 @@ ib_connect_check:
 // In the case of mismatched nDevs, we will make sure that both sides of a logical connection have the same number
 // of RC qps
 ib_send_dev_list:
+/*发送设备列表*/
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &comm->base.sock, stage->buffer,
                                sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps), &stage->offset));
   if (stage->offset != (sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps))) return ncclSuccess;
 
-  stage->state = ncclIbCommStateRecvDevList;
+  stage->state = ncclIbCommStateRecvDevList;/*进入接收devlist状态*/
   stage->offset = 0;
 
 ib_recv_dev_list:
+/*收对端设备列表*/
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &comm->base.sock, stage->buffer,
                                sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps), &stage->offset));
   if (stage->offset != (sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps))) return ncclSuccess;
@@ -917,8 +928,10 @@ ib_recv_dev_list:
   mergedDev = ncclIbMergedDevs + dev;
   comm->base.vProps = mergedDev->vProps;
   int localNqps, remoteNqps;
+  /*有多少设备就有多少连接，然后再计算为qps数目*/
   localNqps = nQpsPerDev * comm->base.vProps.ndevs; // We must have at least 1 qp per-device
   remoteNqps = nQpsPerDev * remoteVProps.ndevs;
+  /*选两连最大的qps数（两边可能设备不相等）*/
   comm->base.nqps = remoteNqps > localNqps ? remoteNqps : localNqps; // Select max nqps (local or remote)
 
   comm->base.nDataQps = std::max(comm->base.vProps.ndevs, remoteVProps.ndevs);
@@ -934,6 +947,7 @@ ib_recv_dev_list:
   int cqSize;
   cqSize = NET_IB_MAX_REQUESTS * nQpsPerDev;
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
+	  /*初始化base*/
     int ibDevN = comm->base.vProps.devs[i];
     if (comm->base.resiliency) {
       NCCLCHECKGOTO(ncclIbResiliencyDataCqSizeGet(comm->base.resiliency, i, &cqSize), ret, fail);
@@ -951,6 +965,7 @@ ib_recv_dev_list:
   // Create QPs on the sender side
   NCCLCHECKGOTO(ncclIbSenderQpsCreate(comm, &meta), ret, fail);
 
+  /*遍历创建qp（循环内设备也在循环切，这样也实现两设备间多个qp的问题）*/
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
     ncclIbSendCommDev* commDev = comm->devs + i;
     ncclIbDev* ibDev = ncclIbDevs + commDev->base.ibDevN;

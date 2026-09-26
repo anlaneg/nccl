@@ -80,11 +80,12 @@ void *thread_worker(void *arg) {
   // =========================================================================
   // Each thread creates its own communicator using the shared unique ID
   NCCLCHECK(ncclCommInitRank(&data->comms[thread_id], data->num_gpus, data->commId,
-                             thread_id/*用线程id做为rank*/));
+                             thread_id/*用线程id做为rank*/));/*单个rank初始化*/
 
   printf("  Thread %d: NCCL communicator initialized\n", thread_id);
 
   if (thread_id == 0) {
+	  /*仅首个rank运行到此处时，显示所有线程初始化完成*/
     printf("All threads initialized - communicators ready\n");
   }
 
@@ -97,7 +98,7 @@ void *thread_worker(void *arg) {
   NCCLCHECK(ncclCommCount(data->comms[thread_id], &comm_size));
 
   printf("  Thread %d: Communicator thread_id %d of %d\n", thread_id,
-         comm_thread_id, comm_size);
+         comm_thread_id, comm_size);/*显示当前线程rank,及rank总数*/
 
   // Synchronize CUDA stream to ensure all GPU work is complete
   if (stream != NULL) {
@@ -110,8 +111,8 @@ void *thread_worker(void *arg) {
   // Destroy NCCL communicator FIRST (before CUDA resources)
   // This is important - NCCL cleanup should happen before CUDA cleanup
   if (data->comms[thread_id] != NULL) {
-    NCCLCHECK(ncclCommFinalize(data->comms[thread_id]));
-    NCCLCHECK(ncclCommDestroy(data->comms[thread_id]));
+    NCCLCHECK(ncclCommFinalize(data->comms[thread_id]));/*执行此commFinalize*/
+    NCCLCHECK(ncclCommDestroy(data->comms[thread_id]));/*执行commDestroy*/
     printf("  Thread %d: Destroyed NCCL communicator\n", comm_thread_id);
   }
 
@@ -158,7 +159,7 @@ int main(int argc, char *argv[]) {
   comms = (ncclComm_t *)malloc(num_gpus * sizeof(ncclComm_t));/*每个线程一个comm*/
 
   // Generate unique ID for NCCL communicator initialization
-  NCCLCHECK(ncclGetUniqueId(&commId));
+  NCCLCHECK(ncclGetUniqueId(&commId));/*生成commId*/
 
   // =========================================================================
   // STEP 3: Create and Launch Pthread Threads
@@ -168,12 +169,12 @@ int main(int argc, char *argv[]) {
 
   /*每个gpu一个线程*/
   for (int i = 0; i < num_gpus; i++) {
-    threadData[i].thread_id = i;/*线程编号*/
+    threadData[i].thread_id = i;/*线程编号（后续用作rank编号）*/
     threadData[i].num_gpus = num_gpus;
     threadData[i].commId = commId;
     threadData[i].comms = comms;
 
-    pthread_create(&threads[i], NULL, thread_worker, &threadData[i]);
+    pthread_create(&threads[i], NULL, thread_worker/*线程入口*/, &threadData[i]);
   }
 
   // =========================================================================
@@ -181,7 +182,7 @@ int main(int argc, char *argv[]) {
   // =========================================================================
 
   for (int i = 0; i < num_gpus; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], NULL);/*等待线程退出*/
   }
 
   printf("All threads completed\n");

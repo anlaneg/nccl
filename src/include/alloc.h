@@ -181,6 +181,7 @@ ncclResult_t ncclCallocDebug(T** ptr, size_t nelem/*元素数目*/, const char* 
     memset((void*)p, 0, nelem * ncclSizeOfT<T>());/**初始化内存为0 */
     *ptr = p;
     if (logHostAlloc)
+    	/*输出log,指明申请内存*/
       INFO_LOC_FN(NCCL_ALLOC_HOST, file, line, callerFunc, "Host Calloc Size %ld pointer %p", nelem * ncclSizeOfT<T>(),
                   p);
   } else {
@@ -207,7 +208,7 @@ ncclResult_t ncclCallocDebug(ncclUniqueArrayPtr<T>& ptr, size_t nelem, const cha
   return result;
 }
 
-#define ncclCalloc(...) ncclCallocDebug(__VA_ARGS__, __FILE__, __LINE__, __func__, true)
+#define ncclCalloc(...) ncclCallocDebug(__VA_ARGS__, __FILE__, __LINE__, __func__, true/*必log输出*/)
 /* Quiet calloc/realloc skip NCCL_ALLOC_HOST INFO on very high-churn host paths only. */
 #define ncclCallocQuiet(...) ncclCallocDebug(__VA_ARGS__, __FILE__, __LINE__, __func__, false)
 

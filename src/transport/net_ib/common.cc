@@ -8,7 +8,9 @@
 #include "common.h"
 #include "p2p_resiliency.h"
 
+/*ib使用的接口名称*/
 char ncclIbIfName[MAX_IF_NAME_SIZE + 1];
+/*ib使用的接口地址*/
 union ncclSocketAddress ncclIbIfAddr;
 
 int ncclNMergedIbDevs = -1;
@@ -163,16 +165,19 @@ static void ncclIbUpdateDeviceSpeed(struct ncclIbDev* dev) {
 }
 
 std::thread ncclIbAsyncThread;
+/*为每个ib设备创建了一个线程（处理事件）*/
 void* ncclIbAsyncThreadMain(void* args) {
   struct ncclIbDev* dev = (struct ncclIbDev*)args;
   while (1) {
     struct ibv_async_event event;
+    /** 获取异步事件 */
     if (ncclSuccess != wrap_ibv_get_async_event(dev->context, &event)) break;
     char* str;
     struct ibv_cq* cq = event.element.cq;    // only valid if CQ error
     struct ibv_qp* qp = event.element.qp;    // only valid if QP error
     struct ibv_srq* srq = event.element.srq; // only valid if SRQ error
     if (ncclSuccess != wrap_ibv_event_type_str(&str, event.event_type)) break;
+    /** 检查事件类型，处理异步事件 */
     switch (event.event_type) {
     case IBV_EVENT_DEVICE_FATAL:
       // the above is device fatal error
@@ -241,21 +246,22 @@ void* ncclIbAsyncThreadMain(void* args) {
   return NULL;
 }
 
+/**定义ib类型的网络插件 */
 ncclNet_t ncclNetIb = {
   "IB",
-  ncclIbInit,
-  ncclIbDevices,
-  ncclIbGetProperties,
-  ncclIbListen,
-  ncclIbConnect,
-  ncclIbAccept,
-  ncclIbRegMr,
-  ncclIbRegMrDmaBuf,
-  ncclIbDeregMr,
-  ncclIbIsend,
-  ncclIbIrecv,
+  ncclIbInit,/*ib对应的初始化函数*/
+  ncclIbDevices,/*网络插件初始化后调用，返回ib设备数目*/
+  ncclIbGetProperties,/*取ib设备属性*/
+  ncclIbListen,/*执行tcp socket监听*/
+  ncclIbConnect,/*双方带外交换信息，创建qp,注册mr,促使qp达到rts状态*/
+  ncclIbAccept,/*执行tcp socket accept*/
+  ncclIbRegMr,/*普通mr注册*/
+  ncclIbRegMrDmaBuf,/*dma buffer mr注册*/
+  ncclIbDeregMr,/*解注册mr*/
+  ncclIbIsend,/*发送*/
+  ncclIbIrecv,/*接收*/
   ncclIbIflush,
-  ncclIbTest,
+  ncclIbTest,/*检查请求是否已被ACK*/
   ncclIbCloseSend,
   ncclIbCloseRecv,
   ncclIbCloseListen,

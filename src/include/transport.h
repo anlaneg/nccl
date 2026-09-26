@@ -66,13 +66,13 @@ struct ncclPeerInfo {
   int version;/*当前nccl版本号 */
   uint64_t supportedGinTypeBitMask;
   bool crossNicSupport;
-  bool rmaPluginAvailable;
+  bool rmaPluginAvailable;/*是否有rmaplugin*/
   bool cuMemGdrSupport;
   int mloPart; // MLOPart partition index, or -1 if not an MLOPart GPU
   int cudaDriverVersion;
   bool gpuCftMulticastSupport;
   bool gpuCftCountedSupport;
-  uint32_t gitVersionHash;
+  uint32_t gitVersionHash;/*git版本号*/
 };
 
 #define CONNECT_SIZE 256

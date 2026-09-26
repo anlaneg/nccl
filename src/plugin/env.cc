@@ -81,7 +81,7 @@ fail:
   if (envPluginLib) NCCLCHECK(ncclClosePluginLib(envPluginLib, ncclPluginTypeEnv));
   envPluginLib = nullptr;
   envPluginStatus = envPluginLoadFailed;/*加载env插件失败*/
-  goto exit;
+  goto exit;/*只设置加载状态为失败，仍跳exit返回ncclSuccess*/
 }
 
 static ncclResult_t ncclEnvPluginUnload(void) {
@@ -101,13 +101,13 @@ void ncclEnvPluginFinalize(void);
 static bool initialized;
 
 ncclResult_t ncclEnvPluginInit(void) {
-	/*初始化环境变量*/
+  /*初始化环境变量*/
   initEnv();
   /*加载env插件*/
   NCCLCHECK(ncclEnvPluginLoad());
   /*如果evn插件加载成功，则表示可以用扩展的env插件，否则用默认的env插件*/
   ncclEnvPlugin =
-    (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
+    (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN]/*未成功，返回默认*/;
   /*env插件初始化*/
   NCCLCHECK(ncclEnvPlugin->init(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH, NCCL_SUFFIX, ncclDebugLog));
   atexit(ncclEnvPluginFinalize);

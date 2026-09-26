@@ -23,16 +23,16 @@ struct ncclIbQpCreateAttr {
 
 // Per-QP connection metatdata
 struct ncclIbQpInfo {
-  uint32_t qpn;
+  uint32_t qpn;/*对应的qpn*/
 
   // Fields needed for ece (enhanced connection establishment)
-  struct ibv_ece ece;
+  struct ibv_ece ece;/*指明是否支持ece*/
   int ece_supported;
 
   // The index of the device on which the QP was created. Allows the sender and
   // receiver side to have asymmetric device configuration, meaning the sender
   // and receiver can use different number of devices.
-  int devIndex;
+  int devIndex;/*所属的ibdev编号*/
 };
 
 struct ncclIbResiliencyInfo {

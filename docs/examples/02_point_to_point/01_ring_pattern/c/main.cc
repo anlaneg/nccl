@@ -140,6 +140,7 @@ int main(int argc, char *argv[]) {
     NCCLCHECK(ncclCommCount(comms[i], &size));
     NCCLCHECK(ncclCommCuDevice(comms[i], &device));
 
+    /*显示各comms对应的rank编号，总rank数，及负责的cuda*/
     printf("  GPU %d -> NCCL rank %d/%d on CUDA device %d\n", i, rank, size,
            device);
   }

@@ -49,6 +49,7 @@ typedef struct rmaPluginLib {
   /*状态*/
   ncclRmaPluginState_t state;                   // State of the plugin
   int refCount;                                 // Reference count
+  /*物理设备数量*/
   int physDevs;                                 // Number of physical devices
 } rmaPluginLib_t;
 
@@ -306,10 +307,11 @@ ncclResult_t ncclRmaFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclRmaGetDevCount(int pluginIndex, int* nPhysDevs, int* nVirtDevs) {
+ncclResult_t ncclRmaGetDevCount(int pluginIndex, int* nPhysDevs/*物理设备数目*/, int* nVirtDevs/*虚拟设备数目*/) {
+	/*状态未开启或者设备数量为0，则返回失败*/
   if (pluginLibs[pluginIndex].state != ncclRmaPluginStateEnabled || pluginLibs[pluginIndex].physDevs == 0) goto fail;
   // lock not needed as it's called within a lock already in ncclTopoGetSystem
-  *nPhysDevs = pluginLibs[pluginIndex].physDevs;
+  *nPhysDevs = pluginLibs[pluginIndex].physDevs;/*返回物理设备计数*/
   return ncclSuccess;
 fail:
   WARN("trying to access the number of devices of an uninitialized rmaPlugin[%d]", pluginIndex);

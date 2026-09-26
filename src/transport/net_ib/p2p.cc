@@ -42,7 +42,7 @@ ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r) {
 
 void ncclIbAddEvent(struct ncclIbRequest* req, int devIndex) {
   struct ncclIbNetCommDevBase* base = ncclIbGetNetCommDevBase(req->base, devIndex);
-  req->events[devIndex]++;
+  req->events[devIndex]++;/*等待的events数目增加*/
   req->devBases[devIndex] = base;
 }
 
@@ -80,10 +80,12 @@ static ncclResult_t ncclIbPrintWr(struct ibv_send_wr* wr, char* wrStr) {
 // The alignment for IB writes that is required to make LL and LL128 protocols work
 #define IB_WRITE_CHUNK_ALIGNMENT 128
 
+/** 在多个QP间散开发送write请求 */
 ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
-  struct ncclIbRequest** reqs = comm->sendReqs[slot];
-  volatile struct ncclIbSendFifo* slots = comm->ctsFifo[slot];
-  int nreqs = slots[0].nreqs;
+  struct ncclIbRequest** reqs = comm->sendReqs[slot];/**取请求指针*/
+  volatile struct ncclIbSendFifo* slots = comm->ctsFifo[slot];/**取对应的sendfifo */
+  int nreqs = slots[0].nreqs;/* 获取本轮请求数量 */
+  /* 检查请求数量是否超过最大接收数 */
   if (nreqs > NCCL_NET_IB_MAX_RECVS) return ncclInternalError;
 
   TRACE(NCCL_NET, "NET/IB: %s: Posting a send request (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d)", __func__, reqs[0],
@@ -109,18 +111,19 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
     NCCLCHECK(ncclIbCommBaseGetQpForRequest(&comm->base, reqs[0]->id, i, &qps[i], &qpIndexes[i]));
     qpsPerDev[comm->base.qps[qpIndexes[i]].devIndex]++;
   }
+  /** 以下填充wrs */
   uint64_t wr_id = 0ULL;
   for (int r = 0; r < nreqs; r++) {
-    struct ibv_send_wr* wr = comm->wrs + r;
+    struct ibv_send_wr* wr = comm->wrs + r;/*获取本轮wr */
     memset(wr, 0, sizeof(struct ibv_send_wr));
 
-    struct ibv_sge* sge = comm->sges + r;
-    sge->addr = (uintptr_t)reqs[r]->send.data;
-    wr->opcode = IBV_WR_RDMA_WRITE;
+    struct ibv_sge* sge = comm->sges + r;/*获取本轮sge*/
+    sge->addr = (uintptr_t)reqs[r]->send.data;/*填写要发送的地址*/
+    wr->opcode = IBV_WR_RDMA_WRITE;/**指明为rdma write 操作*/
     wr->send_flags = 0;
-    wr->wr.rdma.remote_addr = slots[r].addr;
-    wr->next = wr + 1;
-    wr_id += (uint64_t)(slot & 0xff) << (r * 8);
+    wr->wr.rdma.remote_addr = slots[r].addr;/*远端的va地址*/
+    wr->next = wr + 1;/**串起下一个wr */
+    wr_id += (uint64_t)(slot & 0xff) << (r * 8);/*分配wr_id*/
     wr->wr_id = wr_id;
 #ifdef NCCL_ENABLE_NET_PROFILING
     reqs[r]->pInfo[0].nEventHandles = 0;
@@ -272,10 +275,28 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
   return ncclSuccess;
 }
 
+/**
+ * 发送数据（异步）。由 proxy 线程反复调用；每次调用只处理"当前 slot 内、tag 匹配的一条 recv"，
+ * 需接收端先通过 CTS 把接收 buffer 元数据（addr/rkeys/size/tag）写到发送端 fifo 才会真正 post_send。
+ *
+ * @param sendComm  发送端 comm，实际类型 struct ncclIbSendComm*；包含 QP/CQ/fifo/请求池等状态。
+ * @param data      本地待发送数据的虚拟地址（GPU 或 CPU 内存均可，取决于 mhandle 注册时的类型）；
+ *                  发送端只需读此 buffer，通过 RDMA_WRITE 推到对端。
+ * @param size      本次发送的字节数；若 > 对端预告的 slots[r].size 会被截断为 slots[r].size。
+ * @param tag       用户 tag。多路 recv（multi-recv, 一次 fifo slot 内最多 NCCL_NET_IB_MAX_RECVS=8 条）
+ *                  依靠 tag 匹配到具体的 slots[r]，从而选出这次 Isend 该填的槽位。
+ * @param mhandle   本地 MR 句柄，实际类型 struct ncclIbMrHandle*；里面存了 ndev 张卡各自的 lkey，
+ *                  用于 RDMA_WRITE 时填 sge.lkey。
+ * @param phandle   profiler 句柄（NCCL_ENABLE_NET_PROFILING 时使用），传递给底层做 tracing；未开则忽略。
+ * @param request   出参：返回一个 ncclIbRequest* 用于上层轮询（后续 ncclIbTest）；
+ *                  若本次 CTS 尚未到齐 / tag 未匹配到，会置 NULL 表示"还没真正下发，稍后再来"。
+ * @return          ncclSuccess 正常（含 *request==NULL 的软失败）；ncclInternalError 表示 comm 未就绪等致命错误。
+ */
 ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle,
                          void** request) {
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)sendComm;
   if (comm->base.ready == 0) {
+	  /** 未ready,无法发送请求 */
     WARN("NET/IB: ncclIbIsend() called when comm->base.ready == 0");
     *request = NULL;
     return ncclInternalError;
@@ -288,19 +309,26 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
   int nreqs = 0;
   volatile struct ncclIbSendFifo* slots;
 
+  /*在ring间选中待发送的索引（这一组均需要发送）*/
   int slot = comm->base.fifoHead % NET_IB_MAX_REQUESTS;
+  /*用于存储待发送的一组请求指针*/
   struct ncclIbRequest** reqs = comm->sendReqs[slot];
   slots = comm->ctsFifo[slot];
+  /**前移一个索引*/
   uint64_t idx = comm->base.fifoHead + 1;
+  /*检查是否已被填充*/
   if (slots[0].idx != idx) {
     *request = NULL;
+    /*无内容，不处理*/
     return ncclSuccess;
   }
   nreqs = slots[0].nreqs;
   // Wait until all data has arrived
   for (int r = 1; r < nreqs; r++) {
+	  /**等待这一组reqs均被填充*/
     while (slots[r].idx != idx);
   }
+  /*现在nreqs已填充完可以发送了*/
   std::atomic_thread_fence(std::memory_order_seq_cst); // order the nreqsPtr load against tag/rkey/addr loads below
   for (int r = 0; r < nreqs; r++) {
     if (reqs[r] != NULL || slots[r].tag != tag) continue;
@@ -308,6 +336,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     if (size > slots[r].size) size = slots[r].size;
     // Sanity checks
     if (slots[r].addr == 0 || slots[r].rkeys[0] == 0) {
+    	/*内容有误,报错*/
       char line[SOCKET_NAME_MAXLEN + 1];
       union ncclSocketAddress addr;
       ncclSocketGetAddr(&comm->base.sock, &addr);
@@ -317,6 +346,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     }
 
     int nqps = 0;
+    /**获取一个未使用的请求 */
     NCCLCHECK(ncclIbCommBaseGetNqpsPerRequest(&comm->base, &nqps));
     if (nqps > NCCL_IB_MAX_QPS) {
       WARN("NET/IB: QP count %d exceeds maximum QP capacity %d", nqps, NCCL_IB_MAX_QPS);
@@ -334,12 +364,13 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     struct ncclIbRequest* req;
     NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
     req->id = comm->base.fifoHead;
+    /**标记为发送请求 */
     req->type = NCCL_NET_IB_REQ_SEND;
     req->sock = &comm->base.sock;
     req->base = &comm->base;
     req->nreqs = nreqs;
-    req->send.size = size;
-    req->send.data = data;
+    req->send.size = size;/*发送数据大小*/
+    req->send.data = data;/*要发送数据内容*/
     if (comm->base.resiliency) {
       memset(req->send.sentData, 0, sizeof(req->send.sentData));
     }
@@ -377,8 +408,10 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     if (comm->sendReqsCnt[slot] < nreqs) return ncclSuccess;
 
     TIME_START(0);
+    /**散开执行write操作，发送slot对应的请求*/
     NCCLCHECK(ncclIbMultiSend(comm, slot));
 
+    /**更新fifoHead，指向下一个待发送的reqs索引 */
     comm->base.fifoHead++;
     TIME_STOP(0);
     return ncclSuccess;
@@ -921,7 +954,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
+ncclResult_t ncclIbTest(void* request/*要检测的请求*/, int* done/*出参，此req是否已完成（对方已响应ack)*/, int* sizes) {
   struct ncclIbRequest* r = (struct ncclIbRequest*)request;
   *done = 0;
 

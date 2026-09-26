@@ -11,8 +11,11 @@ import shutil
 
 # Order of redops, tys, protos, algos must match src/include/device.h
 all_colls =  ["Broadcast","Reduce","AllGather","AllGatherV", "ReduceScatter","AllReduce","SendRecv"]
+# 指出归约算子（加合，乘积，最值，加权求和，加权乘积）
 all_redops = ["Sum","Prod","MinMax","PreMulSum","SumPostDiv"]
+# 指出数据类型（8位整数，无符号8位整数，32位整数，无符号32位整数，64位整数，无符号64位整数，16位浮点数，32位浮点数，64位浮点数及几个特殊浮点数）
 all_tys =    ["i8","u8","i32","u32","i64","u64","f16","f32","f64","bf16","f8e4m3","f8e5m2"]
+# 指出数据封装格式及就绪同步信号的类型
 all_protos = ["LL","LL128","SIMPLE"]
 all_algos =  ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE","PAT"]
 
@@ -23,12 +26,13 @@ all_algos =  ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE",
 gensrc = sys.argv[1]
 
 if os.path.exists(gensrc):
-  # 移除gensrc目录下的所有文件与目录
+  # gensrc是输出目录，此目录中将包含生成的内容，当前已存在，故先移除gensrc目录下的所有文件与目录
   for name in os.listdir(gensrc):
     path = os.path.join(gensrc, name)
     if os.path.isfile(path):
       os.remove(path)
 else:
+  # 不存在，则创建gensrc目录
   os.mkdir(gensrc)
 
 ################################################################################
@@ -74,18 +78,23 @@ def str_to_bool(s):
     return True
   if s in ("", "0", "false", "off", "no"):
     return False
+  #不支持其它值转为bool的情况
   raise ValueError("Invalid boolean value: " + s)
 exact_kernel_names = str_to_bool(os.environ.get("NCCL_EXACT_KERNEL_NAMES", "0"))
 
 # Paste all non-None arguments together with `sep`.
 def paste(sep, *args):
+  # 按Sep连接所有非None参数，返回结果
   return sep.join(x for x in args if x is not None)
 
 def kernel_suffix(kfn):
   # paste skips None
+  # 如果exact_kernel_names为True，返回kfn的所有元素连接后的结果
+  # 否则，返回kfn的第1个元素、第3个元素、第4个元素连接后的结果
   return paste("_", *(kfn if exact_kernel_names else (kfn[0], None, kfn[2], kfn[3])))
 
 def kernel_full_name(kfn):
+  # 在kernel_suffix(kfn)前添加"_ncclDevKernel"前缀，做为kernel全名称
   return paste("_", "ncclDevKernel", kernel_suffix(kfn))
 
 func_pattern = sys.argv[2:3]
@@ -97,11 +106,13 @@ if func_pattern and func_pattern[0]:
   def func_filter(*fn):
     return None is not re.match(func_pattern, paste(" ", *fn), flags=re.IGNORECASE)
 else:
+  # 如果没有提供pattern,则func_filter函数总返回true
   def func_filter(coll, redop, ty, algo, proto):
     return True
 
 ################################################################################
 
+#每个集合通信原语支持的算法列表
 algos_of_coll = {
   "AllGather":     ["RING","COLLNET_DIRECT","NVLS","PAT"],
   "AllGatherV":    ["RING"],
@@ -121,6 +132,7 @@ coll_camel_to_lower = {
   "ReduceScatter": "reduce_scatter",
   "SendRecv":      "sendrecv"
 }
+# 将coll_camel_to_lower中的键值对交换(key变Value,value变key)，得到coll_lower_to_camel
 coll_lower_to_camel = {coll_camel_to_lower[x]: x for x in coll_camel_to_lower}
 
 ################################################################################
@@ -131,11 +143,14 @@ coll_lower_to_camel = {coll_camel_to_lower[x]: x for x in coll_camel_to_lower}
 def required_cuda(coll, redop, ty, algo, proto):
   cudart, arch = 0, 0
   # kernels mapped to by coll="Nop" functions have coll="Generic"
+  # 这些直接放通，不受cuda版本限制
   if coll in ("SendRecv", "Generic", "Nop"): return (cudart, arch)
 
+  # 如果数据封装格式不是SIMPLE，且算法不是RING或TREE，则返回不合法
   if proto!="SIMPLE" and algo not in ("RING","TREE"): return None
 
   if coll in ("AllReduce","Reduce","ReduceScatter"):
+    # 这种只支持有符号整数和无符号整数，其他数据类型返回不合法
     if redop=="SumPostDiv" and ty[0] not in ("i","u"): return None
     if ty=="bf16": cudart = max(cudart, 11000)
     if ty.startswith("f8"):
@@ -152,6 +167,7 @@ def required_cuda(coll, redop, ty, algo, proto):
     cudart = max(cudart, 12010)
     arch = max(arch, 900)
 
+  # 返回要求的cuda版本和架构号
   return (cudart, arch)
 
 # Maps functions to the chosen representative for the equivalence class it
@@ -160,10 +176,13 @@ def equivalent_primary(coll, redop, ty, algo, proto):
   if coll in ("AllReduce", "Reduce", "ReduceScatter"):
     # map signed integer sum/prod to unsigned
     if redop in ("Sum","Prod","PreMulSum","SumPostDiv") and ty[0]=="i":
+      # 将有符号整数转换为无符号整数
       return (coll, redop, "u"+ty[1:], algo, proto)
     # map signed integer min/max to unsigned for non-NVLS
     if redop=="MinMax" and ty[0]=="i" and ("NVLS" not in algo):
+      # 将有符号整数转换为无符号整数
       return (coll, redop, "u"+ty[1:], algo, proto)
+  # 其他情况，直接返回此组合
   return (coll, redop, ty, algo, proto)
 
 # Map to another func representing the best kernel to use. Every distinct value
@@ -185,15 +204,22 @@ def best_kernel(coll, redop, ty, algo, proto):
 
 # Order rows are enumerated must match formula of `ncclDevFuncId()`:
 def enumerate_func_rows():
+  # 先枚举SendRecv函数
   yield ("SendRecv", None, None, None, None)
+  # 枚举AllGather、Broadcast、AllGatherV函数
   for coll in ("AllGather", "Broadcast", "AllGatherV"):
+    # 取此通信原语支持的算法列表
     algos = algos_of_coll[coll]
     for algo in algos:
+      # 枚举此算法支持的数据及就绪同步协议类型
       for proto in all_protos:
         yield (coll, None, None, algo, proto)
+  # 枚举AllReduce、Reduce、ReduceScatter函数
   for coll in ("AllReduce", "Reduce", "ReduceScatter"):
     algos = algos_of_coll[coll]
+    # 枚举此原语的归约算子
     for redop in all_redops:
+      # 枚举此原语的所有数据类型
       for ty in all_tys:
         for algo in algos:
           for proto in all_protos:
@@ -210,9 +236,13 @@ def is_built(coll, redop, ty, algo, proto):
 # Returns the coll="Nop" function if developer has filtered it out.
 # Otherwise just returns func it was given.
 def validate(coll, redop, ty, algo, proto):
+  # 检查此组合是否支持
   valid = required_cuda(coll, redop, ty, algo, proto)
+  # 检查是否有效且构建此组合
   built = valid and func_filter(coll, redop, ty, algo, proto)
+  # 构建就返回此组合
   if built: return (coll, redop, ty, algo, proto)
+  # 有效，但不构建，就返回Nop函数
   if valid: return ("Nop", None, None, None, None)
   return None
 
@@ -220,9 +250,11 @@ def validate(coll, redop, ty, algo, proto):
 func_rows = [validate(*fn) for fn in enumerate_func_rows()]
 
 # Corresponds to ncclDevFuncTable[]
+# 部分函数的类型实际上计算后由应用自行解释，因此可以缩减有符号为无符号
 primary_funcs = sorted(set(equivalent_primary(*fn) for fn in func_rows if fn is not None))
 
 # primary_to_index[primary_funcs[i]] == i
+# 通过primary_funcs[i]快速获取i
 primary_to_index = {fn: i for (i,fn) in zip(range(len(primary_funcs)), primary_funcs)}
 
 kernel_funcs = sorted(set(best_kernel(*fn) for fn in primary_funcs))
@@ -240,6 +272,7 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
   out('#include "common.h"\n')
   out("\n")
 
+  # 生成ncclDevFunc函数的声明
   for fn in primary_funcs:
     sym = paste("_", "ncclDevFunc", *fn)
     cudart, arch = required_cuda(*fn)
@@ -250,6 +283,7 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
       out("#endif\n")
   out("\n")
 
+  # 生成ncclDevFuncTable数组，每个元素指向一个ncclDevFunc函数
   # On Windows/MSVC, extern arrays of unknown size are invalid (C2133), so we use
   # an internal array + pointer alias.  On Linux/GCC the array is named directly
   # to avoid an extra device-memory indirection on every kernel dispatch.
@@ -289,6 +323,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out('"Device function IDs must fit in ncclDevWorkBatch");\n')
   out("\n")
 
+  # 生成ncclDevFuncIdCount，即primary_funcs的长度
   out("extern int const ncclDevFuncIdCount = %d;\n" % len(primary_funcs))
 
   # The mapping from function rows to valid primary function ids.

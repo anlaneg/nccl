@@ -85,9 +85,9 @@ struct rasDiagnosticsXidWindow {
 
 // Automatic and client-triggered diagnostics therefore share this.
 static struct {
-  uint64_t monotonicUsec;
-  time_t realtimeSec;
-  bool initialized;
+  uint64_t monotonicUsec;/*单调时间*/
+  time_t realtimeSec;/*墙上时间*/
+  bool initialized;/*是否已初始化*/
 } rasDiagnosticsXidCursor;
 
 // Each process emits one host scan-status record followed by zero or more event records.
@@ -122,6 +122,7 @@ static bool rasDiagnosticsXidNow(uint64_t* monotonicUsec, time_t* realtimeSec) {
   struct timespec monotonic;
   struct timespec realtime;
 
+  /*取单调时间及墙上时间*/
   if (clock_gettime(CLOCK_MONOTONIC, &monotonic) != 0 || clock_gettime(CLOCK_REALTIME, &realtime) != 0) return false;
   *monotonicUsec = (uint64_t)monotonic.tv_sec * 1000000ULL + monotonic.tv_nsec / 1000;
   *realtimeSec = realtime.tv_sec;
@@ -136,7 +137,7 @@ void rasDiagnosticsInit() {
     WARN("RAS diagnostics could not initialize the Xid/SXid scan interval: %s", strerror(errno));
     return;
   }
-  rasDiagnosticsXidCursor.initialized = true;
+  rasDiagnosticsXidCursor.initialized = true;/*指明已初始化*/
 }
 
 static bool rasDiagnosticsXidCaptureWindow(struct rasDiagnosticsXidWindow* window) {

@@ -1715,15 +1715,16 @@ out:
   return res;
 }
 
-static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIndex, struct ncclTopoNetInfo* netInfo,
-                                         int virtualNics) {
+static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*起始索引*/, int endIndex/*终止索引*/, struct ncclTopoNetInfo* netInfo,
+                                         int virtualNics/*是否虚拟网卡*/) {
+	/*tag名称*/
   const char* tagName = netInfo->gin ? "gin" : (netInfo->rma ? "rma" : "net");
   for (int n = startIndex; n < endIndex; n++) {
     ncclNetProperties_t props;
-    NCCLCHECK(netInfo->getProperties(n, &props));
+    NCCLCHECK(netInfo->getProperties(n/*设备编号*/, &props));/*取设备属性*/
     struct ncclXmlNode* netNode = NULL;
     struct ncclXmlNode* parent = NULL;
-    if (virtualNics) {
+    if (virtualNics) {/*虚拟网卡*/
       struct ncclXmlNode* net = NULL;
       NCCLCHECK(xmlFindTagKv(xml, tagName, &net, "name", props.name));
       // In the event of multithreaded use case, we need to re-discover the shared parent of the given devices for
@@ -1852,6 +1853,7 @@ static ncclResult_t ncclTopoUpdateVNics(ncclXml* xml, struct ncclTopoNetInfo* ne
 // Calls to network plugin APIs should be protected. This function should be called inside a per-process lock.
 ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct ncclTopoNetInfo* net) {
   bool usePhysicalDevices = (dumpXmlFile || net->makeVDevice == NULL);
+  /*取物理设备，虚拟设备数目*/
   int nPhysicalNics, nVirtualNics;
   NCCLCHECK(net->getDevCount(net->netPluginIndex, &nPhysicalNics, &nVirtualNics));
   // List the physical devices in the topo and set keep = 1
@@ -1880,17 +1882,20 @@ ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct nc
   return ncclSuccess;
 }
 
+/*通过cpu配置确定Cpuarch*/
 ncclResult_t ncclTopoGetXmlCpuArch(ncclXml* xml, int* cpuArch) {
   // loop over the CPUs until we find the arch
   const char* str = NULL;
   struct ncclXmlNode* cpu = NULL;
+  /*查cpu节点*/
   NCCLCHECK(xmlFindTag(xml, "cpu", &cpu));
   while (str == NULL && cpu != NULL) {
+	  /*取此cpu的arch属性*/
     NCCLCHECK(xmlGetAttr(cpu, "arch", &str));
     NCCLCHECK(xmlFindNextTag(xml, "cpu", cpu, &cpu));
   }
   // str == NULL will return NCCL_TOPO_CPU_ARCH_UNDEF
-  NCCLCHECK(kvConvertToInt(str, cpuArch, kvDictCpuArch));
+  NCCLCHECK(kvConvertToInt(str, cpuArch, kvDictCpuArch));/*通过字典枚举转值*/
   return ncclSuccess;
 }
 
@@ -1996,6 +2001,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   int cpuArch = NCCL_TOPO_UNDEF;
   struct ncclTopoNetInfo netInfo = {0};
   struct ncclTopoNetRailKeyList railKeyList;
+  /*申请xml节点*/
   NCCLCHECK(xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES));
   const char* xmlTopoFile = ncclGetEnv("NCCL_TOPO_FILE");
   if (xmlTopoFile) {
@@ -2012,11 +2018,12 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   // Update every cpu node's host_hash attribute since those are not
   // intended to be preserved from the XML files that have been read.
   NCCLCHECKGOTO(xmlFindTag(xml, "cpu", &node), ret, fail);
-  while (node != nullptr) {
+  while (node != nullptr/*cpu节点在*/) {
     NCCLCHECKGOTO(xmlSetAttrLong(node, "host_hash", getHostHash()), ret, fail);/*设置cpu节点的host_hash属性 */
     NCCLCHECKGOTO(xmlFindNextTag(xml, "cpu", node, &node), ret, fail);/*找到下一个cpu节点 */
   }
-  if (xml->maxIndex == 0) {/**当前节点为空，创建根节点 */
+  /**如当前节点为空，创建根节点 */
+  if (xml->maxIndex == 0) {
     // Create top tag
     struct ncclXmlNode* top;
     NCCLCHECKGOTO(xmlAddNode(xml, NULL, "system", &top), ret, fail);/*添加system节点 */
@@ -2027,15 +2034,18 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
 
   // Detect only the GPU managed by this process.  We'll get any others through XML fusion.
   char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
+  /*将此rank负责的gpu对应的busid转换为字符串形式*/
   NCCLCHECKGOTO(int64ToBusId(comm->peerInfo[comm->rank].busId, busId), ret, fail);
   NCCLCHECKGOTO(ncclTopoFillGpu(xml, busId, &node), ret, fail);
   if (node) {
     /*设置gpu节点的keep,rank,gdr属性 */
     NCCLCHECKGOTO(xmlSetAttrInt(node, "keep", 1), ret, fail);
+    /*从属于哪个rank(这里有个问题，如果是多rank操作一个gpu呢？）*/
     NCCLCHECKGOTO(xmlSetAttrInt(node, "rank", comm->rank), ret, fail);
     NCCLCHECKGOTO(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport), ret, fail);
     NCCLCHECKGOTO(xmlSetAttrInt(node, "mlopart", comm->peerInfo[comm->rank].mloPart), ret, fail);
   }
+  /*获取cpuArch*/
   NCCLCHECKGOTO(ncclTopoGetXmlCpuArch(xml, &cpuArch), ret, fail);
 
   // Auto-detect NICs if needed, net/gin/collnet share the same xml/graph nodes.
@@ -2043,7 +2053,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   {
     std::lock_guard<std::mutex> lock(netMutex);
     INFO(NCCL_GRAPH, "TOPO/NET : Importing network plugins to topology");
-    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    struct ncclGinState* ginState = &comm->sharedRes->ginState;/*取ginState*/
     ncclGin_t* gin = ginState->supported ? ginState->backends[0].ncclGin : NULL;
     if (gin) {
       netInfo.net = 0;

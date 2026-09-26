@@ -54,6 +54,7 @@ static ncclResult_t ncclNet_setNetAttr(void* ctx, ncclNetAttr_t* netAttr) {
 static ncclResult_t ncclNet_init(void** ctx, uint64_t commId, ncclNetCommConfig_t* config,
                                  ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   // Safe cast: ncclNetCommConfig_v11_t and ncclNetCommConfig_v12_t are binary identical.
+	/*先调用init函数*/
   NCCLCHECK(ncclNet_v11->init(ctx, commId, (ncclNetCommConfig_v11_t*)config, logFunction, profFunction));
   ncclNet.devices = ncclNet_v11->devices;
   ncclNet.getProperties = ncclNet_getProperties;

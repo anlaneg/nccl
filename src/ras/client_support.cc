@@ -91,7 +91,7 @@ struct rasAuxCommRank {
 };
 
 // The RAS client listening socket of this RAS thread (normally port 28028).
-int rasClientListeningSocket = -1;
+int rasClientListeningSocket = -1;/*监听本机端口ras client*/
 
 // Connected RAS clients.
 struct rasClient* rasClientsHead;
@@ -170,12 +170,15 @@ ncclResult_t rasClientInitSocket() {
   union ncclSocketAddress addr;
   const int opt = 1;
   if (const char* env = ncclGetEnv("NCCL_RAS_ADDR")) clientAddr = env;
+  /*转换地址*/
   NCCLCHECKGOTO(ncclSocketGetAddrFromString(&addr, clientAddr), ret, fail);
   /*创建tcp socket*/
   SYSCHECKGOTO(rasClientListeningSocket = socket(addr.sa.sa_family, SOCK_STREAM, 0), "socket", ret, fail);
+  /*地址复用*/
   SYSCHECKGOTO(setsockopt(rasClientListeningSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt", ret,
                fail);
 #if defined(SO_REUSEPORT)
+  /*port复用*/
   SYSCHECKGOTO(setsockopt(rasClientListeningSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)), "setsockopt", ret,
                fail);
 #endif
@@ -183,6 +186,7 @@ ncclResult_t rasClientInitSocket() {
   SYSCHECKGOTO(bind(rasClientListeningSocket, &addr.sa,
                     (addr.sa.sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))),
                "bind", ret, fail);
+  /*监听端口*/
   SYSCHECKGOTO(listen(rasClientListeningSocket, 16384), "listen", ret, fail);
   INFO(NCCL_INIT | NCCL_RAS, "RAS client listening socket at %s", ncclSocketToString(&addr, rasLine));
 exit:
@@ -204,17 +208,21 @@ ncclResult_t rasClientAcceptNewSocket() {
   socklen_t addrlen = sizeof(addr);
   int flags;
 
+  /*申请socket，并将此socket挂接在rasClientsHead链表上*/
   NCCLCHECKGOTO(getNewClientEntry(&client), ret, fail);
 
+  /*接入新的client*/
   SYSCHECKGOTO(client->sock = accept(rasClientListeningSocket, (struct sockaddr*)&addr, &addrlen), "accept", ret, fail);
 
+  /*置为非阻塞*/
   SYSCHECKGOTO(flags = fcntl(client->sock, F_GETFL), "fcntl", ret, fail);
   SYSCHECKGOTO(fcntl(client->sock, F_SETFL, flags | O_NONBLOCK), "fcntl", ret, fail);
 
+  /*取一个空的poll fd*/
   NCCLCHECKGOTO(rasGetNewPollEntry(&client->pfd), ret, fail);
   rasPfds[client->pfd].fd = client->sock;
   rasPfds[client->pfd].events = POLLIN;
-  client->status = RAS_CLIENT_CONNECTED;
+  client->status = RAS_CLIENT_CONNECTED;/*置为connected*/
 exit:
   return ret;
 fail:
@@ -226,6 +234,7 @@ fail:
 static ncclResult_t getNewClientEntry(struct rasClient** pClient) {
   struct rasClient* client;
 
+  /*申请socket*/
   NCCLCHECK(ncclCalloc(&client, 1));
 
   client->sock = client->pfd = -1;
@@ -234,6 +243,7 @@ static ncclResult_t getNewClientEntry(struct rasClient** pClient) {
   client->outputFormat = RAS_OUTPUT_TEXT;
   client->monitorMask = 0; // Not in monitor mode.
 
+  /*将此socket挂接在rasClientsHead链表上*/
   if (rasClientsHead) {
     rasClientsTail->next = client;
     client->prev = rasClientsTail;
@@ -324,7 +334,7 @@ ncclResult_t rasLocalHandleRunDiag(const struct rasDiagnosticsContext* ctx) {
   NCCLCHECKGOTO(getNewClientEntry(&client), ret, fail);
   client->internal = true;
   NCCLCHECKGOTO(rasDiagnosticsClientInit(client, ctx, nullptr), ret, fail);
-  client->status = RAS_CLIENT_DIAG_INIT;
+  client->status = RAS_CLIENT_DIAG_INIT;/*初始状态*/
   NCCLCHECKGOTO(rasClientRun(client, &closed), ret, fail);
   return ncclSuccess;
 

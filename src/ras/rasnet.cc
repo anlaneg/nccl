@@ -369,12 +369,14 @@ ncclResult_t rasNetAcceptNewSocket() {
   struct rasSocket* sock = nullptr;
   int ready;
   bool socketInitialized = false;
+  /*申请socket并将其挂在rasSocketsHead链表上*/
   NCCLCHECKGOTO(getNewSockEntry(&sock), ret, fail);
 
   NCCLCHECKGOTO(ncclSocketInit(&sock->sock, nullptr, ncclSocketDefaultMagic(), ncclSocketTypeRasNetwork, nullptr,
                                /*asyncFlag*/ 1),
                 ret, fail);
   socketInitialized = true;
+  /*接入新的client*/
   NCCLCHECKGOTO(ncclSocketAccept(&sock->sock, &rasNetListeningSocket), ret, fail);
   NCCLCHECKGOTO(ncclSocketReady(&sock->sock, &ready), ret, fail);
 
@@ -382,6 +384,7 @@ ncclResult_t rasNetAcceptNewSocket() {
     goto fail; // We'll return ncclSuccess, but we need to clean up the incomplete socket first.
 
   NCCLCHECKGOTO(rasGetNewPollEntry(&sock->pfd), ret, fail);
+  /*添加此socket到poll fds并关注读事件，且状态置为connecting状态*/
   rasPfds[sock->pfd].fd = sock->sock.socketDescriptor;
   rasPfds[sock->pfd].events = POLLIN; // Initially we'll just wait for a handshake from the other side.  This also
   // helps the code tell the sides apart.
@@ -401,11 +404,13 @@ fail:
 static ncclResult_t getNewSockEntry(struct rasSocket** pSock) {
   struct rasSocket* sock;
 
+  /*申请socket*/
   NCCLCHECK(ncclCalloc(&sock, 1));
 
   sock->pfd = -1;
   sock->createTime = sock->lastSendTime = sock->lastRecvTime = clockNano();
 
+  /*并将此socket挂在rasSocketsHead链表上*/
   if (rasSocketsHead) {
     rasSocketsTail->next = sock;
     sock->prev = rasSocketsTail;

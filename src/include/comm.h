@@ -639,7 +639,7 @@ struct ncclComm {
   /**NVML（NVIDIA Management Library）视角下的 GPU 索引，和 CUDA runtime 的 cudaDev 是两套不同的编号系统。*/
   int nvmlDev; // my nvml device index
   int compCap; // compute capability of the GPU
-  /*最小，最大算力 */
+  /*通信域内最小，最大算力 */
   int minCompCap, maxCompCap; // min/max compute capability in the communicator
   /**记录cudaDev在本机的bdf号 */
   int64_t busId;   // my PCI bus ID in int format
@@ -669,6 +669,7 @@ struct ncclComm {
   int MNNVL; // true when MNNVL is available
   struct cliqueInfo clique; // Our MNNVL clique information
   int cliqueRank; // Our rank within the MNNVL clique
+  /*每个主机上连续rank的数目，如不统一，置为INT_MAX*/
   int contiguousRanksPerHost; // Number contiguous ranks per host. INT_MAX if non-uniform.
 
   // NVL Domain info
@@ -741,13 +742,14 @@ struct ncclComm {
   uint32_t workFifoConsumed;
 
   // Intra-process sync
-  /*本 rank 所在进程的进程头 comm 指针
-  同一类型并行指行时，如果此值不同也不一组并行执行（见groupLaunch）*/
+  /*本进程内首个rank(本进程可以负责多个rank)对应的comm指针
+   * 本 rank 所在进程的进程头 comm 指针，
+   * 同一类型并行指行时，如果此值不同也不一组并行执行（见groupLaunch）*/
   struct ncclComm* intraComm0; // leader of intra-process comms (self possible)
   /*用于串连第一个与本rank同进程的communicator*/
   struct ncclComm* intraNext; // next of intra-process comms, intraComm0 is head
-  int intraRank;/*本rank在同进程rank中的序号*/
-  int intraRanks;/*累计与本rank同进程的rank数*/
+  int intraRank;/*本rank在同进程rank中的序号（本进程可能负责多个rank）*/
+  int intraRanks;/*本进程共负责多少个rank(累计与本rank同进程的rank数)*/
   uint32_t intraBarrierPhase;
   char intraPad1[64 - sizeof(uint64_t)];
   uint64_t intraBarrierCounter; // only used if this is intraComm0

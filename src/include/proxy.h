@@ -344,7 +344,7 @@ struct ncclProxyState {
   std::thread thread;
   std::thread threadUDS;
   struct ncclSocket* listenSock;/*记录proxy监听的地址*/
-  struct ncclIpcSocket ipcSock;
+  struct ncclIpcSocket ipcSock;/*记录unix socket（监听了rank+uds[rank])地址*/
   int stop;
   ncclResult_t asyncResult;
 
@@ -355,6 +355,7 @@ struct ncclProxyState {
   void** sharedDevMems;
   int peerArraySize;  // Size of peerSocks/proxyOps/sharedDevMems arrays (tpNRanks)
   struct ncclIpcSocket peerIpcSock; // cuMEM API support (UDS)
+  /*各rank uds的编号*/
   uint64_t* peerAddressesUDS; // cuMem API support (UDS)
 
   // Progress thread

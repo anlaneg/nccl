@@ -28,9 +28,9 @@ static inline bool ncclDebugShouldLog(int msgLevel, unsigned long flags, uint64_
   uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
   // Let the first log call initialize the masks, then re-check them.
   if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED)
-    return true;
-  if ((flags & mask) == 0) return false;
-  return levelMask & (1u << msgLevel);
+    return true;/*未初始化等情况，直接输出*/
+  if ((flags & mask) == 0) return false;/*flags与mask与操作后检查为假，指明不输出*/
+  return levelMask & (1u << msgLevel);/*利用当前msgLevel与levelMask检查*/
 }
 
 #ifdef NCCL_OS_LINUX
@@ -73,7 +73,7 @@ extern char ncclLastError[];
 
 #define INFO(FLAGS, ...) \
   do { \
-    if (ncclDebugShouldLog(NCCL_LOG_INFO, (FLAGS), ncclDebugMask)) \
+    if (ncclDebugShouldLog(NCCL_LOG_INFO/*此日志level为INFO*/, (FLAGS), ncclDebugMask)) \
       ncclDebugLogInternal(NCCL_LOG_INFO, (FLAGS), nullptr, nullptr, 0, __VA_ARGS__); \
   } while (0)
 

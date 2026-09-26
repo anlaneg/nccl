@@ -34,7 +34,7 @@
 // Define parameter in .cc files
 // Note: NCCL_DEFINE_PARAM is not designed to be put inside of a namespace. This can be
 // changed if there is a need.
-#define DEFINE_NCCL_PARAM(name, type, key, default, flags, parser, desc) \
+#define DEFINE_NCCL_PARAM(name, type, key/*环境变量名*/, default/*默认值*/, flags, parser, desc) \
   namespace key_guards { \
   struct guard_##key {}; \
   }; \

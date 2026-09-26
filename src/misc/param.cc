@@ -116,6 +116,6 @@ int64_t ncclLoadParam(char const* env, int64_t deftVal/*默认值*/, int64_t uni
 
 /*取环境变量*/
 const char* ncclGetEnv(const char* name) {
-  ncclInitEnv();
-  return ncclEnvPluginGetEnv(name);
+  ncclInitEnv();/*尝试初始化*/
+  return ncclEnvPluginGetEnv(name);/*取环境变量对应的值*/
 }

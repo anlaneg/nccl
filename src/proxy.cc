@@ -2176,7 +2176,9 @@ ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock/*自�
     WARN("Proxy state is already initialized");
     return ncclInternalError;
   }
+  /*创建proxyState*/
   comm->sharedRes->proxyState = new ncclProxyState{};
+  /*使此comm指向proxyState*/
   comm->proxyState = comm->sharedRes->proxyState;
   comm->proxyState->refCount = 1;
   comm->proxyState->listenSock = sock;
@@ -2185,7 +2187,8 @@ ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock/*自�
   comm->proxyState->netAttr = NCCL_NET_ATTR_INIT;
 
   // UDS support
-  NCCLCHECK(ncclIpcSocketInit(&comm->proxyState->ipcSock, comm->rank, peerAddressesUDS[comm->rank], comm->abortFlag));
+  /*创建ipcsocket*/
+  NCCLCHECK(ncclIpcSocketInit(&comm->proxyState->ipcSock, comm->rank/*当前rank*/, peerAddressesUDS[comm->rank]/*当前uds编号*/, comm->abortFlag));
   return ncclSuccess;
 }
 

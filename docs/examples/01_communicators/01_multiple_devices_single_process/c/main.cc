@@ -194,20 +194,24 @@ int main(int argc, char *argv[]) {
 
     // Verify the assignment is correct
     if (rank != i) {
+    	/*rank与编号不一致，报错*/
       printf(" [WARNING: Expected rank %d]", i);
     }
     if (device != devices[i]) {
+    	/*cuda设备编号与devices[i]不一致，报错*/
       printf(" [WARNING: Expected device %d]", devices[i]);
     }
     printf("\n");
 
     // Verify that all communicators have the expected size
     if (size != num_gpus) {
+    	/*rank总数与gpu总数不一致，报错*/
       printf("WARNING: Communicator %d has size %d, expected %d\n", i, size, num_gpus);
       sizes_match = false;
     }
   }
   if (sizes_match)
+	  /*指明所有检查通过*/
     printf("All communicators have the expected size of %d\n", num_gpus);
 
   printf("\n");
@@ -231,11 +235,14 @@ int main(int argc, char *argv[]) {
   // Next, destroy NCCL communicators first
   // This must be done before destroying CUDA resources they depend on
   printf("Destroying NCCL communicators...\n");
-  NCCLCHECK(ncclGroupStart());
+  NCCLCHECK(ncclGroupStart());/*开始group*/
+  /*清理comms*/
   for (int i = 0; i < num_gpus; i++) {
     NCCLCHECK(ncclCommFinalize(comms[i]));
   }
-  NCCLCHECK(ncclGroupEnd());
+  NCCLCHECK(ncclGroupEnd());/*结束group*/
+
+  /*没有开启group start,调destroy comm*/
   for (int i = 0; i < num_gpus; i++) {
     NCCLCHECK(ncclCommDestroy(comms[i]));
   }

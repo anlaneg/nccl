@@ -211,18 +211,21 @@ ncclResult_t ncclGetVersion(int* version) {
 }
 
 NCCL_API(ncclResult_t, ncclGetUniqueId, ncclUniqueId* out);
-ncclResult_t ncclGetUniqueId(ncclUniqueId* out/*bootstrap监听地址信息*/) {
-	/*初始化env变量，初始化env插件*/
+ncclResult_t ncclGetUniqueId(ncclUniqueId* out/*出参，记录bootstrap root线程监听的地址信息*/) {
+  /*初始化env变量，初始化env插件*/
   NCCLCHECK(ncclInitEnv());
+  /*初始化nccl*/
   NCCLCHECK(ncclInit());
   NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));/*out指针不能为空*/
   struct ncclBootstrapHandle handle;
-  NCCLCHECK(bootstrapGetUniqueId(&handle, NULL));/*创建bootstrap线程并监听等待连接*/
+  /*初始化handle,创建bootstrap线程并监听等待连接*/
+  NCCLCHECK(bootstrapGetUniqueId(&handle, NULL/*注意：传入的comm为空*/));
   // ncclUniqueId and bootstrapHandle don't have the same size and alignment
   // reset to 0 to avoid undefined data
   memset(out, 0, sizeof(*out));
   // copy to avoid alignment mismatch
   memcpy(out, &handle, sizeof(handle));
+  /*显示此handle生成的hash信息*/
   TRACE_CALL("ncclGetUniqueId(0x%llx)", (unsigned long long)getHash(out->internal, NCCL_UNIQUE_ID_BYTES));
   return ncclSuccess;
 }
@@ -539,6 +542,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   comm->compCap = ncclCudaCompCap();
 
   if (parent == NULL || !parent->shareResources) {
+	  /*创建sharedRes*/
     struct ncclSharedResources* sharedRes;
     NEW_NOTHROW(sharedRes, ncclSharedResources);
     /* most of attributes are assigned later in initTransportsRank(). */
@@ -550,7 +554,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
     NCCLCHECK(ncclStrongStreamConstruct(&sharedRes->hostStream));
     CUDACHECK(cudaEventCreateWithFlags(&sharedRes->launchEvent, cudaEventDisableTiming));
     CUDACHECK(cudaEventCreateWithFlags(&sharedRes->scratchEvent, cudaEventDisableTiming));
-    comm->sharedRes = sharedRes;
+    comm->sharedRes = sharedRes;/*设置share资源*/
     sharedRes->refCount = 1;
     NCCLCHECK(ncclNetInit(comm));/*为comm绑定网络插件*/
     NCCLCHECK(ncclRmaInit(comm));/*为comm绑定rma插件*/
@@ -896,7 +900,7 @@ static const char* mnnvlDegradedBwStr(unsigned int healthMask) {
   }
 }
 
-/**填充peerInfo，仅填充自身的peerInfo */
+/**填充peerInfo，仅填充自身的peerInfo,描述本端能力 */
 static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, uint64_t commHash) {
   cudaDeviceProp prop;
   info->rank = comm->rank;/**设置自身rank */
@@ -936,7 +940,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->shmDev = statbuf.st_dev;/*取/dev/shm挂载点下的dev_t，即共享内存的dev_t */
 #endif
   info->busId = comm->busId;
-  CUCHECK(cuDeviceGetUuid((CUuuid*)&info->gpuUuid, (CUdevice)comm->cudaDev));
+  CUCHECK(cuDeviceGetUuid((CUuuid*)&info->gpuUuid, (CUdevice)comm->cudaDev));/*取此设备对应的uuid*/
 
   /**检查是否支持gdr通信 */
   NCCLCHECK(ncclGpuGdrSupport(comm, &info->gdrSupport));
@@ -1277,46 +1281,63 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     // "Contiguous" host size detection: ranks are only considered on the same "contiguous" host if they are
     // adjacent and have the same host hash.
     if (comm->peerInfo[i].hostHash != prevHostHash) {
+    	/*i号rank与preHostHash不相等，即为新的另一个主机*/
       if (comm->contiguousRanksPerHost == 0) {
+    	  /*还未给值，先以第一次遇到的currentHostSize为准*/
         comm->contiguousRanksPerHost = currentHostSize;
       } else if (currentHostSize != comm->contiguousRanksPerHost) {
+    	  /*给过值，且两者不相等，说明不同机器上rank数不相等，置最大值，
+    	   * 跳出循环不再检查（这看起来是个bug)*/
         comm->contiguousRanksPerHost = INT_MAX;
         break;
       }
+      /*给过值，且相等，记录本次HostHash，此主机上rank数从1开启重计*/
       prevHostHash = comm->peerInfo[i].hostHash;
       currentHostSize = 1;
     } else {
+      /*主机hash相等，当前主机上rank数增1*/
       currentHostSize++;
     }
+
     if (i == nranks - 1) {
+      /*当前遍历已达到最后一个rank*/
       if (comm->contiguousRanksPerHost == 0) {
+    	  /*之前还未记录，所有rank均在一个机器上，给值*/
         comm->contiguousRanksPerHost = currentHostSize;
       } else if (currentHostSize != comm->contiguousRanksPerHost) {
+    	  /*之前给过值，且两者不相等，说明与前面的机器相比rank数不相等，置最大值（不跳出循环）*/
         comm->contiguousRanksPerHost = INT_MAX;
       }
     }
 
     if (comm->peerInfo[i].version != comm->peerInfo[rank].version) {
-      /**检查是否所有rank的版本号都相同 */
+      /**检查是否所有rank的版本号都与本rank相同,如有不相等，退出 */
       WARN("Mismatched NCCL version detected : rank %d version %d rank %d version %d", i, comm->peerInfo[i].version,
            rank, comm->peerInfo[rank].version);
       ret = ncclInvalidUsage;
       goto fail;
     }
-    if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash) nNodes++;/**统计不同主机的rank数 */
-    if (!comm->peerInfo[i].cuMemSupport) comm->cuMemSupport = 0;/**存在有一台机器不支持cumem，所有rank都不支持cumem */
+    /**统计与我们不在同一台主机上的rank数*/
+    if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash) nNodes++;
+    /**存在有一台机器不支持cumem，所有rank都不支持cumem */
+    if (!comm->peerInfo[i].cuMemSupport) comm->cuMemSupport = 0;
+    /*取最小gpuCftSupport*/
     if (comm->peerInfo[i].gpuCftSupport < comm->gpuCftSupport) {
       comm->gpuCftSupport = comm->peerInfo[i].gpuCftSupport;
     }
+    /*取交集*/
     comm->gpuCftMulticastSupport &= comm->peerInfo[i].gpuCftMulticastSupport;
     comm->gpuCftCountedSupport &= comm->peerInfo[i].gpuCftCountedSupport;
+    /*是否有molPart*/
     if (comm->peerInfo[i].mloPart != -1) comm->hasMloPart = true;
+
     for (int j = 0; j < i; j++) {
       // NVML device is agnostic to MloPart being used. With MloPart, each partition has a different GPU UUID.
       comm->hasMultiRankNvml |= (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash) &&
                                 (comm->peerInfo[i].nvmlDev == comm->peerInfo[j].nvmlDev);
       if (!ncclParamMultiRankGpuEnable() && (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash) &&
           memcmp(&comm->peerInfo[i].gpuUuid, &comm->peerInfo[j].gpuUuid, sizeof(cudaUUID_t)) == 0) {
+    	  /*存在多个rank使用同一个gpu的情况，但多rank未开启，报错*/
         WARN("Multiple Ranks are using the same GPU/Partition. Set NCCL_MULTI_RANK_GPU_ENABLE=1 to enable this "
              "configuration.");
         return ncclInvalidUsage;
@@ -1329,6 +1350,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->minDriverVersion = std::min(comm->peerInfo[i].cudaDriverVersion, comm->minDriverVersion);
   }
   if (rank == 0) {
+	  /*本rank是第一个，检查集群gitVersion是否相等，如不相等，显示告警*/
     for (int i = 1; i < nranks; i++) {
       if (comm->peerInfo[0].gitVersionHash != comm->peerInfo[i].gitVersionHash) {
         ATTN("Mismatched NCCL git versions detected: rank 0 fingerprint 0x%08x, rank %d fingerprint 0x%08x",
@@ -1357,11 +1379,12 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       comm->maxCompCap = std::max(comm->maxCompCap, comm->peerInfo[i].cudaCompCap);
       if ((comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash) &&
           (comm->peerInfo[i].pidHash == comm->peerInfo[rank].pidHash)) {
-            /*i号rank和当前rank在同一个主机且在同一个进程 */
+        /*i号rank和当前rank在同一个主机且在同一个进程 */
         // Rank is in same process
         if (intraProcRanks == 0) intraProcRank0 = i;/*第一个与当前rank在同一个主机且在同一个进程的（最小）rank */
-        if (i == rank) intraProcRank = intraProcRanks;/*本rank在同进程rank中的序号 */
-        intraProcRanks++;/*累计同进程rank数增加*/
+        /*记录本rank在同进程rank中的序号 */
+        if (i == rank) intraProcRank = intraProcRanks;
+        intraProcRanks++;/*累计与本rank同进程的rank数增加1*/
         if (intraProcRank0 == rank && rank != i) {
           /* 与rank在同一个进程中的最小rank是自已，且当前与rank在同一进程中的i是另一个rank id
           将这个i对应的comm设置为comm->intraNext的链表头
@@ -1388,7 +1411,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
     TRACE(NCCL_INIT, "pidHash[%d] %lx intraProcRank %d intraProcRanks %d intraProcRank0 %d", rank,
           comm->peerInfo[rank].pidHash, intraProcRank, intraProcRanks, intraProcRank0);
-    if (intraProcRank == -1 /*存在多个rank在本进程，且当前rank不是最小编号的 */|| intraProcRank0 == -1 || comm->peerInfo[intraProcRank0].comm == NULL) {
+    if (intraProcRank == -1|| intraProcRank0 == -1 || comm->peerInfo[intraProcRank0].comm == NULL) {
+    	/*intraProcRank == -1，当前rank编号不被当前进程负责（不应该出现）；
+    	 * intraProcRank0 == -1，不存在与当前rank（包括自已）在同一个进程里的rank（不应该出现）；
+    	 * comm->peerInfo[intraProcRank0].comm，在fillInfo中各rank设置了其对应的comm,如果为空，则交换部分有问题
+    	 * */
       WARN("Failed to determine intra proc ranks rank %d hostHash %lx pidHash %lx intraProcRank %d intraProcRanks %d "
            "intraProcRank0 %d",
            rank, comm->peerInfo[rank].hostHash, comm->peerInfo[rank].pidHash, intraProcRank, intraProcRanks,
@@ -1396,9 +1423,13 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       ret = ncclInternalError;
       goto fail;
     }
-    /*第一个与当前rank在同一个进程中的comm,定为进程头communicator */
+    /*第一个与当前rank在同一个进程中的comm,定为进程头communicator
+     * 这里的peerInfo是我们和其它rank交换而来的，其中的comm记录的是其它comm的指针
+     * 但上面已检查了interaProcRank0和我们在同一个进程中，因此这个comm->peerInfo[intraProcRank0].comm是可以读的。
+     **/
     struct ncclComm* comm0 = comm->peerInfo[intraProcRank0].comm;
     if (intraProcRank == 0 && comm != comm0) {
+    	/*如果自已是0号，而comm指针不相等，则上面哪里有bug*/
       WARN("Intra-process rank 0 communicator mismatch: comm %p intraComm0 %p", comm, comm0);
       ret = ncclInternalError;
       goto fail;
@@ -1417,7 +1448,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   const char* dumpXmlFile;
   dumpXmlFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE");/**取topo dump文件路径 */
   if (dumpXmlFile) {
-    /*给定dumpXmlFile，从dumpXmlFile中获取拓扑结构,写到文件 */
+	   /*给定dumpXmlFile，从dumpXmlFile中获取拓扑结构,写到文件 */
        NCCLCHECKGOTO(ncclTopoGetSystem(comm, NULL, dumpXmlFile), ret, fail);
   }
 
@@ -2160,7 +2191,7 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
    * 2。查询**计算能力主版本号**
    * 3。查询**计算能力次版本号**
    * */
-  CUDACHECKGOTO(cudaDeviceGetAttribute(&maxSharedMem, cudaDevAttrMaxSharedMemoryPerBlockOptin, cudaDev), res, fail);
+  CUDACHECKGOTO(cudaDeviceGetAttribute(&maxSharedMem/*常见232448*/, cudaDevAttrMaxSharedMemoryPerBlockOptin, cudaDev), res, fail);
   CUDACHECKGOTO(cudaDeviceGetAttribute(&archMajor, cudaDevAttrComputeCapabilityMajor, cudaDev), res, fail);
   CUDACHECKGOTO(cudaDeviceGetAttribute(&archMinor, cudaDevAttrComputeCapabilityMinor, cudaDev), res, fail);
   cudaArch = 100 * archMajor + 10 * archMinor;
@@ -2229,6 +2260,9 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
          job->myrank, job->funcName, comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId,
          commIdHash);
     timers[TIMER_INIT_BOOTSTRAP] = clockNano();
+    /*向bootstrap root报道，收集root下发的nextPeer，与nextPeer,prevPeer建立起ring,并同步各rank的
+     * peerP2pAddress，peerProxyAddresses，peerProxyAddressesUDS，rasRanks信息
+     * 初始化本进程ras,并向ras线程发送add ranks消息*/
     NCCLCHECKGOTO(bootstrapInit(job->nId, (struct ncclBootstrapHandle*)job->commId, comm, job->parent), res, fail);
     timers[TIMER_INIT_BOOTSTRAP] = clockNano() - timers[TIMER_INIT_BOOTSTRAP];
   }
@@ -2901,7 +2935,7 @@ static void ncclCommInitJobFree(void* _job) {
 }
 
 /*初始化一个rank*/
-static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*rank总数*/, int nId/*commId数目*/, ncclUniqueId* commId/*id，实际是当前bootstrap监听的地址*/, int myrank/*自身rank编号*/,
+static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm*/, int nranks/*rank总数*/, int nId/*commId数目*/, ncclUniqueId* commId/*id，实际是当前bootstrap root监听的地址*/, int myrank/*自身rank编号*/,
                                         int cudaDev/*自身gpu编号*/, ncclConfig_t* config/*配置*/, const char funcName[]/*调用方函数名称*/) {
   if (nId <= 0 || nId > nranks) {
     WARN("improper usage of ncclCommInitRank: nId = %d, nranks=%d", nId, nranks);
@@ -2934,7 +2968,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
     goto fail;
   }
 
-  /*申请comm*/
+  /*申请comm(并在下面初始化）*/
   NCCLCHECKGOTO(ncclCalloc(&comm, 1), res, fail);
   /*申请abort标记*/
   NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);
@@ -2955,7 +2989,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
   /* start with ncclInProgress and will be changed to ncclSuccess if init succeeds. */
   /*指明状态为处理中*/
   comm->initState = ncclInProgress;
-  /*填充准备好的comm*/
+  /*填充准备好的comm（此rank对应的comm)*/
   *newcomm = comm;
 
   /*申请并初始化这个异步job*/
@@ -2972,29 +3006,29 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm/*要初始化的comm
   // Therefore the array of Ids coming from the user might not be properly aligned to be cast into a
   // ncclBootstrapHandle
   // copying into allocated memory guarantees that the memory is properly aligned for any objects, removing that issue
-  NCCLCHECKGOTO(ncclCalloc(&job->commId, nId), res, fail);/*申请足量commId*/
-  memcpy(job->commId, commId, nId * NCCL_UNIQUE_ID_BYTES);/*复制commId*/
+  NCCLCHECKGOTO(ncclCalloc(&job->commId, nId), res, fail);/*申请足量commId空间*/
+  memcpy(job->commId, commId, nId * NCCL_UNIQUE_ID_BYTES);/*复制参数commId到job->commId*/
 
   commIdEnv = ncclGetEnv("NCCL_COMM_ID");
   if (commIdEnv && myrank == 0) {
-	/*设置了环境变量，且自身是第0号rank*/
+	/*设置了环境变量，且自身是第0号rank,启动bootstrap root线程（0号线程监听此环境变量指明的地址）*/
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commIdEnv);
     if (nId > 1) {
       INFO(NCCL_INIT | NCCL_ENV, "NCCL_COMM_ID cannot be used with more than one ncclUniqueId");
       job->nId = 1;/*仅容许使用一个comm_id*/
     }
     // start the bootstrap root before bootstrapping, use only the first handle
-    /*启动bootstrap线程*/
+    /*启动bootstrap root线程*/
     NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&job->commId[0], true), res, fail);
   }
 
   launchedJob = true;
   if (ncclParamEnqueueRearchEnable()) {
-	  /*初始化此job，并入队列comm->mgmtTaskQueue*/
+	/*初始化此job，并入队列comm->mgmtTaskQueue*/
     NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, ncclCommInitRankFunc, ncclCommInitJobFree, comm), res,
                   fail);
   } else {
-	  /*初始化此job,并入队到当前线程对应的ncclAsyncJobs*/
+	/*初始化此job,并入队到当前线程对应的ncclAsyncJobs*/
     NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, ncclCommInitRankFunc, NULL, ncclCommInitJobFree, comm),
                   res, fail);
   }
@@ -3095,15 +3129,16 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms/**出参，所有comm */, int nde
   }
 
   ncclUniqueId uniqueId;
-  /*创建bootstrap线程并监听了uniqueId中明确的地址*/
+  /*创建bootstrap root线程并监听了uniqueId中返回的地址*/
   NCCLCHECKGOTO(ncclGetUniqueId(&uniqueId), ret, fail);
-  NCCLCHECKGOTO(ncclGroupStartInternal(), ret, fail);/*开始一个新group*/
+  /*开始一个新group*/
+  NCCLCHECKGOTO(ncclGroupStartInternal(), ret, fail);
   for (int i = 0; i < ndev; i++) {
     // Ignore return codes .. we need to call ncclGroupEnd to clean up anyway
     int dev = devlist ? devlist[i] : i;/*取对应的gpu编号*/
     CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);/*设置当前gpu设备*/
     /*为每一个ndev设备初始化一个comms[i]*/
-    ncclCommInitRankDev(comms + i/*i号gpu对应的comms*/, ndev/*gpu总数*/, 1/*1个uniqueId*/, &uniqueId, i/*自身rank*/, dev/*gpu编号*/, &config, __func__);
+    ncclCommInitRankDev(comms + i/*各gpu对应的comms*/, ndev/*gpu总数*/, 1/*1个uniqueId*/, &uniqueId/*bootstrap root监听的地址*/, i/*自身rank*/, dev/*gpu编号*/, &config, __func__);
   }
   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);/*结束group(上述处理均在此执行）*/
 
@@ -3318,8 +3353,8 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
     NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, commDestroySync, ncclCommFinalizeAsyncJobFree, comm),
                   ret, fail);
   } else {
-  /*要求在GroupEnd时执行此job*/
-    NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, commDestroySync, nullptr, ncclCommFinalizeAsyncJobFree,
+	  /*要求在GroupEnd时执行此job*/
+    NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, commDestroySync/*负责comm Destroy*/, nullptr, ncclCommFinalizeAsyncJobFree,
                                   comm),
                   ret, fail);
   }
@@ -3451,7 +3486,7 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
 
 exit:
   ncclGroupErrCheck(res);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECK(ncclGroupEndInternal());/*end时处理*/
   return res;
 fail:
   goto exit;
@@ -4063,7 +4098,7 @@ ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
   /* init thread must be joined before we access the attributes of comm. */
   NCCLCHECK(ncclCommEnsureReady(comm));
 
-  *count = comm->nRanks;
+  *count = comm->nRanks;/*取此comm对应的rank总数*/
   return ncclSuccess;
 }
 
@@ -4076,7 +4111,7 @@ ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* devid) {
 
   NCCLCHECK(ncclCommEnsureReady(comm));
 
-  *devid = comm->cudaDev;
+  *devid = comm->cudaDev;/*取此comm对应的cuda设备编号*/
   return ncclSuccess;
 }
 
@@ -4089,6 +4124,6 @@ ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
 
   NCCLCHECK(ncclCommEnsureReady(comm));
 
-  *rank = comm->rank;
+  *rank = comm->rank;/*取此comm对应的rank编号*/
   return ncclSuccess;
 }

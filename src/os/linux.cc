@@ -165,8 +165,10 @@ ncclResult_t ncclOsInitialize() {
 
 ncclResult_t ncclOsSetFilesLimit() {
   struct rlimit filesLimit;
+  /*取得文件最大数*/
   SYSCHECK(getrlimit(RLIMIT_NOFILE, &filesLimit), "getrlimit");
   filesLimit.rlim_cur = filesLimit.rlim_max;
+  /*设置生效的文件最大数*/
   SYSCHECK(setrlimit(RLIMIT_NOFILE, &filesLimit), "setrlimit");
   return ncclSuccess;
 }
@@ -648,11 +650,24 @@ static void memcpylower(char* dst, const char* src, const size_t size) {
   for (size_t i = 0; i < size; i++) dst[i] = tolower(src[i]);
 }
 
-ncclResult_t ncclOsGetPciPath(const char* busId, char** path) {
+/**
+ * 通过以下的/sys/class/pci_bus/0000:12/../../0000:12:00.0 可跳转到如下路径
+ *
+ * /sys/devices/pci0000:00/0000:00:03.1/0000:10:00.0/0000:11:00.0/0000:12:00.0
+    │                     │            │            │            │
+    │                     │            │            │            └─ GPU (0000:12:00.0) ← 起点
+    │                     │            │            └─ 下层 PCIe switch (0000:11:00.0)
+    │                     │            └─ 上层 PCIe switch (0000:10:00.0)
+    │                     └─ CPU root port (0000:00:03.1)  ← BDF 格式,PCIe根端口
+    └─ CPU root complex (pci0000:00)  ← 非 BDF 格式,PCIe 顶端
+ */
+ncclResult_t ncclOsGetPciPath(const char* busId, char** path/*出参，返回pci设备对应的真识路径*/) {
   char busPath[] = "/sys/class/pci_bus/0000:00/../../0000:00:00.0";
+  /*先将0000:00替换成短的domain+bus*/
   memcpylower(busPath + sizeof("/sys/class/pci_bus/") - 1, busId, BUSID_REDUCED_SIZE - 1);
+  /*再将结尾的bdf替换成domain+bus+device+func*/
   memcpylower(busPath + sizeof("/sys/class/pci_bus/0000:00/../../") - 1, busId, BUSID_SIZE - 1);
-  *path = realpath(busPath, NULL);
+  *path = realpath(busPath, NULL);/*此pci设备对应的真实路径,使如/sys/devices/pci0000:00/0000:00:03.1/0000:10:00.0/0000:11:00.0/0000:12:00.0*/
   if (*path == NULL) {
     WARN("Could not find real path of %s", busPath);
     return ncclSystemError;
@@ -660,13 +675,15 @@ ncclResult_t ncclOsGetPciPath(const char* busId, char** path) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclOsTopoGetStrFromSys(const char* path, const char* fileName, char* strValue, int maxLen) {
+/*从sysfs中读取指定文件内容，填充到strValue中*/
+ncclResult_t ncclOsTopoGetStrFromSys(const char* path, const char* fileName, char* strValue/*填充位置*/, int maxLen/*最大填充大小*/) {
   char filePath[PATH_MAX];
-  snprintf(filePath, sizeof(filePath), "%s/%s", path, fileName);
+  snprintf(filePath, sizeof(filePath), "%s/%s", path, fileName);/*文件名*/
   int offset = 0;
   FILE* file;
   if ((file = fopen(filePath, "r")) != NULL) {
     while (feof(file) == 0 && ferror(file) == 0 && offset < maxLen) {
+    	/*读内容并填充*/
       int len = fread(strValue + offset, 1, maxLen - offset, file);
       offset += len;
     }
@@ -730,12 +747,14 @@ ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, s
   int offset = 0;
   FILE* file = fopen(filePath, "r");
   if (file != NULL) {
+	  /*读取cpumap,例如：“00000000,0000ffff,ffffffff,00000000,0000ffff,ffffffff”*/
     while (feof(file) == 0 && ferror(file) == 0 && offset < (int)maxLen - 1) {
-      int len = fread(affinityStr + offset, 1, maxLen - 1 - offset, file);
+      int len = fread(affinityStr + offset, 1, maxLen - 1 - offset, file);/*取内容*/
       offset += len;
     }
     fclose(file);
   }
+  /*移除掉结尾的换行符*/
   while (offset > 0 && (affinityStr[offset - 1] == '\n' || affinityStr[offset - 1] == '\r')) offset--;
   affinityStr[offset] = '\0';
   if (offset == 0) {

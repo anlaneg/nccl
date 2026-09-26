@@ -395,7 +395,7 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
                           count,
                           datatype,
                           ncclSum,
-                          peer,
+                          peer/*对端*/,
                           comm,
                           stream, /* Args */
                           1,

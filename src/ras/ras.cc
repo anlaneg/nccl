@@ -37,7 +37,7 @@ struct rasNotification {
   union {
     struct {
       struct rasRankInit* ranks;
-      int nranks;
+      int nranks;/*当前进程ranks总数*/
     } addRanks;
     struct {
       struct rasDiagnosticsContext ctx;
@@ -52,13 +52,14 @@ static bool rasInitialized = false;
 static int rasInitRefCount = 0;
 
 // The RAS network listening socket of this RAS thread (random port).
-struct ncclSocket rasNetListeningSocket;
+struct ncclSocket rasNetListeningSocket;/*记录ras网络监听地址*/
 
 static std::thread rasThread;
 
 // Used for communication from regular NCCL threads to the RAS thread.
 static std::mutex rasNotificationMutex;
-static ncclSocketPairDescriptor rasNotificationPipe[2] = {NCCL_SOCKET_PAIR_INVALID, NCCL_SOCKET_PAIR_INVALID};
+/*创建的一组socket pair*/
+static ncclSocketPairDescriptor rasNotificationPipe[2] = {NCCL_SOCKET_PAIR_INVALID/*读*/, NCCL_SOCKET_PAIR_INVALID/*写*/};
 
 // Data for the main poll() in the RAS thread.
 struct pollfd* rasPfds;
@@ -88,6 +89,9 @@ static void rasTerminate();
 
 // enable to run passive RAS diagnostics
 NCCL_PARAM(RasDiagnostics, "RUN_RAS_DIAGNOSTICS", 0);
+/*
+ * RAS = Reliability, Availability, Serviceability（可靠性/可用性/可服务性）。
+ * RAS 是 NCCL 的旁路监控/诊断通道，用来在通信过程中观测和排查异常，与主数据面（GPU 通信、bootstrap ring）完全解耦。*/
 NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
 
 //////////////////////////////////////////////////
@@ -107,20 +111,24 @@ ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank) 
 
       memcpy(&addr, &myRank->addr, sizeof(addr));
       (addr.sa.sa_family == AF_INET ? addr.sin.sin_port : addr.sin6.sin6_port) = htons(0);
-      /*初始化rasNetwork类型的socket*/
+      /*初始化rasNetwork类型的socket，指明类型，绑定地址*/
       NCCLCHECKGOTO(ncclSocketInit(&rasNetListeningSocket, &addr, ncclSocketDefaultMagic(), ncclSocketTypeRasNetwork,
                                    /*abortFlag*/ nullptr, /*asyncFlag*/ 1),
                     ret, fail);
       /*绑定地址*/
       NCCLCHECKGOTO(ncclSocketListen(&rasNetListeningSocket), ret, fail);
-      /*显示绑定地址*/
+      /*显示RAS绑定地址*/
       INFO(NCCL_RAS, "RAS network listening socket at %s", ncclSocketToString(&rasNetListeningSocket.addr, rasLine));
 
+      /*初始化ras client socket*/
       (void)rasClientInitSocket();
 
+      /*创建socket pipe*/
       NCCLCHECKGOTO(ncclOsSocketPairCreate(rasNotificationPipe), ret, fail);
 
+      /*初始化*/
       rasDiagnosticsInit();
+      /*创建线程并命名为RAS*/
       rasThread = std::thread(rasThreadMain, nullptr);
       ncclSetThreadName(rasThread, "NCCL RAS");
 
@@ -136,12 +144,14 @@ ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank) 
 
     int i;
     for (i = 0; i < nNcclComms; i++) {
-      if (ncclComms[i] == nullptr) break;
+      if (ncclComms[i] == nullptr) break;/*找一个空闲的空间*/
     }
     if (i == nNcclComms) {
+    	/*扩大空间*/
       NCCLCHECK(ncclRealloc(&ncclComms, nNcclComms, nNcclComms + RAS_INCREMENT * 8));
       nNcclComms += RAS_INCREMENT * 8;
     }
+    /*存储此comm*/
     ncclComms[i] = comm;
     ncclCommsSorted = false;
   }
@@ -186,7 +196,8 @@ static void rasTerminate() {
 
 // Invoked by regular NCCL threads on every (non-split) comm initialization.  Provides info on all the ranks within
 // the communicator.
-ncclResult_t ncclRasAddRanks(struct rasRankInit* ranks, int nranks) {
+ncclResult_t ncclRasAddRanks(struct rasRankInit* ranks, int nranks/*当前进程ranks总数*/) {
+	/*发送ras通知消息，要求增加ranks*/
   struct rasNotification msg;
   memset(&msg, '\0', sizeof(msg));
   msg.type = RAS_ADD_RANKS;
@@ -233,6 +244,7 @@ static ncclResult_t rasLocalNotify(const struct rasNotification* msg) {
   size_t done = 0;
   while (done < sizeof(*msg)) {
     size_t written;
+    /*向对端写*/
     NCCLCHECK(ncclOsSocketPairWrite(rasNotificationPipe[1], (char*)msg + done, sizeof(*msg) - done, &written));
     done += written;
   }
@@ -244,12 +256,13 @@ static ncclResult_t rasLocalNotify(const struct rasNotification* msg) {
 /////////////////////////////////////////////////////////////////////////////////
 
 // Handles asynchronous local notifications arriving from regular NCCL threads.
-static ncclResult_t rasLocalHandle(bool* terminate) {
+static ncclResult_t rasLocalHandle(bool* terminate) {/*收到通知消息*/
   struct rasNotification msg;
 
   size_t done = 0;
   while (done < sizeof(msg)) {
     size_t nread;
+    /*读取通知消息头*/
     NCCLCHECK(ncclOsSocketPairRead(rasNotificationPipe[0], (char*)&msg + done, sizeof(msg) - done, &nread));
     if (nread == 0) {
       // EOF
@@ -259,15 +272,19 @@ static ncclResult_t rasLocalHandle(bool* terminate) {
   }
 
   if (msg.type == RAS_ADD_RANKS) {
-    (void)rasLocalHandleAddRanks(msg.addRanks.ranks, msg.addRanks.nranks);
+	  /*收到增加rank消息*/
+    (void)rasLocalHandleAddRanks(msg.addRanks.ranks/*全局rank信息，已和其它rank同步过*/, msg.addRanks.nranks/*数组大小*/);
     // Not great if the above fails, but it shouldn't be critical; better to keep going.
   } else if (msg.type == RAS_RUN_DIAG) {
+	  /*运行diag*/
     ncclResult_t ret = rasLocalHandleRunDiag(&msg.runDiag.ctx);
     if (ret != ncclSuccess) INFO(NCCL_RAS, "RAS diagnostics returned %d", ret);
   } else if (msg.type == RAS_TERMINATE) {
+	  /*置terminate*/
     INFO(NCCL_RAS, "RAS handling local termination request");
     *terminate = true;
   } else {
+	  /*收到未知消息*/
     WARN("RAS received unknown notification type %d", msg.type);
     return ncclInternalError;
   }
@@ -633,7 +650,7 @@ static ncclResult_t rasNetSendNack(struct rasSocket* sock) {
 /////////////////////////////////////////////////////////////////
 
 // Main function of the RAS thread.
-static void* rasThreadMain(void*) {
+static void* rasThreadMain(void*) {/*RAS线程入口*/
   ncclResult_t ret = ncclSuccess; // Unused.
   int pfd;
   int rasNetListeningSocketFd;
@@ -642,14 +659,17 @@ static void* rasThreadMain(void*) {
 
   // Initialize the global pollfd with the file descriptors we already have (the pipe and the listening socket).
   NCCLCHECKGOTO(rasGetNewPollEntry(&pfd), ret, exit);
+  /*对通知pipe[0]启用读事件*/
   rasPfds[pfd].fd = rasNotificationPipe[0];
   rasPfds[pfd].events = POLLIN;
 
+  /*对rasNetListeningSocket启用读事件*/
   NCCLCHECKGOTO(rasGetNewPollEntry(&pfd), ret, exit);
   NCCLCHECKGOTO(ncclSocketGetFd(&rasNetListeningSocket, &rasNetListeningSocketFd), ret, exit);
   rasPfds[pfd].fd = rasNetListeningSocketFd;
   rasPfds[pfd].events = POLLIN;
 
+  /*对rasClientListeningSocket启用读事件*/
   NCCLCHECKGOTO(rasGetNewPollEntry(&pfd), ret, exit);
   rasPfds[pfd].fd = rasClientListeningSocket;
   rasPfds[pfd].events = POLLIN;
@@ -660,12 +680,13 @@ static void* rasThreadMain(void*) {
     int64_t now = clockNano();
     if (nextWakeup > 0) {
       // The "1" below helps avoid round-downs and especially zeroes.
-      timeoutMs = std::max(nextWakeup - now, (int64_t)0) / (CLOCK_UNITS_PER_SEC / 1000) + 1;
+      timeoutMs = std::max(nextWakeup - now, (int64_t)0) / (CLOCK_UNITS_PER_SEC / 1000) + 1;/*考虑下次唤醒时间对应的超时时间*/
     } else {
-      timeoutMs = rasTimeoutFactorSec(1) * 1000;
+      timeoutMs = rasTimeoutFactorSec(1) * 1000;/*默认超时时间*/
     }
     timeoutMs = std::min(timeoutMs, 1000); // At most 1 actual second.
 
+    /*超时poll*/
     nEvents = poll(rasPfds, nRasPfds, timeoutMs);
 
     nextWakeup = clockNano() + rasTimeoutFactorNs(1); // 1 second (possibly stretched).
@@ -685,20 +706,24 @@ static void* rasThreadMain(void*) {
           rasPfds[pollIdx].fd = POLL_FD_IGNORE;
         }
         if (rasPfds[pollIdx].fd == rasNotificationPipe[0]) {
+        	/*rasNotificationPipe[0]可读，收到通知消息，当前有几类通知消息需要处理*/
           bool terminate = false;
           NCCLCHECKGOTO(rasLocalHandle(&terminate), ret, exit);
-          if (terminate) goto exit;
+          if (terminate) goto exit;/*如需要中断，则跳exit,退出线程*/
         } else if (rasPfds[pollIdx].fd == rasNetListeningSocketFd) {
+        	/*监听socket收到消息,接入新fd,挂在rasSocketsHead链表上,初始状态：RAS_SOCK_CONNECTING*/
           (void)rasNetAcceptNewSocket();
         } else if (rasPfds[pollIdx].fd == rasClientListeningSocket) {
+        	/*client端监听收到消息,接入新fd,挂接在rasClientsHead链表上，初始化状态：RAS_CLIENT_CONNECTED*/
           (void)rasClientAcceptNewSocket();
         } else {
           // Check if it's one of the RAS sockets.
           struct rasSocket* sock;
+          /*遍历所有rasSocketsHead上的消息*/
           for (sock = rasSocketsHead; sock;) {
             struct rasSocket* sockNext = sock->next;
             if (rasPfds[pollIdx].fd == sock->sock.socketDescriptor) {
-              rasSockEventLoop(sock, pollIdx);
+              rasSockEventLoop(sock, pollIdx);/*收到socket事件*/
               break;
             }
             sock = sockNext;
@@ -706,10 +731,11 @@ static void* rasThreadMain(void*) {
 
           if (sock == nullptr) {
             // Try a client socket instead.
+        	  /*尝试是否为client socket消息*/
             for (struct rasClient* client = rasClientsHead; client;) {
               struct rasClient* clientNext = client->next;
               if (rasPfds[pollIdx].fd == client->sock) {
-                rasClientEventLoop(client, pollIdx);
+                rasClientEventLoop(client, pollIdx);/*处理client socket事件*/
                 break;
               }
               client = clientNext;
@@ -737,19 +763,22 @@ exit:
 }
 
 // Returns the index of the first available entry in the rasPfds array, enlarging the array if necessary.
-ncclResult_t rasGetNewPollEntry(int* index) {
+ncclResult_t rasGetNewPollEntry(int* index/*出参，获得一个可用的index*/) {
   int i;
   for (i = 0; i < nRasPfds; i++)
-    if (rasPfds[i].fd == NCCL_INVALID_SOCKET) break;
+    if (rasPfds[i].fd == NCCL_INVALID_SOCKET) break;/*找到一个空闲的fd*/
   if (i == nRasPfds) {
+	  /*扩大rasPfds数组*/
     NCCLCHECK(ncclRealloc(&rasPfds, nRasPfds, nRasPfds + RAS_INCREMENT));
     nRasPfds += RAS_INCREMENT;
+    /*新增的均设置为invalid_socket*/
     for (int j = i; j < nRasPfds; j++) rasPfds[j].fd = NCCL_INVALID_SOCKET;
   }
 
+  /*清空空间*/
   memset(rasPfds + i, '\0', sizeof(*rasPfds));
   rasPfds[i].fd = NCCL_INVALID_SOCKET;
 
-  *index = i;
+  *index = i;/*返回索引*/
   return ncclSuccess;
 }

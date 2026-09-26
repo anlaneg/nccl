@@ -24,9 +24,10 @@ NCCL_PARAM(PollTimeOut, "SOCKET_POLL_TIMEOUT_MSEC", 0);
 NCCL_PARAM(SocketMaxRecvBuff, "SOCKET_RCVBUF", -1);
 NCCL_PARAM(SocketMaxSendBuff, "SOCKET_SNDBUF", -1);
 
+/*返回socket默认magic*/
 uint64_t ncclSocketDefaultMagic(void) {
   /* Default is the historical constant; env may override on first init. */
-  static uint64_t cached = NCCL_SOCKET_MAGIC;
+  static uint64_t cached = NCCL_SOCKET_MAGIC;/*提供的默认magic(环境变量未提供时生效）*/
   static std::once_flag once;
   std::call_once(once, []() {
     const char* env = ncclGetEnv("NCCL_SOCKET_MAGIC");
@@ -41,6 +42,7 @@ uint64_t ncclSocketDefaultMagic(void) {
         INFO(NCCL_ENV, "NCCL_SOCKET_MAGIC invalid value \"%s\", using built-in default", env);
       }
     }
+    /*指明使用的handshake magic*/
     INFO(NCCL_ENV, "Socket handshake magic 0x%016llx (%s)", (unsigned long long)cached,
          fromEnv ? "NCCL_SOCKET_MAGIC" : "built-in default");
   });
@@ -191,12 +193,12 @@ const char* ncclSocketToString(const union ncclSocketAddress* addr, char* buf, c
   char host[NI_MAXHOST], service[NI_MAXSERV];
   int flag = NI_NUMERICSERV | (numericHostForm ? NI_NUMERICHOST : 0);
   if (buf == NULL || addr == NULL) goto fail;
-  if (saddr->sa_family != AF_INET && saddr->sa_family != AF_INET6) goto fail;
+  if (saddr->sa_family != AF_INET && saddr->sa_family != AF_INET6) goto fail;/*只支持ipv4/ipv6*/
   /* NI_NUMERICHOST: If set, then the numeric form of the hostname is returned.
    * (When not set, this will still happen in case the node's name cannot be determined.)
    */
   if (getnameinfo(saddr, sizeof(union ncclSocketAddress), host, NI_MAXHOST, service, NI_MAXSERV, flag)) goto fail;
-  sprintf(buf, "%s<%s>", host, service);/*显示绑定地址*/
+  sprintf(buf, "%s<%s>", host, service);/*显示绑定地址及服务*/
   return buf;
 fail:
   if (buf) buf[0] = '\0';
@@ -216,7 +218,7 @@ int ncclEnvSocketFamily(void) {
   return family;
 }
 
-ncclResult_t ncclFindInterfaces(char* ifNames/*出参，找到的接口*/, union ncclSocketAddress* ifAddrs/*出参，找到的接口地址*/, int ifNameMaxSize, int maxIfs,
+ncclResult_t ncclFindInterfaces(char* ifNames/*出参，找到的接口*/, union ncclSocketAddress* ifAddrs/*出参，找到的接口地址*/, int ifNameMaxSize, int maxIfs/*最大数目*/,
                                 int* nIfs) {
   static int shownIfName = 0;
   // Allow user to force the INET socket family selection
@@ -264,6 +266,7 @@ ncclResult_t ncclFindInterfaces(char* ifNames/*出参，找到的接口*/, union
   return ncclSuccess;
 }
 
+/*解析ip_port_pair获得socket地址*/
 ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua/*出参，解析ip_port_pair得到的地址*/, const char* ip_port_pair) {
   if (!(ip_port_pair && strlen(ip_port_pair) > 1)) {
 	  /*不可为空*/
@@ -568,7 +571,7 @@ exit:
 }
 
 /*初始化sock*/
-ncclResult_t ncclSocketInit(struct ncclSocket* sock/*出参，待初始化的socket*/, const union ncclSocketAddress* addr/*要设置的地址*/, uint64_t magic,
+ncclResult_t ncclSocketInit(struct ncclSocket* sock/*出参，待初始化的socket*/, const union ncclSocketAddress* addr/*要设置的地址*/, uint64_t magic/*如未指明，则使用默认*/,
                             enum ncclSocketType type, volatile uint32_t* abortFlag, int asyncFlag, int customRetry) {
   ncclResult_t ret = ncclSuccess;
 

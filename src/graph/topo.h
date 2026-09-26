@@ -220,7 +220,8 @@ struct ncclTopoNetInfo {
   ncclResult_t (*setVirtDevCount)(int, int);
   // ncclNet API functions
   const char* name;
-  ncclResult_t (*getProperties)(int, ncclNetProperties_t*);
+  /*取设备属性*/
+  ncclResult_t (*getProperties)(int/*设备编号*/, ncclNetProperties_t*/*出参，设备属性*/);
   ncclResult_t (*makeVDevice)(int*, ncclNetVDeviceProps_t*);
   ncclResult_t (*devices)(int*);
 

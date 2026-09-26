@@ -14,6 +14,10 @@
 #include "dev_runtime.h"
 #include "rma/rma.h"
 
+/*RMA = Remote Memory Access（远程内存访问）——单边通信原语，
+一端 GPU 不经过对端 CPU/GPU 参与，直接把数据 put/get 到对端的显存里，
+并通过 signal/wait 做同步。
+是 NCCL 除"集合通信（AllReduce/AllGather 等）"之外的第二类通信模型。 */
 NCCL_PARAM(RMADisable, "RMA_DISABLE", 0);
 
 bool ncclRmaProxyEnabled(struct ncclComm* comm) {

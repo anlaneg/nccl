@@ -335,6 +335,7 @@ static void initOnceFunc() {
   int driverVersion;
   CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, error); // Initialize the driver
 
+  /*取cuda驱动版本号*/
   CUDACHECKGOTO(cudaDriverGetVersion(&driverVersion), ret, error);
   INFO(NCCL_INIT, "cudaDriverVersion %d", driverVersion);
 

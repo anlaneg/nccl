@@ -55,7 +55,7 @@ static int64_t symCeAllGatherThreshold(struct ncclComm* comm) {
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* maxStackSize) {
   ncclResult_t result = ncclSuccess;
 
-  if (maxStackSize) *maxStackSize = 0;
+  if (maxStackSize) *maxStackSize = 0;/*先置为0*/
   int carveout = ncclParamL1SharedMemoryCarveout();
   int maxDynamicSmem = 1 << 30;
   int driverVersion;

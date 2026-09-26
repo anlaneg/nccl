@@ -48,43 +48,63 @@
     time = clockNano() - time; \
   } while (0)
 
+/*i针对n取余*/
 #define BOOTSTRAP_PID(i, n) (((i) + (n)) % (n))
 // returns the first rank associated to the root. must have root >=0
 // if root >= n_roots, it does NOT assume periodicity
 static int firstRankFromRoot(int root, int n_ranks, int nRoots, int offset) {
+	/*用于返回此root负责的首个rank编号*/
   if (root == -1) return 0;
   // only distribute the n_ranks - offset on the roots
   n_ranks -= offset;
+  /*每个root负责n_ranks/nRoots个rank,
+   * 对于前n_ranks%nRoots的root多负责一个1个。
+   * 因此当前root编号如果大于n_ranks%nRoots，则在它之前多分出了n_ranks % nRoots个。
+   * 否则小于，则每大1个序号，多1个，即多分出去了root个。
+   * */
   return offset + root * (n_ranks / nRoots) + std::min(root, n_ranks % nRoots);
 }
 // returns the root of a rank, must have rank >=0
 // if rank >= n_ranks, it does NOT assume periodicity
 static int rootIdFromRank(int rank, int nRanks, int nRoots, int offset) {
+  //解决"第 rank 号进程应该去连哪个 root"。这是多 root bootstrap 场景下"尽量均分 rank 到各 root"的分配公式。
+  //这里采用的是连续分配策略，即4 rank 2 root时，1-2在root1,3-4在root2
+  //这里没有采用取余的分配方式，原因是取余会导致rank间数据不连续。
   // ranks < offset have no root (id = -1), ranks above the offset will get assigned to their respective root
   if (nRoots == 0 || rank < offset) return -1;
+  /*先将序号都对齐到offset*/
   nRanks -= offset;
   rank -= offset;
+  /*rmr表示nRanks平均分配到nRoos后会剩下几个（也即前rmr个root会多负载1个rank)*/
   int rmr = nRanks % nRoots; // rank mod root
+  /*rpr表示nRanks平均分配到nRoots后，每个root负载几个rank*/
   int rpr = nRanks / nRoots; // rank per root
+  /*即前rmr个root总共负载了多少个rank,即共有rmr个root会负责(rpr+1)个rank*/
   int D = rmr * (rpr + 1);
-  if (rank < D) return rank / (rpr + 1);
-  else return (rank - D) / rpr + rmr;
+  if (rank < D) return rank / (rpr + 1);/*当rank小于D时，分配方式为每个root有rpr+1个(对应的序号需要加0）。*/
+  else return (rank - D) / rpr + rmr;/*大于D后，分配方式为每root有rpr个（对应的序号需要加rmr)*/
 }
 // return the number of child for a root, root will be periodized
 static int nRankFromRoot(int root, int nRanks, int nRoots, int offset) {
+	/*给定 root 序号，返回它管几个 rank*/
   if (root == -1) return 0;
   nRanks -= offset;
+  /*此root的序号*/
   int ir = BOOTSTRAP_PID(root, nRoots);
+  /*前rmr个root会多负责1个。*/
   int rmr = nRanks % nRoots; // rank mod root
+  /*每个root负责数目是rpr或者rpr+1*/
   int rpr = nRanks / nRoots; // rank per root
-  return rpr + ((ir < rmr) ? 1 : 0);
+  return rpr + ((ir < rmr) ? 1 : 0);/*如果此root序号是前rmr，则多负责一个*/
 }
 // return the local id of a given rank for a given root
 // root will be periodize, rank will not
 static int localIdFromRoot(int rank, int root, int nRanks, int nRoots, int offset) {
   // any rank for root -1 has a local id that is the rank id
   if (root == -1) return rank;
+  /*此root的序号*/
   int ir = BOOTSTRAP_PID(root, nRoots);
+  /*当前rank是root负责的第几个rank*/
   return rank - firstRankFromRoot(ir, nRanks, nRoots, offset);
 }
 // Check if the given rank is the first rank from the root
@@ -93,7 +113,7 @@ static int isFirstFromRoot(int rank, int root, int nRanks, int nRoots, int offse
 }
 
 struct bootstrapRootArgs {
-  struct ncclSocket* listenSock;/*listen的socket*/
+  struct ncclSocket* listenSock;/*bootstrap root需要监听的socket*/
   uint64_t magic;/*ncclBootstrapHandle使用的magic*/
 };
 
@@ -110,7 +130,7 @@ ncclResult_t bootstrapNetInit() {
   if (bootstrapNetInitDone == 0) {
     std::lock_guard<std::mutex> lock(bootstrapNetMutex);
     if (bootstrapNetInitDone == 0) {/*加锁再查*/
-      const char* env = ncclGetEnv("NCCL_COMM_ID");/*指定一个ip地址+端口*/
+      const char* env = ncclGetEnv("NCCL_COMM_ID");
       int nIfs = 0;
       if (env) {
     	  /*取此环境变量指定的地址及端口信息*/
@@ -129,7 +149,7 @@ ncclResult_t bootstrapNetInit() {
         }
       } else {
     	/*没有指定remote地址,找一个接口*/
-        NCCLCHECK(ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1, &nIfs));
+        NCCLCHECK(ncclFindInterfaces(bootstrapNetIfName/*出参，接口名称*/, &bootstrapNetIfAddr/*接口地址*/, MAX_IF_NAME_SIZE, 1/*找一个*/, &nIfs));
         if (nIfs <= 0) {
           WARN("Bootstrap : no socket interface found");
           return ncclInvalidUsage;
@@ -285,16 +305,22 @@ union ringConnectInfo {
 };
 
 struct extInfo {
+  /*自已的rank编号*/
   int rank;                                  // rank of the process reaching out
+  /*共有多少rank*/
   int nranks;                                // total number of ranks
+  /*请求的root索引,即哪个root负责此rank*/
   int iroot;                                 // current root index
   /*有多少个commid*/
   int nroots;                                // total number of roots
+  /*rank偏移量*/
   int offset;                                // offset for rank distribution
+  /*rank为和root通信而listen的地址*/
   union ncclSocketAddress listenRootAddress; // address of my listenSocket for the root
-  union ringConnectInfo connectInfo;
+  union ringConnectInfo connectInfo;/*此rank监听的地址*/
 };
 #define NET_HANDLE(h, rank) ((h) + (rank * NCCL_NET_HANDLE_MAXSIZE))
+/*取第i个handle*/
 #define BOOTSTRAP_HANDLE(h, i) ((struct ncclBootstrapHandle*)((char*)h + i * NCCL_UNIQUE_ID_BYTES))
 
 static ncclResult_t rootSend(union ncclSocketAddress* addr, uint64_t magic, union ringConnectInfo* info) {
@@ -309,12 +335,14 @@ fail:
   (void)ncclSocketClose(&sock);
   return res;
 }
-/*bootstrap线程入口*/
+/*bootstrap root线程入口，收集各Rank的报道信息，并为各Rank发送其对应的nextPeer信息
+ * 原因，当前各Rank是动态监听，因此需要汇总各Rank的监听信息，并告知各Rank其next的监听情况，这样就形成了RIng
+ * （启动时会先阻塞在accept位置）*/
 static void* bootstrapRoot(void* rargs) {
   uint64_t timers[BOOTSTRAP_INIT_ROOT_N] = {0};
   struct bootstrapRootArgs* args = (struct bootstrapRootArgs*)rargs;
-  struct ncclSocket* listenSock = args->listenSock;
-  uint64_t magic = args->magic;
+  struct ncclSocket* listenSock = args->listenSock;/*取得参数指明的监听socket*/
+  uint64_t magic = args->magic;/*取得参数指明的socket magic*/
   ncclResult_t res = ncclSuccess;
   int nranks = 0, c = 0;
   int iroot = 0, nroots = 0, localId = 0;
@@ -329,7 +357,7 @@ static void* bootstrapRoot(void* rargs) {
   memset(&zeroAddress, 0, sizeof(union ncclSocketAddress));
   memset(&zeroHandle, 0, NCCL_NET_HANDLE_MAXSIZE);
   memset(&zeroInfo, 0, sizeof(union ringConnectInfo));
-  ncclOsSetFilesLimit();
+  ncclOsSetFilesLimit();/*设置支持的文件最大数到最大*/
 
   TRACE(NCCL_BOOTSTRAP, "BEGIN");
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_ROOT_WAIT]);
@@ -345,42 +373,57 @@ static void* bootstrapRoot(void* rargs) {
       BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_ROOT_WAIT]);
       BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_ROOT_RECV]);
       nranks = info.nranks;/*取得rank总数*/
-      iroot = info.iroot;
-      nroots = info.nroots;
-      offset = info.offset;
+      iroot = info.iroot;/*rank认为当前root的编号*/
+      nroots = info.nroots;/*有多少个root*/
+      offset = info.offset;/*rank编号偏移量*/
       // if the number of root > 1, we will receive one extra info from the first local_id of the next root
+      /*检查本root管理多少个rank*/
       n2send = nRankFromRoot(iroot, nranks, nroots, offset);
       // offset>0 automatically means that we need to switch to the multiroot logic
+      /*邻段的第一个rank需要越界发送，因此多一个接收,nroots>1时，必需要越界。
+      offset>0时，前面还有Offset个Rank不属于本Root分配，这些offset rank与本Root段之间也构成邻段关系
+      */
       nrecv = n2send + ((offset > 0 || nroots > 1) ? 1 : 0);
+      /**分配内存rankInfo，以记录rankInfo*/
       NCCLCHECKGOTO(ncclCalloc(&rankInfo, nrecv), res, out);
+      /**分配内存rankAddressesRoot，以记录rankAddressesRoot*/
       NCCLCHECKGOTO(ncclCalloc(&rankAddressesRoot, nrecv), res, out);
     }
 
     if (nranks != info.nranks || nroots != info.nroots || iroot != info.iroot || offset != info.offset) {
+      /**检查rank总数、root总数、当前root编号、rank偏移量是否一致*/
       WARN("Bootstrap Root : mismatch in info from procs, nranks %d vs %d, nroots %d vs %d, iroot %d vs %d, offset %d "
            "vs %d",
            nranks, info.nranks, nroots, info.nroots, iroot, info.iroot, offset, info.offset);
       goto out;
     }
 
+    /*当前Rank是本root的第几个rank*/
     localId = localIdFromRoot(info.rank, iroot, nranks, nroots, offset);
     if (localId < 0 || localId >= nrecv) {
+      /**检查localId是否超出范围*/
       WARN("Bootstrap Root : localId %d is out of range", localId);
       goto out;
     }
     if (memcmp(&zeroAddress, &rankAddressesRoot[localId], sizeof(union ncclSocketAddress)) != 0 ||
         memcmp(&zeroInfo, &rankInfo[localId], sizeof(union ringConnectInfo)) != 0) {
+          /*之前已checked in,重复上报 */
       WARN("Bootstrap Root : rank %d of %d ranks has already checked in", info.rank, nranks);
       goto out;
     }
     // if the previous has already checked in, send the newly received handle, if not save the handle for later
     // if we have more than 1 root, I do not own the previous of local_id = 0
     // if we have prev > n2send, we do not send anything
+    /*root总数大于1，则前一个即local_id-1;否则即为local_id-1的绕回计数*/
     int prev = (nroots > 1) ? (localId - 1) : BOOTSTRAP_PID(localId - 1, nrecv);
     if (prev >= 0 && prev < n2send &&
         memcmp(&zeroAddress, &rankAddressesRoot[prev], sizeof(union ncclSocketAddress)) != 0) {
+    	/*prev在本root范围内(>=0且小于n2send);rankAddressesRoot[prev]地址已非零，则连接prev并发送其后续info.connectInfo
+      当前来报道的是rank,其prev需要连接rank,因此向Prev发送info.connectInfo
+      */
       NCCLCHECKGOTO(rootSend(&rankAddressesRoot[prev], magic, &info.connectInfo), res, out);
     } else {
+    	/*暂存info.connectInfo到rankInfo中*/
       memcpy(&rankInfo[localId], &info.connectInfo, sizeof(union ringConnectInfo));
     }
     // if the next rank has checked in, send the newly received info, if not save the addr for later
@@ -388,11 +431,15 @@ static void* bootstrapRoot(void* rargs) {
     // if the local_id id must be [0 ; n2send[ otherwise we do not answer
     int next = BOOTSTRAP_PID(localId + 1, nrecv);
     if (localId >= 0 && localId < n2send && memcmp(&zeroInfo, &rankInfo[next], sizeof(union ringConnectInfo)) != 0) {
+    	/*next在本root范围内；rankInfo[next]已非零，则连接localId其对应后续rankInfo[next]
+      当前来报tuhp的是Rank,其next需要被rank连接，因此向rank发送rankInfo[next]的connectInfo
+      */
       NCCLCHECKGOTO(rootSend(&info.listenRootAddress, magic, &rankInfo[next]), res, out);
     } else {
+      /**暂存info.connectInfo到rankAddressesRoot*/
       memcpy(rankAddressesRoot + localId, &info.listenRootAddress, sizeof(union ncclSocketAddress));
     }
-    ++c;
+    ++c;/*增加c */
     TRACE(NCCL_BOOTSTRAP, "Received connect from rank %d total %d/%d", info.rank, c, nrecv);
   } while (c < nrecv);
   TRACE(NCCL_BOOTSTRAP, "COLLECTED ALL %d HANDLES", nrecv);
@@ -401,6 +448,7 @@ static void* bootstrapRoot(void* rargs) {
   // send the remaining info to the ranks who haven't received anything
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_ROOT_SEND]);
   // here we need to send info only to my own local process
+  /**遍历再扫描一遍（上文循环时，如果已发出rankAddressRoot,rankInfo是不填充的，如果两个都填充了，则说明没有发送，这里发送一遍）， */
   for (int r = 0; r < n2send; ++r) {
     // use nrecv to periodize: if 1 root, we will send the first one to the last one,
     // if >1 roots we will send the additional one we have received
@@ -410,6 +458,7 @@ static void* bootstrapRoot(void* rargs) {
       NCCLCHECKGOTO(rootSend(&rankAddressesRoot[r], magic, &rankInfo[next]), res, out);
     }
   }
+  /*做完这件事，bootstrap root线程退出*/
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_ROOT_SEND]);
   TRACE(NCCL_BOOTSTRAP | NCCL_PROFILE, "Root timings (wait %f, recv %f, send %f)",
         timers[BOOTSTRAP_INIT_ROOT_WAIT] / 1e9, timers[BOOTSTRAP_INIT_ROOT_RECV] / 1e9,
@@ -446,7 +495,7 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   NCCLCHECKGOTO(ncclCalloc(&args, 1), ret, fail);
   args->listenSock = listenSock;
   args->magic = handle->magic;/*使用的magic*/
-  /*创建bootstrap线程*/
+  /*创建bootstrap线程，此线程会先在listenSock上尝试accept*/
   thread = std::thread(bootstrapRoot, args);
   ncclSetThreadName(thread, "NCCL BootstrapR");
   /*使此线程不用join*/
@@ -472,7 +521,7 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle, struct ncc
     }
     // Normal init: use NCCL_COMM_ID from environment
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
-    /*从环境变量转地址*/
+    /*从环境变量转地址(comm_id指定的为root),这个环境变量对本机所有rank生效，仅0号线程监听此地址*/
     if (ncclSocketGetAddrFromString(&handle->addr, env) != ncclSuccess) {
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
       return ncclInvalidArgument;
@@ -486,10 +535,10 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle, struct ncc
 	  /*没有指定环境变量，magic用随机数*/
       NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
     }
-    handle->nRanks = comm ? comm->nRanks : 0;
-    /*使用bootstrap选中的网络接口及地址(此时本机ip就是root)*/
+    handle->nRanks = comm ? comm->nRanks : 0;/*comm未指定，置为0*/
+    /*使用bootstrap选中的网络接口及地址(此时rank就是root)*/
     memcpy(&handle->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
-    /*创建root*/
+    /*创建bootstrap root线程*/
     NCCLCHECK(bootstrapCreateRoot(handle, false));
   }
 
@@ -531,8 +580,8 @@ struct bootstrapRing_t {
       ncclNetDeviceHandle_t *sendDevHandle, *recvDevHandle;
     } net;/**ncclNet环 */
     struct {
-      struct ncclSocket recv;/**接收socket，用于接收client的连接 */
-      struct ncclSocket send;/**发送socket，用于与client通信 */
+      struct ncclSocket recv;/**接收socket，用于接收PrePeer的通信 */
+      struct ncclSocket send;/**发送socket，用于与NextPeer的通信 */
     } socket;/**socket环 */
   };
 };
@@ -563,11 +612,11 @@ struct bootstrapState {
   struct bootstrapListen_t listen;/**监听socket，用于接收client的连接 */
   ncclNet_t* net;/*对应的net插件*/
   uint64_t* peerProxyAddressesUDS;/*指出每个rank随机生成的一个id，用于unix domain socket地址(见getUDS）*/
-  union ncclSocketAddress* peerProxyAddresses;/*指出每个rank绑定的地址（各rank监听了此地址）*/
+  union ncclSocketAddress* peerProxyAddresses;/*指出每个rank绑定的地址（各rank为peerproxy监听了此地址）*/
   union ncclSocketAddress* peerP2pAddresses;/*指出每个rank绑定的地址（各rank为p2p监听了此地址）*/
   struct unexConn* unexpectedConnections;/**挂接非预期的连接 */
   int cudaDev;/*对应的gpu*/
-  int rank;
+  int rank;/*自身编号*/
   int nranks;/*rank总数*/
   uint64_t magic;
   volatile uint32_t* abortFlag;/*abort标记指针*/
@@ -590,6 +639,8 @@ static ncclResult_t createListenSocket(struct ncclComm* comm, uint64_t magic, st
   NCCLCHECK(ncclSocketGetAddr(socket, addr));
   return ncclSuccess;
 }
+
+/*UDS在这里指unix domain socket,这里生成一个在本机进程间不重复的编号*/
 static ncclResult_t getUDS(uint64_t* peerUDS) {
   uint64_t randId;
   NCCLCHECK(getRandomData(&randId, sizeof(randId)));/*取一个随机id*/
@@ -711,6 +762,7 @@ static ncclResult_t bootstrapConcurrent(ncclResult_t (*sendFn/*发送函数*/)(v
 }
 
 static ncclResult_t socketConnectOp(void* opaque) {
+	/*入参为socket,已设置目的地址，建立连接*/
   NCCLCHECK(ncclSocketConnect((struct ncclSocket*)opaque));
   return ncclSuccess;
 }
@@ -722,19 +774,23 @@ struct socketAcceptArgs {
 
 /*接入新的client*/
 static ncclResult_t socketAcceptOp(void* opaque) {
+	/*入参是listensocket与recvsocket,接入新连接*/
   struct socketAcceptArgs* op = (struct socketAcceptArgs*)opaque;
   NCCLCHECK(ncclSocketAccept(op->sock, op->listenSock));
   return ncclSuccess;
 }
 
-static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket* sendSocket/**出参，发送socket */,
+/*与addr建立连接，形成sendSocket;通过listenSock收受新连接，形成recvSocket*/
+static ncclResult_t socketRingConnect(ncclSocketAddress* addr/*连接地址*/, struct ncclSocket* sendSocket/**出参，发送socket */,
                                       struct ncclSocket* listenSock/**入参，listen socket */, struct ncclSocket* recvSocket/*出参，发送socket*/, uint64_t magic/**为socket关联的Magic */,
                                       volatile uint32_t* abortFlag/*指针，指向abortFlag,如出错设置此flags，使用指针可与其它结构体共享 */) {
   ncclResult_t ret = ncclSuccess;
   struct socketAcceptArgs acceptArgs = {recvSocket, listenSock};
   NCCLCHECK(ncclSocketInit(recvSocket));/**初始化接收socket */
+  /*初始化sendSocket*/
   NCCLCHECKGOTO(ncclSocketInit(sendSocket, addr, magic, ncclSocketTypeBootstrap/**bootstrap 创建的socket */, abortFlag), ret, fail);
-  NCCLCHECKGOTO(bootstrapConcurrent(socketConnectOp/*连接*/, sendSocket, socketAcceptOp, &acceptArgs), ret, fail);
+  /*socketConnectOp函数会先被调用，然后socketAcceptOp函数会后被调用*/
+  NCCLCHECKGOTO(bootstrapConcurrent(socketConnectOp/*发送函数*/, sendSocket/*发送函数参数*/, socketAcceptOp/*接收函数*/, &acceptArgs/*接收函数参数*/), ret, fail);
   return ncclSuccess;
 fail:
   (void)ncclSocketClose(sendSocket);
@@ -767,7 +823,7 @@ static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* st
   // allgather
   NCCLCHECKGOTO(bootstrapAllGather(state, ringData, sizeof(struct bootstrapRingData)), res, exit);/*与其它rank交换并收集全量ringData*/
 
-  /*上面收集了所有rank的RingData,下面将这些值填充到peerAddress,peerProxy,peerUDS,rasRanks中*/
+  /*上面收集了所有rank的RingData,下面将这些值填充到peerAddress,peerProxy,peerUDS,rasRanks中，以便实现保存*/
   // unpack
   for (int irank = 0; irank < nRanks; ++irank) {
     if (peerAddresss) memcpy(peerAddresss + irank, &(ringData[irank].peerAddress), sizeof(union ncclSocketAddress));
@@ -787,8 +843,9 @@ static ncclResult_t sendToRoot(struct ncclBootstrapHandle* handle, struct ncclCo
   struct ncclSocket sock;
   NCCLCHECK(ncclSocketInit(&sock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, comm->abortFlag));
   NCCLCHECKGOTO(ncclSocketConnect(&sock), ret, fail);
-  /*向bootstrap root线程发送info*/
+  /*向bootstrap root线程发送info（这一句会触发我们之前创建的root开始运行，看bootstrapRoot函数）*/
   NCCLCHECKGOTO(socketSend(&sock, info, sizeof(struct extInfo)), ret, fail);
+  /*发完关闭*/
   NCCLCHECK(ncclSocketClose(&sock));
   return ret;
 fail:
@@ -800,6 +857,9 @@ NCCL_PARAM(StaggerRate, "UID_STAGGER_RATE", 7000);
 NCCL_PARAM(StaggerThreshold, "UID_STAGGER_THRESHOLD", 256);
 extern int64_t ncclParamRasEnable();
 
+/*向bootstrap root报道，收集root下发的nextPeer，与nextPeer,prevPeer建立起ring,并同步各rank的
+ * peerP2pAddress，peerProxyAddresses，peerProxyAddressesUDS，rasRanks信息
+ * 初始化本进程ras,并向ras线程发送add ranks消息*/
 ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, struct ncclComm* parent) {
   ncclResult_t result = ncclSuccess;
   int rank = comm->rank;
@@ -828,8 +888,9 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   // This is consistent with the magic created in ncclCommGetUniqueId.
   if (handles != NULL) {
     // state and comm magic set to the first magic ID
-    comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic;
+    comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic;/*更新magic*/
   } else if (parent != NULL) {
+	  /*更新magic*/
     comm->magic = state->magic = hashCombine(parent->magic, parent->childCount);
   } else {
     WARN("bootstrapInit: handles and parent are NULL");
@@ -854,8 +915,9 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
     /*指明连接本端的地址信息*/
     memcpy(info.connectInfo.handle, STATE_LISTEN(state, net.handle), NCCL_NET_HANDLE_MAXSIZE);
   } else {
+	  /*使用socket方式*/
     // create socket for ring neightbor to contact mee
-    NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, socket), &info.connectInfo.addr/*监听的地址*/,
+    NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, socket)/*出参，listen socket*/, &info.connectInfo.addr/*监听的地址*/,
                                  ncclSocketTypeBootstrap));/*创建listen socket*/
   }
   // Create socket for root to contact me using the root's magic
@@ -874,22 +936,26 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
       }
     }
   }
+  /*当前rank由哪个root负责*/
   int curr_root = rootIdFromRank(rank, nranks, nHandles, offset);
   if (curr_root >= 0) {
-    NCCLCHECK(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot,
-                                 &info.listenRootAddress, ncclSocketTypeBootstrap));
+	  /*创建listen socket(用于root)*/
+    NCCLCHECK(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot/*为root listen的socket*/,
+                                 &info.listenRootAddress/*监听的地址*/, ncclSocketTypeBootstrap));
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_CREATE]);
 
   // stagger connection times to avoid an overload of the root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_DELAY]);
+  /*curr_root负责多少个rank*/
   int nRankRoot = nRankFromRoot(curr_root, nranks, nHandles, offset);
   if (nRankRoot > ncclParamStaggerThreshold()) {
     // for socket the message rate in microsec
-    double msg_rate = ncclParamStaggerRate() / 1.0e6;
+    double msg_rate = ncclParamStaggerRate() / 1.0e6;/*每微秒能处理多少消息*/
+    /*当前rank在root中的索引除以msg_rate,可知道应在第几轮去连接*/
     long musec = localIdFromRoot(rank, curr_root, nranks, nHandles, offset) / msg_rate;
     TRACE(NCCL_BOOTSTRAP, "rank %d delaying connection to root by %ld microsec", rank, musec);
-    std::this_thread::sleep_for(std::chrono::microseconds(musec));
+    std::this_thread::sleep_for(std::chrono::microseconds(musec));/*每轮一微秒，排在第几轮就睡几微秒，防止同时连接root*/
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_DELAY]);
 
@@ -897,8 +963,11 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_SEND]);
   // send contact info to my own root
   info.rank = rank;
-  info.iroot = curr_root;
-  info.offset = offset;
+  info.iroot = curr_root;/*指出负责此rank的root编号*/
+  info.offset = offset;/*偏移量*/
+  /*将此info发给对应的root并关闭socket,
+   * 此操作会导致bootstrap root线程收到extInfo,并依据其收到的其它rank信息
+   * 向本rank响应后继信息（后继信息是通过rank监听的地址响应回来的）*/
   if (curr_root >= 0) NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, curr_root), comm, &info));
   if (parent && comm->isGrow && rank != 0) {
     // Grow: Ranks 1 to N-1 use the parent bootstrap to send connection information to the previous rank
@@ -908,6 +977,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   // commGrow with more than = 1 rank in the parent comm is a special case of multiroot
   if (((comm->isGrow && parent && (parent->nRanks > 1)) || nHandles > 1) &&
       isFirstFromRoot(rank, curr_root, nranks, nHandles, offset)) {
+	  /*给前一个root发一份info,前一个root负责的最后一个rank的next是当前root负责的第一个rank*/
     int prev_rank = BOOTSTRAP_PID(rank - 1, nranks);
     int prev_root = rootIdFromRank(prev_rank, nranks, nHandles, offset);
     info.rank = prev_rank + 1; // my rank as seen by the previous root
@@ -923,7 +993,8 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
     NCCLCHECK(ncclSocketInit(&sock));
     /*接入新socket*/
     NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
-    /*读取nextPeer（即我们要发送的对端）*/
+    /*读取nextPeer
+     * （即向bootstrap报道后，bootstrap root要发送给我们的nextPeer信息）*/
     NCCLCHECK(socketRecv(&sock, &nextPeer, sizeof(nextPeer)));
     NCCLCHECK(ncclSocketClose(&sock));
     NCCLCHECK(ncclSocketClose(&listenSockRoot));
@@ -944,7 +1015,9 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
 :q
                              state->abortFlag));
   } else {
-    /**走tcp socket，与nextPeer建立发送socket，建收socket */
+    /**走tcp socket，
+     * 与nextPeer建立连接，形成socket.send;
+     * 接收prePeerv建立连接，形成sock.recv*/
     NCCLCHECK(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket),
                                 &STATE_RING(state, socket.recv), comm->magic, state->abortFlag));
   }
@@ -953,34 +1026,35 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   // in case of failure, those resources will be free'd when calling bootstrapDestroy, so we can return immediatly
   NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));/*申请peerProxyAddresses*/
   NCCLCHECK(ncclCalloc(&proxySocket, 1));
-  /*只填充自身peerProxyAddresses*/
+  /*创建proxySocket,且只填充自身peerProxyAddresses*/
   NCCLCHECKGOTO(createListenSocket(comm, comm->magic, proxySocket, state->peerProxyAddresses + rank/*出参，监听的地址*/,
                                    ncclSocketTypeProxy),
                 result, fail);
 
   NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddressesUDS, nranks), result, fail);/*申请peerProxyAddressesUDS*/
-  /*只填充自身peerProxyAddressesUDS(这是一个随机id)*/
+  /*创建uds编号，且只填充自身peerProxyAddressesUDS(这是一个随机id，保证进程间不重复)*/
   NCCLCHECKGOTO(getUDS(state->peerProxyAddressesUDS + rank), result, fail);
 
   // create a socket for others to reach out (P2P)
+  /*创建监听peerSock,且只填充自身peerSocketAddress*/
   union ncclSocketAddress peerSocketAddress;
   NCCLCHECKGOTO(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, peerSocket), &peerSocketAddress,
                                    ncclSocketTypeBootstrap),
                 result, fail);
   NCCLCHECKGOTO(ncclCalloc(&state->peerP2pAddresses, nranks), result, fail);/*申请peerP2pAddresses*/
-  /*只填充自身peerSocketAddress*/
   memcpy(state->peerP2pAddresses + rank, &peerSocketAddress, sizeof(union ncclSocketAddress));
 
   // Initialize RAS
   if (ncclParamRasEnable() == 1) {
     // The RAS thread will take ownership after ncclRasAddRanks succeeds.
-    NCCLCHECKGOTO(ncclCalloc(&rasRanks, nranks), result, fail);/*申请rasRanks*/
+    NCCLCHECKGOTO(ncclCalloc(&rasRanks, nranks), result, fail);/*申请rasRanks，每个rank一项*/
     memcpy(&rasRanks[rank].addr, &bootstrapNetIfAddr, sizeof(rasRanks[rank].addr));
     rasRanks[rank].pid = ncclOsGetPid();
     rasRanks[rank].cudaDev = comm->cudaDev;
     rasRanks[rank].nvmlDev = comm->nvmlDev;
     rasRanks[rank].hostHash = getHostHash();
     rasRanks[rank].pidHash = getPidHash();
+    /*初始化ras线程，*/
     if (ncclRasCommInit(comm, rasRanks + rank) != ncclSuccess) {
       INFO(NCCL_INIT | NCCL_RAS, "Continuing in spite of a RAS initialization error");
       // We should still participate in the ringAllInfo below as the peers will be waiting for us.
@@ -991,8 +1065,12 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   }
 
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_RING]);/*记录当前时间*/
+  /*
+   * 与其它rank交换并填充peerP2pAddress，peerProxyAddresses，peerProxyAddressesUDS，rasRanks
+   * 这一步之后我们通过ring型网络，了解了其它rank以上四种数据情况
+  */
   NCCLCHECKGOTO(ringAllInfo(comm, state, state->peerP2pAddresses, state->peerProxyAddresses,
-                            state->peerProxyAddressesUDS, rasRanks),/*与其它rank交换并填充peerP2pAddress...*/
+                            state->peerProxyAddressesUDS, rasRanks),
                 result, fail);
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_RING]);/*获得allInfo用时差值*/
 
@@ -1001,6 +1079,9 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
                 fail);
 
   if (ncclParamRasEnable() == 1 && performRasAddRanks) {
+	  /*向ras线程发送add ranks消息，
+	   * 上报当前进程获知的ranks情况（上面我们通过ringAllInfo已和其它rank同步了全局情况）
+	   * 收消息将触发本进程中的ras线程处理add ranks消息*/
     if (ncclRasAddRanks(rasRanks, nranks) != ncclSuccess) {
       INFO(NCCL_INIT | NCCL_RAS, "Continuing in spite of a RAS initialization error");
     } else {

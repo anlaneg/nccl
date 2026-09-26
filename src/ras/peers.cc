@@ -68,7 +68,7 @@ static void rasNewPeerNotify(const struct rasPeerInfo* peer);
 
 // Handles RAS_ADD_RANKS notification -- adds new ranks to the internal list of all RAS peers, reconfigures RAS
 // network connections, and notifies the peers.
-ncclResult_t rasLocalHandleAddRanks(struct rasRankInit* ranks, int nranks) {
+ncclResult_t rasLocalHandleAddRanks(struct rasRankInit* ranks, int nranks/*ranks总数*/) {
   ncclResult_t ret = ncclSuccess;
 
   INFO(NCCL_RAS, "RAS handling local addRanks request (old nRasPeers %d)", nRasPeers);
@@ -77,7 +77,7 @@ ncclResult_t rasLocalHandleAddRanks(struct rasRankInit* ranks, int nranks) {
   struct rasPeerInfo* rankPeers = nullptr;
   int nRankPeers;
   int newNRasPeers;
-  NCCLCHECKGOTO(rasRanksConvertToPeers(ranks, nranks, &rankPeers, &nRankPeers, &newNRasPeers), ret, fail);
+  NCCLCHECKGOTO(rasRanksConvertToPeers(ranks, nranks, &rankPeers/*出参，按地址合并后结果*/, &nRankPeers/*出参，rankPeers数组大小*/, &newNRasPeers/*出参，相对之前集合，新增了多少*/), ret, fail);
 
   // Update local rasPeers.
   NCCLCHECKGOTO(rasPeersUpdate(rankPeers, &nRankPeers, newNRasPeers), ret, fail);
@@ -101,8 +101,8 @@ fail:
 // Converts the rasRankInit structure into rasPeerInfo.  This skips empty elements (in case of errors), orders
 // elements by the address/cudaDev, and merges elements with duplicate addresses (in case of multiple CUDA devices per
 // process).  In the process we also calculate how large the merged rasPeers array will need to be.
-static ncclResult_t rasRanksConvertToPeers(struct rasRankInit* ranks, int nranks, struct rasPeerInfo** rankPeers,
-                                           int* nRankPeers, int* newNRasPeers) {
+static ncclResult_t rasRanksConvertToPeers(struct rasRankInit* ranks, int nranks/*ranks数组大小*/, struct rasPeerInfo** rankPeers/*出参，ranks会按rank->addr进行合并，此参数记录合并后的情况*/,
+                                           int* nRankPeers/*出参，rankPeers中有效数据长度*/, int* newNRasPeers/*出参，新增了多少个raspeer*/) {
   ncclResult_t ret = ncclSuccess;
   int peerIdx, rankPeerIdx;
 
@@ -111,45 +111,49 @@ static ncclResult_t rasRanksConvertToPeers(struct rasRankInit* ranks, int nranks
   memset(&emptyAddr, '\0', sizeof(emptyAddr));
 
   // Begin by sorting the array by address and cudaDev (to match the rasPeers order).
-  qsort(ranks, nranks, sizeof(*ranks), &rasRanksCompare);
+  qsort(ranks, nranks, sizeof(*ranks), &rasRanksCompare);/*按地址，进程id对ranks排序*/
 
   // We over-allocate peers here because to get an accurate count we would need to loop over the ranks first...
   // nRankPeers will hold the actual count of used elements.
   *rankPeers = nullptr;
-  NCCLCHECKGOTO(ncclCalloc(rankPeers, nranks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(rankPeers, nranks), ret, fail);/*申请rankPeers*/
 
   peerIdx = rankPeerIdx = 0;
   *newNRasPeers = nRasPeers;
   for (int rankIdx = 0; rankIdx < nranks; rankIdx++) {
-    const struct rasRankInit* rank = ranks + rankIdx;
-    struct rasPeerInfo* rankPeer = *rankPeers + rankPeerIdx;
+    const struct rasRankInit* rank = ranks + rankIdx;/*取每一个rank对应的rasRankInit*/
+    struct rasPeerInfo* rankPeer = *rankPeers + rankPeerIdx;/*待填充的rankPeer信息*/
 
     if (memcmp(&emptyAddr, &rank->addr, sizeof(emptyAddr)) == 0) {
       // Skip empty rank entries.
-      continue;
+      continue;/*地址为空，忽略*/
     }
 
     // First check if the rank doesn't need to be merged into the previous entry in rankPeers
     // (possible if there are multiple ranks with the same address).
     if (rankPeerIdx > 0 && memcmp(&rank->addr, &rankPeer[-1].addr, sizeof(rank->addr)) == 0) {
+    	/*当前待填充的与前一个地址完全相同，仅合并负责的cuda设备及nvml设备*/
       // Merge into the previous entry in peers.
-      rankPeer[-1].cudaDevs |= (1ULL << rank->cudaDev);
+      rankPeer[-1].cudaDevs |= (1ULL << rank->cudaDev);/*与前一个合并*/
       rankPeer[-1].nvmlDevs |= (1ULL << rank->nvmlDev);
       continue;
     }
 
     // Add a new entry to rankPeers.
     if (rankPeerIdx >= nranks) {
+    	/*准备新增，但空间不足，报错*/
       INFO(NCCL_RAS, "RAS overflow of rankPeer: rankPeerIdx %d, nranks %d -- internal error?", rankPeerIdx, nranks);
       break;
     }
+
+    /*填充rankPeer*/
     memcpy(&rankPeer->addr, &rank->addr, sizeof(rankPeer->addr));
     rankPeer->pid = rank->pid;
     rankPeer->cudaDevs = (1ULL << rank->cudaDev);
     rankPeer->nvmlDevs = (1ULL << rank->nvmlDev);
     rankPeer->hostHash = rank->hostHash;
     rankPeer->pidHash = rank->pidHash;
-    rankPeerIdx++;
+    rankPeerIdx++;/*rankPeer空间占用加1*/
 
     // Also check if there is already an entry with that address in the global rasPeers so that the caller can know how
     // many more entries will be needed.
@@ -157,25 +161,25 @@ static ncclResult_t rasRanksConvertToPeers(struct rasRankInit* ranks, int nranks
     int cmp = 0;
     while (peerIdx < nRasPeers) {
       cmp = ncclSocketsCompare(&rank->addr, &rasPeer->addr);
-      if (cmp <= 0) break;
+      if (cmp <= 0) break;/*地址要排在rasPeer前面或者相等*/
       peerIdx++;
       rasPeer++;
     }
     if (peerIdx == nRasPeers) {
       // The current rank is "greater than" all existing peers, so it will need a new entry.  We stay in the loop so
       // that we don't need to handle the remaining ranks separately.
-      (*newNRasPeers)++;
+      (*newNRasPeers)++;/*遇到不在rasPeer中包含的，newNRasPeers加1*/
       continue;
     }
     if (cmp < 0) {
-      (*newNRasPeers)++;
+      (*newNRasPeers)++;/*这种也是新增，但需要排在rasPeer的前面*/
     } else {
       // cmp == 0.  Duplicates between the rank array and the peers array will be merged.
       if (rank->pid != rasPeer->pid) {
         INFO(NCCL_RAS, "RAS pid mismatch for the same address %s: rank->pid %d, rasPeer->pid %d -- internal error?",
              ncclSocketToString(&rank->addr, rasLine), rank->pid, rasPeer->pid);
         // This really should never happen.  Best to skip the new one?
-        rankPeerIdx--;
+        rankPeerIdx--;/*地址相等，但两者pid不同，报错*/
       }
     }
   }
@@ -933,18 +937,18 @@ static int rasAddrPeerInfoCompare(const void* k, const void* e) {
 static int rasRanksCompare(const void* e1, const void* e2) {
   const struct rasRankInit* r1 = (const struct rasRankInit*)e1;
   const struct rasRankInit* r2 = (const struct rasRankInit*)e2;
-  int cmp = ncclSocketsCompare(&r1->addr, &r2->addr);
+  int cmp = ncclSocketsCompare(&r1->addr, &r2->addr);/*比对地址*/
   if (cmp == 0) {
     if (r1->addr.sa.sa_family == 0) {
       // Bail out in case of empty addresses...
       return 0;
     }
-    if (r1->pid != r2->pid) {
+    if (r1->pid != r2->pid) {/*比对pid*/
       // Should never happen.
       INFO(NCCL_RAS, "RAS ranks discrepancy for same address %s: r1->pid %d, r2->pid %d -- internal error?",
            ncclSocketToString(&r1->addr, rasLine), r1->pid, r2->pid);
     }
-    cmp = (r1->cudaDev < r2->cudaDev ? -1 : (r1->cudaDev > r2->cudaDev ? 1 : 0));
+    cmp = (r1->cudaDev < r2->cudaDev ? -1 : (r1->cudaDev > r2->cudaDev ? 1 : 0));/*比对cuda设备编号*/
     if (cmp == 0) {
       // There should be no complete duplicates within the rank array.
       INFO(NCCL_RAS, "RAS ranks discrepancy for %s: identical entries with index difference %td -- internal error?",

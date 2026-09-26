@@ -91,6 +91,7 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName/*库名
 	  /*指定lib名称的情况*/
     snprintf(libName_, MAX_STR_LEN, "%s", libName);
   } else {
+	  /*使用默认lib名称*/
     snprintf(libName_, MAX_STR_LEN, "%s.so", pluginPrefix[type]);
   }
 
@@ -139,7 +140,7 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName/*库名
   } else if (strlen(pluginFallback[type])) {
     INFO(subsys[type], "%s/Plugin: %s", pluginNames[type], pluginFallback[type]);
   }
-  return nullptr;
+  return nullptr;/*没找到插件返回null*/
 }
 
 void* ncclOpenNetPluginLib(const char* name) {

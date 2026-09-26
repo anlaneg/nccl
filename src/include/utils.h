@@ -387,7 +387,7 @@ inline void ncclIntruQueueConstruct(ncclIntruQueue<T, next>* me) {
 
 template <typename T, T* T::* next>
 inline bool ncclIntruQueueEmpty(ncclIntruQueue<T, next>* me) {
-  return me->head == nullptr;
+  return me->head == nullptr;/*队列是否为空*/
 }
 
 template <typename T, T* T::* next>

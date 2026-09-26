@@ -160,13 +160,15 @@ static int ncclIbRelaxedOrderingCapable(void) {
   return r == ncclInternalError ? 0 : 1;
 }
 
+/*检查是否支持dma buffer能力*/
 static bool ncclMlx5dvDmaBufCapable(ibv_context* context) {
   ncclResult_t res;
   int dev_fail = 0;
 
   struct ibv_pd* pd;
-  NCCLCHECKGOTO(wrap_ibv_alloc_pd(&pd, context), res, failure);
+  NCCLCHECKGOTO(wrap_ibv_alloc_pd(&pd, context), res, failure);/*申请pd*/
   // Test kernel DMA-BUF support with a dummy call (fd=-1)
+  /*注册dmabuf mr(利用0地址检测）*/
   (void)wrap_direct_ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/, 0ULL /*iova*/, -1 /*fd*/, 0 /*flags*/);
   // ibv_reg_dmabuf_mr() will fail with EOPNOTSUPP/EPROTONOSUPPORT if not supported (EBADF otherwise)
   (void)wrap_direct_mlx5dv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/, 0ULL /*iova*/, -1 /*fd*/, 0 /*flags*/,
@@ -176,7 +178,7 @@ static bool ncclMlx5dvDmaBufCapable(ibv_context* context) {
   NCCLCHECKGOTO(wrap_ibv_dealloc_pd(pd), res, failure);
   // stop the search and goto failure
   if (dev_fail) goto failure;
-  return true;
+  return true;/*支持注册dma buffer*/
 failure:
   return false;
 }
@@ -428,11 +430,14 @@ static ncclResult_t ncclIbAutoAssignRailPlane(int d, const char** uniquePaths, i
 extern int64_t ncclIbArThreshold;
 ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
-  if (netRefCount++) return ret;
+  if (netRefCount++) return ret;/*已初始化过(容许多次进入），直接退出*/
   ncclProfilerFunction = profFunction;
+  /*禁用ibverbs,直接返回 */
   if (ncclParamIbDisable()) return ncclInternalError;
   static int shownIbHcaEnv = 0;
+  /*初始化ibverbs的api符号指针失败，直接返回*/
   if (wrap_ibv_symbols() != ncclSuccess) return ncclInternalError;
+  /*尝试加载mellanox provider,要求mlx5dv存在（否则告警）*/
   if (wrap_mlx5dv_symbols() != ncclSuccess) {
     INFO(NCCL_NET, "NET/IB : Failed to open mlx5dv symbols. Advance features like CX-8 Direct-NIC will be disabled.");
   }
@@ -444,8 +449,10 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       int nIpIfs = 0;
       ncclNIbDevs = 0;
       ncclNMergedIbDevs = 0;
-      NCCLCHECK(ncclFindInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1, &nIpIfs));
+      /*找ib设备名称及ib设备对应的地址*/
+      NCCLCHECK(ncclFindInterfaces(ncclIbIfName/*出参，找到的接口名称*/, &ncclIbIfAddr/*出参，出接口地址*/, MAX_IF_NAME_SIZE, 1/*最多找一个*/, &nIpIfs));
       if (nIpIfs != 1) {
+    	  /*没有找到*/
         WARN("NET/IB : No IP interface found.");
         ret = ncclInternalError;
         goto fail;
@@ -456,30 +463,34 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       struct ibv_device** devices;
 
       // Check if user defined which IB device:port to use
-      const char* userIbEnv = ncclGetEnv("NCCL_IB_HCA");
+      const char* userIbEnv = ncclGetEnv("NCCL_IB_HCA");/*通过此环境变量指定ib设备*/
       if (userIbEnv != NULL && shownIbHcaEnv++ == 0) INFO(NCCL_NET | NCCL_ENV, "NCCL_IB_HCA set to %s", userIbEnv);
       struct netIf userIfs[MAX_IB_DEVS];
-      bool searchNot = userIbEnv && userIbEnv[0] == '^';
+      bool searchNot = userIbEnv && userIbEnv[0] == '^';/*是否排除指定的设备名称 */
       if (searchNot) userIbEnv++;
-      bool searchExact = userIbEnv && userIbEnv[0] == '=';
+      bool searchExact = userIbEnv && userIbEnv[0] == '=';/*是否严格匹配*/
       if (searchExact) userIbEnv++;
       int nUserIfs = parseStringList(userIbEnv, userIfs, MAX_IB_DEVS);
 
-      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) {
+      /** 获取所有ibverbs设备 */
+      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs/*出参，ib设备总数目*/)) {
         ret = ncclInternalError;
         goto fail;
       }
 
+      /*遍历所有的ibverbs设备*/
       for (int d = 0; d < nIbDevs && ncclNIbDevs < MAX_IB_DEVS; d++) {
         struct ibv_context* context = NULL;
+        /*打开此ib设备*/
         if (ncclSuccess != wrap_ibv_open_device(&context, devices[d]) || context == NULL) {
           WARN("NET/IB : Unable to open device %s", devices[d]->name);
-          continue;
+          continue;/** 跳过无法打开的设备 */
         }
         char dataDirectDevicePath[PATH_MAX] = "/sys";
         int devCount = /*undefined*/ -1, devOffset = 0;
 
         uint32_t oooRqSize = 0;
+        /*provider是否为mellanox*/
         enum ncclIbProvider ibProvider = wrap_mlx5dv_is_supported(devices[d]) ? IB_PROVIDER_MLX5 : IB_PROVIDER_NONE;
         if (ibProvider == IB_PROVIDER_MLX5 && ncclParamIbOooRq()) {
           NCCLCHECKGOTO(ncclIbQueryOooRqSize(context, devices[d]->name, &oooRqSize), ret, fail);
@@ -489,6 +500,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         struct ibv_device_attr devAttr;
         memset(&devAttr, 0, sizeof(devAttr));
         if (ncclSuccess != wrap_ibv_query_device(context, &devAttr)) {
+        	/** 查询设备属性失败，跳过该设备 */
           WARN("NET/IB : Unable to query device %s", devices[d]->name);
           if (ncclSuccess != wrap_ibv_close_device(context)) {
             ret = ncclInternalError;
@@ -496,13 +508,15 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
           }
           continue;
         }
+        /** 遍历此ib设备所有port */
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
           struct ibv_port_attr portAttr;
           if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
             WARN("NET/IB : Unable to query port_num %d", port_num);
             continue;
           }
-          if (portAttr.state != IBV_PORT_ACTIVE) continue;
+          if (portAttr.state != IBV_PORT_ACTIVE) continue;/** 跳过非活动端口 */
+          /** 跳过非infiniband及非ethernet链路端口 */
           if (portAttr.link_layer != IBV_LINK_LAYER_INFINIBAND && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) {
             continue;
           }
@@ -510,14 +524,15 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
           // check against user specified HCAs/ports
           int userIfId = -1;
           if (!(matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact, &userIfId) ^ searchNot)) {
-            continue;
+            continue;/** 跳过与用户指定的设备名称不匹配的 */
           }
 
           // check for mlx5 data direct support only once for a each device
           if (devCount == -1) {
-            devCount = 1;
+            devCount = 1;/*第一个设备时进入*/
             devOffset = 0;
             if (ncclParamIbDataDirect() > 0 && ibProvider == IB_PROVIDER_MLX5 && ncclMlx5dvDmaBufCapable(context)) {
+            	/*仅mellanx卡,且支持dma buffer时进入(用户还需要开启）*/
               int pathLen = strlen(dataDirectDevicePath);
               ncclResult_t res = wrap_mlx5dv_get_data_direct_sysfs_path(context, dataDirectDevicePath + pathLen,
                                                                         sizeof(dataDirectDevicePath) - pathLen);
@@ -538,7 +553,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
           }
           for (int dev = devOffset; dev < devCount; ++dev) {
             ncclIbDevs[ncclNIbDevs].device = d;
-            ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;
+            ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;/*记录设备对应的provider*/
             ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
             ncclIbDevs[ncclNIbDevs].vendorId = devAttr.vendor_id;
             ncclIbDevs[ncclNIbDevs].vendorPartId = devAttr.vendor_part_id;
@@ -572,7 +587,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
               NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
               strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);
-              ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;
+              ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;/*指明data direct开启*/
             }
 
             ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
@@ -599,20 +614,25 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                  ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar,
                  ncclIbDevs[ncclNIbDevs].oooRqSize);
 
+            /*为每个设备创建一个线程*/
             ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
+            /*指定线程名称*/
             ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
+            /*使此线程不必join*/
             ncclIbAsyncThread.detach();
 
             ncclNIbDevs++;
             nPorts++;
           }
         }
+        /*释放未用context*/
         if (nPorts == 0 && ncclSuccess != wrap_ibv_close_device(context)) {
           ret = ncclInternalError;
           goto fail;
         }
       }
 
+      /*释放获取的设备列表*/
       if (devices && (ncclSuccess != wrap_ibv_free_device_list(devices))) {
         ret = ncclInternalError;
         goto fail;
@@ -678,7 +698,7 @@ ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config
                         ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
   ncclNetCommConfig_t* netCommConfig = nullptr;
-  NCCLCHECK(ncclIbInitDevices(logFunction, profFunction));
+  NCCLCHECK(ncclIbInitDevices(logFunction, profFunction));/*匹配并初始化ib设备*/
   NCCLCHECK(ncclIbPortRecoveryThreadStart());
   NCCLCHECK(ncclCalloc(&netCommConfig, 1));
   netCommConfig->trafficClass = config->trafficClass;
@@ -691,6 +711,7 @@ ncclResult_t ncclIbDevices(int* ndev) {
   return ncclSuccess;
 }
 
+/*取指定ib设备的物理属性*/
 ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   struct ncclIbDev* ibDev = ncclIbDevs + dev;
   std::lock_guard<std::mutex> lock(ibDev->mutex);
@@ -700,10 +721,12 @@ ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   props->guid = ibDev->guid;
   props->ptrSupport = NCCL_PTR_HOST;
   if (ncclIbGdrSupport() == ncclSuccess) {
+	  /*指明支持gdr（是否通过peermem来支持）*/
     props->ptrSupport |= NCCL_PTR_CUDA; // GDR support via nv_peermem
   }
   props->regIsGlobal = 1;
   if (ncclIbDmaBufSupport(dev) == ncclSuccess) {
+	  /*指明支持gdr(通过dma buffer来支持）*/
     props->ptrSupport |= NCCL_PTR_DMABUF; // GDR support via DMA-BUF
   }
   props->forceFlush = 0;
@@ -721,6 +744,7 @@ ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   return ncclSuccess;
 }
 
+/*取ib属性*/
 ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   if (dev >= ncclNMergedIbDevs) {
     WARN("NET/IB : Requested properties for vNic %d, only %d vNics have been created", dev, ncclNMergedIbDevs);

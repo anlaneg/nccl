@@ -43,7 +43,7 @@ struct ncclXmlNode {
 };
 
 struct ncclXml {
-  int maxIndex, maxNodes;/*最大节点索引，最大节点数 */
+  int maxIndex/*最大节点索引（用于增加节点）*/, maxNodes;/*最大节点数（用于指明分配的最大空间）*/
   struct ncclXmlNode nodes[1];
 };
 
@@ -75,10 +75,12 @@ ncclResult_t ncclTopoConvertXml(struct ncclXml* xml, uintptr_t base, int exp);
 ncclResult_t xmlUnsetAttr(struct ncclXmlNode* node, const char* attrName);
 
 static size_t xmlMemSize(int maxNodes) {
-  /*按最大节点数计算内存大小 */
+  /*按最大节点数计算内存大小，内存布局[struct ncclXml][maxNodes* struct ncclXmlNode] */
   return offsetof(struct ncclXml, nodes) + sizeof(struct ncclXmlNode) * maxNodes;
 }
-static ncclResult_t xmlAlloc(struct ncclXml** xml/*出参，xml结构体指针  */, int maxNodes) {
+
+/*申请ncclXml*/
+static ncclResult_t xmlAlloc(struct ncclXml** xml/*出参，xml结构体指针  */, int maxNodes/*最大节点数*/) {
   char* mem;
   NCCLCHECK(ncclCalloc(&mem, xmlMemSize(maxNodes)));/**申请node */
   *xml = (struct ncclXml*)mem;
@@ -86,31 +88,36 @@ static ncclResult_t xmlAlloc(struct ncclXml** xml/*出参，xml结构体指针  
   return ncclSuccess;
 }
 
+/*在xmlnode中查找名称为attrName的属性，并返回其对应的索引*/
 static ncclResult_t xmlGetAttrIndex(struct ncclXmlNode* node, const char* attrName, int* index) {
-  *index = -1;
+  *index = -1;/*如果未找到，返回-1*/
   const int nAttrs = node->nAttrs;
   for (int a = 0; a < nAttrs; a++) {
     if (strncmp(node->attrs[a].key, attrName, MAX_STR_LEN) == 0) {
-      *index = a;
+      *index = a;/*查找成功，设置索引*/
       return ncclSuccess;
     }
   }
   return ncclSuccess;
 }
 
+/*取得下一个可用的空的属性位置*/
 static ncclResult_t xmlGetNextAttrIndex(struct ncclXmlNode* node, int* index) {
   if (node->nAttrs >= MAX_ATTR_COUNT) {
+	  /*节点属性过多，报错*/
     WARN("Error : too many XML attributes (max %d)", MAX_ATTR_COUNT);
     return ncclInternalError;
   }
-  *index = node->nAttrs++;
+  *index = node->nAttrs++;/*增加属性，分配空的属性位置*/
   return ncclSuccess;
 }
 
+/*取Node节点中attName对应的属性取值，取值通过value返回，如果此属性不存在，则属性值为NULL*/
 static ncclResult_t xmlGetAttr(struct ncclXmlNode* node, const char* attrName, const char** value) {
   int index;
+  /*在node中查找attrName对应的属性索引*/
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
-  *value = index == -1 ? NULL : node->attrs[index].value;
+  *value = index == -1 ? NULL /*无此属性，值为NULL*/: node->attrs[index].value;
   return ncclSuccess;
 }
 
@@ -182,6 +189,7 @@ static ncclResult_t xmlGetAttrFloatDefault(struct ncclXmlNode* node, const char*
   return ncclSuccess;
 }
 
+/*在xml中查找子节点tagName,如果找到通过node返回*/
 static ncclResult_t xmlFindTag(struct ncclXml* xml, const char* tagName, struct ncclXmlNode** node) {
   *node = NULL;
   for (int i = 0; i < xml->maxIndex; i++) {
@@ -207,15 +215,18 @@ static ncclResult_t xmlFindNextTag(struct ncclXml* xml, const char* tagName, str
   return ncclSuccess;
 }
 
-static ncclResult_t xmlFindTagKv(struct ncclXml* xml, const char* tagName, struct ncclXmlNode** node,
-                                 const char* attrName, const char* attrValue) {
+/*在xml中查找tagName的节点，并在其中查找attrName对应的属性，检查其属性值是否与attrValue匹配，如匹配，则返回此节点，否则返回NULL*/
+static ncclResult_t xmlFindTagKv(struct ncclXml* xml, const char* tagName/*节点名称*/, struct ncclXmlNode** node/*出参*/,
+                                 const char* attrName/*属性名*/, const char* attrValue) {
   *node = NULL;
   for (int i = 0; i < xml->maxIndex; i++) {
     struct ncclXmlNode* n = xml->nodes + i;
     if (strcmp(n->name, tagName) == 0) {
       const char* value;
+      /*取属性值*/
       NCCLCHECK(xmlGetAttr(n, attrName, &value));
       if (value && strcmp(value, attrValue) == 0) {
+    	  /*属性值也匹配，返回此属性*/
         *node = n;
         return ncclSuccess;
       }
@@ -277,30 +288,40 @@ static ncclResult_t xmlPrintNodeRecursive(struct ncclXmlNode* node, const char* 
   return ncclSuccess;
 }
 
+/*检查节点node是否已有属性attrName，如未有则创建并指明其属性值为value*/
 static ncclResult_t xmlSetAttrIfUnset(struct ncclXmlNode* node, const char* attrName, const char* value) {
   int index;
+  /*取此节点属性名称为attrName的索引*/
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
-  if (index != -1) return ncclSuccess;
+  if (index != -1) return ncclSuccess;/*有此属性，直接返回*/
+  /*无此属性，先分配空间属性索引*/
   NCCLCHECK(xmlGetNextAttrIndex(node, &index));
+  /*设置属性名称*/
   strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
   node->attrs[index].key[MAX_STR_LEN] = '\0';
+  /*设置属性值*/
   strncpy(node->attrs[index].value, value, MAX_STR_LEN);
   node->attrs[index].value[MAX_STR_LEN] = '\0';
   return ncclSuccess;
 }
 
+/*更新node节点的attrname属性的取值，其值为int型*/
 static ncclResult_t xmlSetAttrInt(struct ncclXmlNode* node, const char* attrName, const int value) {
   int index;
+  /*取此节点的属性attrName*/
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
   if (index == -1) {
+	  /*此属性不存在，分配并填充属性名称*/
     NCCLCHECK(xmlGetNextAttrIndex(node, &index));
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
+  /*设置此属性值*/
   snprintf(node->attrs[index].value, MAX_STR_LEN, "%d", value);
   return ncclSuccess;
 }
 
+/*更新node节点的attrname属性的取值，其值为float型*/
 static ncclResult_t xmlSetAttrFloat(struct ncclXmlNode* node, const char* attrName, const float value) {
   int index;
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
@@ -313,18 +334,23 @@ static ncclResult_t xmlSetAttrFloat(struct ncclXmlNode* node, const char* attrNa
   return ncclSuccess;
 }
 
-static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node, const char* attrName, const int64_t value) {
+/*更新节点node的名称为attrName的属性值，如果属性本身不存在，则增加属性*/
+static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node/*xml节点*/, const char* attrName/*属性名称*/, const int64_t value) {
   int index;
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
   if (index == -1) {
+	  /*没有发现此属性，取一个空属性位置*/
     NCCLCHECK(xmlGetNextAttrIndex(node, &index));
+    /*设置属性名称*/
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
+  /*设置属性值*/
   snprintf(node->attrs[index].value, MAX_STR_LEN, "%#" PRIx64, (uint64_t)value);
   return ncclSuccess;
 }
 
+/*在此节点下面查找名称为subName的子节点，通过Sub返回*/
 static ncclResult_t xmlGetSub(struct ncclXmlNode* node, const char* subName, struct ncclXmlNode** sub) {
   *sub = NULL;
   for (int s = 0; s < node->nSubs; s++) {
@@ -336,16 +362,20 @@ static ncclResult_t xmlGetSub(struct ncclXmlNode* node, const char* subName, str
   return ncclSuccess;
 }
 
-static ncclResult_t xmlGetSubKv(struct ncclXmlNode* node, const char* subName, struct ncclXmlNode** sub,
-                                const char* attrName, const char* attrValue) {
+/*在子节点中查找指定名称、指定属性、指定属性值的节点*/
+static ncclResult_t xmlGetSubKv(struct ncclXmlNode* node/*在此节点下查询所有子节点*/, const char* subName/*要匹配的子节点名称*/, struct ncclXmlNode** sub/*出参，查询到的子节点*/,
+                                const char* attrName/*属性名称*/, const char* attrValue/*属性值*/) {
   *sub = NULL;
+  /*遍历node的所有子节点*/
   for (int s = 0; s < node->nSubs; s++) {
     struct ncclXmlNode* subNode = node->subs[s];
+    /*检查子节点名称*/
     if (strcmp(subNode->name, subName) == 0) {
       const char* value;
+      /*取属性名称对应的属性值*/
       NCCLCHECK(xmlGetAttr(subNode, attrName, &value));
       if (value && strcmp(value, attrValue) == 0) {
-        *sub = node->subs[s];
+        *sub = node->subs[s];/*返回匹配的子节点*/
         return ncclSuccess;
       }
     }
@@ -360,39 +390,45 @@ static ncclResult_t xmlGetSubKvInt(struct ncclXmlNode* node, const char* subName
   return ncclSuccess;
 }
 
-static ncclResult_t xmlAddNode(struct ncclXml* xml, struct ncclXmlNode* parent, const char* subName,
-                               struct ncclXmlNode** sub) {
+/*自xml中分配一个可用的节点，将其名称设置为subName,其对应的父节点为parent,返回这个节点*/
+static ncclResult_t xmlAddNode(struct ncclXml* xml, struct ncclXmlNode* parent/*父节点*/, const char* subName/*要添加的子节点名称*/,
+                               struct ncclXmlNode** sub/*出参，添加的节点*/) {
   if (xml->maxIndex == xml->maxNodes) {
+	  /*XML节点数目过多*/
     WARN("Error : too many XML nodes (max %d)", xml->maxNodes);
     return ncclInternalError;
   }
+  /*选中一个空闲的node节点*/
   struct ncclXmlNode* s = xml->nodes + xml->maxIndex++;
   s->nSubs = 0;
   s->nAttrs = 0;
   *sub = s;
-  s->parent = parent;
+  s->parent = parent;/*指向父节点*/
   if (parent) {
     if (parent->nSubs == MAX_SUBS) {
+    	/*父节点的子节点数量过多*/
       WARN("Error : too many XML subnodes (max %d)", MAX_SUBS);
       return ncclInternalError;
     }
-    parent->subs[parent->nSubs++] = s;
+    parent->subs[parent->nSubs++] = s;/*使父节占也指向子节点*/
   }
+  /*设置节点名称*/
   strncpy(s->name, subName, MAX_STR_LEN);
   s->name[MAX_STR_LEN] = '\0';
   return ncclSuccess;
 }
 
+/*移除子节点*/
 static ncclResult_t xmlRemoveNode(struct ncclXmlNode* node) {
   node->type = NODE_TYPE_NONE;
   struct ncclXmlNode* parent = node->parent;
   if (parent == NULL) return ncclSuccess;
   int shift = 0;
   for (int s = 0; s < parent->nSubs; s++) {
-    if (parent->subs[s] == node) shift = 1;
-    else if (shift) parent->subs[s - 1] = parent->subs[s];
+    if (parent->subs[s] == node) shift = 1;/*自此之后均需要前移*/
+    else if (shift) parent->subs[s - 1] = parent->subs[s];/*前移*/
   }
-  parent->nSubs--;
+  parent->nSubs--;/*子节点数减1*/
   return ncclSuccess;
 }
 
@@ -432,15 +468,18 @@ struct kvDict {
   int value;
 };
 
+/*查字典确定str对应的值*/
 static ncclResult_t kvConvertToInt(const char* str, int* value, struct kvDict* dict) {
   struct kvDict* d = dict;
   while (d->str) {
+	  /*检查字典是否与str匹配，如果匹配，则返回字典指明的value*/
     if (strncmp(str, d->str, strlen(d->str)) == 0) {
       *value = d->value;
       return ncclSuccess;
     }
-    d++;
+    d++;/*尝试下一个*/
   }
+  /*没有找到，返回最后一个（即d->str为空的）值*/
   INFO(NCCL_GRAPH, "KV Convert to int : could not find value of '%s' in dictionary, falling back to %d", str, d->value);
   printMissingTopoDictValueHint();
   *value = d->value;

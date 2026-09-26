@@ -10,10 +10,10 @@
 ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, size_t size, int type, uint64_t offset,
                                         int fd, uint64_t mrFlags, ibv_mr** mhandle) {
   static thread_local uintptr_t pageSize = 0;
-  if (pageSize == 0) pageSize = sysconf(_SC_PAGESIZE);
-  struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;
-  uintptr_t addr = (uintptr_t)data & -pageSize;
-  size_t pages = ((uintptr_t)data + size - addr + pageSize - 1) / pageSize;
+  if (pageSize == 0) pageSize = sysconf(_SC_PAGESIZE);/*使用默认页大小*/
+  struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;/*取mrcache*/
+  uintptr_t addr = (uintptr_t)data & -pageSize;/*取负，导致页内偏移被置0，即addr按页对齐*/
+  size_t pages = ((uintptr_t)data + size - addr + pageSize - 1) / pageSize;/*取这段内存占用多少页*/
   std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
   for (int slot = 0; /*true*/; slot++) {
     if (slot == cache->population || addr < cache->slots[slot].addr) {
@@ -32,8 +32,10 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       if (fd != -1) {
         /* DMA-BUF support */
         if (!ncclIbDevs[base->ibDevN].capsProvider.mlx5.dataDirect) {
+        	/*非mellanox的卡，直接调用*/
           NCCLCHECK(wrap_ibv_reg_dmabuf_mr(&mr, base->pd, offset, pages * pageSize, addr, fd, flags));
         } else {
+        	/*调用mellanox函数*/
           NCCLCHECK(wrap_mlx5dv_reg_dmabuf_mr(&mr, base->pd, offset, pages * pageSize, addr, fd, flags,
                                               MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT));
         }
@@ -42,6 +44,7 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
           // Use IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
           NCCLCHECK(wrap_ibv_reg_mr_iova2(&mr, base->pd, (void*)addr, pages * pageSize, addr, flags));
         } else {
+        	/** 普通注册mr */
           NCCLCHECK(wrap_ibv_reg_mr(&mr, base->pd, (void*)addr, pages * pageSize, flags));
         }
       }
@@ -50,16 +53,17 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       if (slot != cache->population) {
         memmove(cache->slots + slot + 1, cache->slots + slot, (cache->population - slot) * sizeof(struct ncclIbMr));
       }
-      cache->slots[slot].addr = addr;
-      cache->slots[slot].pages = pages;
-      cache->slots[slot].refs = 1;
-      cache->slots[slot].mr = mr;
+      cache->slots[slot].addr = addr;/*记录注册的地址*/
+      cache->slots[slot].pages = pages;/*记录注册的页数*/
+      cache->slots[slot].refs = 1;/*引用数*/
+      cache->slots[slot].mr = mr;/*注册得到的mr*/
       cache->population += 1;
       *mhandle = mr;
       return ncclSuccess;
     } else if ((addr >= cache->slots[slot].addr) &&
                ((addr - cache->slots[slot].addr) / pageSize + pages) <= cache->slots[slot].pages) {
-      cache->slots[slot].refs += 1;
+    	/*被cache命中，直接返回之前获得的mr*/
+    	cache->slots[slot].refs += 1;
       *mhandle = cache->slots[slot].mr;
       return ncclSuccess;
     }
@@ -76,10 +80,13 @@ ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int 
     return ncclInternalError;
   }
   struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
+  /*用于记录返回的mr信息*/
   struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*)malloc(sizeof(struct ncclIbMrHandle));
+  /*为每个设备都注册*/
   for (int i = 0; i < base->vProps.ndevs; i++) {
     // Each ncclIbNetCommDevBase is at different offset in send and recv netComms
     struct ncclIbNetCommDevBase* devComm = ncclIbGetNetCommDevBase(base, i);
+    /*注册mr（dma buffer方式）*/
     NCCLCHECKGOTO(ncclIbRegMrDmaBufInternal2(devComm, data, size, type, offset, fd, mrFlags, mhandleWrapper->mrs + i),
                   ret, fail);
   }
@@ -92,11 +99,12 @@ fail:
 }
 
 ncclResult_t ncclIbRegMrDmaBuf(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle) {
-  return ncclIbRegMrDmaBufInternal(comm, data, size, type, offset, fd, 0ULL, mhandle);
+  return ncclIbRegMrDmaBufInternal(comm, data, size, type, offset, fd/*注册dma buffer*/, 0ULL, mhandle);
 }
 
-ncclResult_t ncclIbRegMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  return ncclIbRegMrDmaBufInternal(comm, data, size, type, 0ULL, -1, 0, mhandle);
+/** 注册内存 */
+ncclResult_t ncclIbRegMr(void* comm, void* data/*注册的地址*/, size_t size, int type, void** mhandle) {
+  return ncclIbRegMrDmaBufInternal(comm, data, size, type, 0ULL, -1/*普通非dma buffer*/, 0, mhandle);
 }
 
 ncclResult_t ncclIbDeregMrInternal(ncclIbNetCommDevBase* base, ibv_mr* mhandle) {
@@ -125,6 +133,7 @@ ncclResult_t ncclIbDeregMr(void* comm, void* mhandle) {
 
   struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*)mhandle;
   struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
+  /*移除mhandle下所有注册的mr*/
   for (int i = 0; i < base->vProps.ndevs; i++) {
     // Each ncclIbNetCommDevBase is at different offset in send and recv netComms
     struct ncclIbNetCommDevBase* devComm = ncclIbGetNetCommDevBase(base, i);

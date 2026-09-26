@@ -130,7 +130,7 @@ uint64_t ncclSocketDefaultMagic(void);
 
 // Initialize a socket
 ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddress* addr = NULL,
-                            uint64_t magic = ncclSocketDefaultMagic(), enum ncclSocketType type = ncclSocketTypeUnknown,
+                            uint64_t magic = ncclSocketDefaultMagic()/*默认magic*/, enum ncclSocketType type = ncclSocketTypeUnknown,
                             volatile uint32_t* abortFlag = NULL, int asyncFlag = 0/**默认是同步操作 */, int customRetry = 0);
 // Move an initialized socket into an uninitialized destination.
 void ncclSocketMove(struct ncclSocket* dst, struct ncclSocket* src);

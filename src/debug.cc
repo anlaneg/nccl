@@ -21,6 +21,7 @@
 #include "env.h"
 #include <cinttypes>
 
+/*系统debuglevel*/
 uint32_t ncclDebugLevelMask = NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED;
 static uint32_t ncclDebugTimestampLevels = 0;     // bitmaps of levels that have timestamps turned on
 static char ncclDebugTimestampFormat[256];        // with space for subseconds
@@ -144,6 +145,7 @@ static ncclResult_t getHostNameForLog(char* hostname, int maxlen, const char del
 
 // Convert the legacy scalar setting to its logical inclusive level set.
 static uint32_t ncclDebugLevelToMask(ncclDebugLogLevel level) {
+	/*由debug level转 mask*/
   if (level < NCCL_LOG_VERSION) return 0;
   uint32_t mask = 1u << NCCL_LOG_VERSION;
   if (level >= NCCL_LOG_INFO) mask |= 1u << NCCL_LOG_ATTN;
@@ -275,6 +277,7 @@ static void ncclDebugInit() {
   }
 
   ncclEpoch = std::chrono::steady_clock::now();
+  /*指明哪些子模块开启debug*/
   ncclDebugMask = ncclParamDebugSubsys();
   /*指明debuglevel*/
   COMPILER_ATOMIC_STORE(&ncclDebugLevelMask, tempNcclDebugLevelMask, std::memory_order_release);
