@@ -184,11 +184,14 @@ void* ncclGetGinPluginLib(enum ncclPluginType type) {
 void* ncclGetNetPluginLib(enum ncclPluginType type) {
   if (libNames[ncclPluginTypeNet]) {
     // increment the reference counter of the net library
-	  /*复用net信息*/
+	  /*此类型复用net类型的lib名称*/
     libNames[type] = strdup(libNames[ncclPluginTypeNet]);
+    /*此类型复用net类型的lib位置*/
     ncclPluginLibPaths[type] = strdup(ncclPluginLibPaths[ncclPluginTypeNet]);
+    /*打开此so文件，获得handle*/
     libHandles[type] = ncclOsDlopen(libNames[ncclPluginTypeNet]);
   }
+  /*返回此类型的handle*/
   return libHandles[type];
 }
 
@@ -204,6 +207,7 @@ ncclResult_t ncclClosePluginLib(void* handle, enum ncclPluginType type) {
   return ncclSuccess;
 }
 
+/*返回类型对应的lib名称*/
 const char* ncclGetPluginLibName(enum ncclPluginType type) {
   return libNames[type];
 }

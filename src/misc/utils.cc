@@ -245,11 +245,12 @@ static bool matchPort(const int port1, const int port2) {
   return false;
 }
 
-bool matchIfList(const char* string/**接口名称*/, int port, struct netIf* ifList, int listSize/*iflist数组大小*/, bool matchExact/*是否精确匹配*/, int* ifId) {
+bool matchIfList(const char* string/**接口名称*/, int port, struct netIf* ifList, int listSize/*iflist数组大小*/, bool matchExact/*是否精确匹配*/, int* ifId/*出参，匹配索引*/) {
   // Make an exception for the case where no user list is defined
   if (ifId) *ifId = -1;
-  if (listSize == 0) return true;
+  if (listSize == 0) return true;/*待匹配数组为空，返回true*/
 
+  /*名称匹配*/
   for (int i = 0; i < listSize; i++) {
     if (matchIf(string, ifList[i].prefix, matchExact) && matchPort(port, ifList[i].port)) {
       if (ifId) *ifId = i;

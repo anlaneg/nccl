@@ -234,7 +234,7 @@ struct ibv_port_attr {
 	enum ibv_port_state	state;
 	enum ibv_mtu		max_mtu;
 	enum ibv_mtu		active_mtu;
-	int			gid_tbl_len;
+	int			gid_tbl_len;/*gid table大小*/
 	uint32_t		port_cap_flags;
 	uint32_t		max_msg_sz;
 	uint32_t		bad_pkey_cntr;

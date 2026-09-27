@@ -79,7 +79,7 @@ enum ncclIbProvider {
 };
 
 struct ncclIbGidInfo {
-  uint8_t link_layer;
+  uint8_t link_layer;/*链路类型*/
   union ibv_gid localGid;
   int32_t localGidIndex;
 };
@@ -95,12 +95,12 @@ enum ncclIbRailPolicy {
 
 struct alignas(64) ncclIbDev {
   std::mutex mutex;
-  int device;
+  int device;/*设备索引*/
   uint64_t guid;
-  uint32_t vendorId;
+  uint32_t vendorId;/*设备vendorId*/
   uint32_t vendorPartId;
-  char fwVer[64];
-  uint8_t portNum;
+  char fwVer[64];/*设备fw版本*/
+  uint8_t portNum;/*对应的port号*/
   uint8_t link;/*link类型*/
   int speed;
   uint64_t currSpeed;
@@ -116,7 +116,7 @@ struct alignas(64) ncclIbDev {
   struct ncclIbMrCache mrCache;
   int ar; // ADAPTIVE_ROUTING
   uint32_t oooRqSize;  // valid only when ar=1
-  struct ibv_port_attr portAttr;
+  struct ibv_port_attr portAttr;/*设备port属性*/
   struct ncclIbStats stats;
   int dmaBufSupported;
   int16_t railId;

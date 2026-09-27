@@ -183,7 +183,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     backend->ncclGin = gin;
     backend->ginInstance = ginContext;
     backend->pluginIndex = pluginIndex;
-    ginState->supported = true;
+    ginState->supported = true;/*指明支持*/
 
     ncclGinProperties_t ginProperties;
     NCCLCHECK(gin->getGinProperties(&ginProperties));
@@ -205,27 +205,31 @@ static void initPluginLibsOnceFunc() {
   memset(pluginLibs, 0, NCCL_GIN_MAX_PLUGINS * sizeof(ginPluginLib_t));
   envGinPlugin = ncclGetEnv("NCCL_GIN_PLUGIN");
   if (envGinPlugin) {
-	  /*环境变量指明了gin插件*/
+	/*环境变量指明了gin插件*/
     INFO(NCCL_ENV | NCCL_NET, "NCCL_GIN_PLUGIN set by environment to %s", envGinPlugin);
+    /*指定为none,按空串处理*/
     if (strcasecmp(envGinPlugin, "none") == 0) envGinPlugin = "";
     envGinPluginList = strdup(envGinPlugin);
     // Iterate over list until the list is empty
+    /*环境变量指定的是一组插件列表*/
     ginPluginName = strtok_r(envGinPluginList, ",", &savePtr);
     while (ginPluginName) {
       // So, we can have at most( NCCL_GIN_MAX_PLUGINS - (NCCL_GIN_NUM_RESERVED_PLUGINS)) in the NCCL_GIN_PLUGIN list
-
       if (pluginCounter >= (NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_RESERVED_PLUGINS)) {
+    	  /*指定的插件数过多*/
         INFO(NCCL_NET | NCCL_ENV, "NCCL_GIN_PLUGIN list contains more than %d plugins, ignoring the rest",
              (NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_RESERVED_PLUGINS));
         break;
       }
       // need to leave space for the name + "\n"
       if ((strlen(ginPluginName) + 1) <= MAX_STR_LEN) {
+    	  /*设置指定的插件名称*/
         pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
         pluginLibs[pluginCounter].refCount = ncclParamGinPluginRefCount();
         strcpy(pluginLibs[pluginCounter].name, ginPluginName);
         pluginCounter++;
       } else {
+    	  /*插件名称过长*/
         INFO(NCCL_NET | NCCL_ENV,
              "NCCL_GIN_PLUGIN list contains a plugin name %s longer than %d characters, ignoring it.", ginPluginName,
              MAX_STR_LEN);
@@ -234,6 +238,7 @@ static void initPluginLibsOnceFunc() {
     }
     if (envGinPluginList) free(envGinPluginList);
   } else {
+	/*未指定环境变量，使用默认gin插件名称*/
     // Add default gin plugin
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
     pluginLibs[pluginCounter].refCount = ncclParamGinPluginRefCount();
@@ -242,14 +247,15 @@ static void initPluginLibsOnceFunc() {
 
   // Also check if the NET plugin has GIN support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetNetPluginLib(ncclPluginTypeGin)) != NULL) {
+	  /*复用net插件的gin支持成功*/
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
     strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeGin));
   }
 
   // Add internal ib plugin
-  pluginLibs[pluginCounter].ncclGin = &ncclGinIbGdaki;/*添加内置ib插件*/
+  pluginLibs[pluginCounter].ncclGin = &ncclGinIbGdaki;/*添加内置ginib gdaki插件*/
   pluginLibs[pluginCounter].state = ncclGinPluginStateInitReady;
-  pluginLibs[pluginCounter].version = ncclGinVersion[0];
+  pluginLibs[pluginCounter].version = ncclGinVersion[0];/*设置版本号*/
   pluginCounter++;
   // Add gin proxy as fallback
   pluginLibs[pluginCounter].ncclGin = &ncclGinProxy;/*添加gin代理*/
@@ -270,8 +276,10 @@ static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex
   return ncclSuccess;
 }
 
+/*gin插件初始化*/
 ncclResult_t ncclGinInit(struct ncclComm* comm) {
   if (comm->compCap < 70) {
+	  /*算力能力过低，指明不支持*/
     /* GIN only supported for Volta and later */
     INFO(NCCL_INIT, "Compute Capability (%d) is not sufficient to enable GIN.  Require Volta (70) or newer.",
          comm->compCap);

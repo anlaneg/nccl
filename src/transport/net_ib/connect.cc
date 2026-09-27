@@ -100,7 +100,7 @@ static sa_family_t envIbAddrFamily(void) {
   sa_family_t family = AF_INET;
   const char* env = ncclGetEnv("NCCL_IB_ADDR_FAMILY");
   if (env == NULL || strlen(env) == 0) {
-    return family;
+    return family;/*取地址family*/
   }
 
   INFO(NCCL_ENV, "NCCL_IB_ADDR_FAMILY set by environment to %s", env);
@@ -111,18 +111,20 @@ static sa_family_t envIbAddrFamily(void) {
     family = AF_INET6;
   }
 
-  return family;
+  return family;/*依据环境变量名称决定family*/
 }
 
+/*返回环境变量指定的address与mask,如果环境变量未指定或指定格式有误，返回NULL*/
 static void* envIbAddrRange(sa_family_t af, int* mask) {
   *mask = 0;
   static struct in_addr addr;
   static struct in6_addr addr6;
+  /*按af确定具体地址指针*/
   void* ret = (af == AF_INET) ? (void*)&addr : (void*)&addr6;
 
   const char* env = ncclGetEnv("NCCL_IB_ADDR_RANGE");
   if (NULL == env || strlen(env) == 0) {
-    return NULL;
+    return NULL;/*未设置环境变量，直接返回NULL*/
   }
 
   INFO(NCCL_ENV, "NCCL_IB_ADDR_RANGE set by environment to %s", env);
@@ -132,23 +134,27 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
   char* addrStrPtr = addrString;
   char* maskStrPtr = strstr(addrString, "/");
   if (NULL == maskStrPtr) {
-    return NULL;
+    return NULL;/*没有mask标记，返回NULL*/
   }
-  *(maskStrPtr++) = '\0';
+  *(maskStrPtr++) = '\0';/*将地址与mask隔开*/
 
+  /*字符串转地址*/
   if (inet_pton(af, addrStrPtr, ret) == 0) {
     INFO(NCCL_INIT | NCCL_NET, "NET/IB: Ip address '%s' is invalid for family %s, ignoring address", addrStrPtr,
          (af == AF_INET) ? "AF_INET" : "AF_INET6");
     return NULL;
   }
 
+  /*字符串转mask*/
   *mask = (int)strtol(maskStrPtr, NULL, 10);
   if (af == AF_INET && *mask > 32) {
+	  /*mask长度检查*/
     INFO(NCCL_INIT | NCCL_NET, "NET/IB: Ip address mask '%d' is invalid for family %s, ignoring mask", *mask,
          (af == AF_INET) ? "AF_INET" : "AF_INET6");
     *mask = 0;
     ret = NULL;
   } else if (af == AF_INET6 && *mask > 128) {
+	  /*mask长度检查*/
     INFO(NCCL_INIT | NCCL_NET, "NET/IB: Ip address mask '%d' is invalid for family %s, ignoring mask", *mask,
          (af == AF_INET) ? "AF_INET" : "AF_INET6");
     *mask = 0;
@@ -158,9 +164,12 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
   return ret;
 }
 
+/*从gid反推采用的是哪个family*/
 static sa_family_t getGidAddrFamily(union ibv_gid* gid) {
   const struct in6_addr* a = (struct in6_addr*)gid->raw;
+  /*v4映射*/
   bool isIpV4Mapped = ((a->s6_addr32[0] | a->s6_addr32[1]) | (a->s6_addr32[2] ^ htonl(0x0000ffff))) == 0UL;
+  /*v4组播映射*/
   bool isIpV4MappedMulticast =
     (a->s6_addr32[0] == htonl(0xff0e0000) && ((a->s6_addr32[1] | (a->s6_addr32[2] ^ htonl(0x0000ffff))) == 0UL));
   return (isIpV4Mapped || isIpV4MappedMulticast) ? AF_INET : AF_INET6;
@@ -266,11 +275,15 @@ static ncclResult_t ncclIbRoceGetVersionNum(const char* deviceName, int portNum,
 static ncclResult_t ncclUpdateGidIndex(struct ibv_context* context, uint8_t portNum, sa_family_t af, void* prefix,
                                        int prefixlen, int roceVer, int gidIndexCandidate, int* gidIndex) {
   union ibv_gid gid, gidCandidate;
+  /*取gid index对应的gid*/
   NCCLCHECK(wrap_ibv_query_gid(context, portNum, *gidIndex, &gid));
+  /*取备选的index对应的gid*/
   NCCLCHECK(wrap_ibv_query_gid(context, portNum, gidIndexCandidate, &gidCandidate));
 
   sa_family_t usrFam = af;
+  /*取gid对应的family*/
   sa_family_t gidFam = getGidAddrFamily(&gid);
+  /*取备选的gid对应的family*/
   sa_family_t gidCandidateFam = getGidAddrFamily(&gidCandidate);
   bool gidCandidateMatchSubnet = matchGidAddrPrefix(usrFam, prefix, prefixlen, &gidCandidate);
 
@@ -294,11 +307,11 @@ static ncclResult_t ncclUpdateGidIndex(struct ibv_context* context, uint8_t port
 }
 
 ncclResult_t ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
-                               int* gidIndex) {
+                               int* gidIndex/*出参，使用哪个gid*/) {
   int gidTblLen = portAttr->gid_tbl_len;
 
   // for IB, choose GID Index that will have routable FLID if present
-  if (portAttr->link_layer == IBV_LINK_LAYER_INFINIBAND) {
+  if (portAttr->link_layer == IBV_LINK_LAYER_INFINIBAND) {/*ib类型情况*/
     union ibv_gid gid;
     int routableGidIndex = ncclParamIbRoutableFlidIbGidIndex();
     if (routableGidIndex < gidTblLen) {
@@ -313,20 +326,22 @@ ncclResult_t ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum, str
   }
 
   // for ROCE
-  *gidIndex = ncclParamIbGidIndex();
+  *gidIndex = ncclParamIbGidIndex();/*容许通过环境变量指定index*/
   if (*gidIndex >= 0) {
-    return ncclSuccess;
+    return ncclSuccess;/*如果设置，直接返回*/
   }
 
+  /*确定地址family*/
   sa_family_t userAddrFamily = envIbAddrFamily();
-  int userRoceVersion = ncclParamIbRoceVersionNum();
+  int userRoceVersion = ncclParamIbRoceVersionNum();/*取roce版本，当前默认为2*/
   int prefixlen;
   void* prefix = envIbAddrRange(userAddrFamily, &prefixlen);
 
+  /*遍历gid table*/
   *gidIndex = 0;
   for (int gidIndexNext = 1; gidIndexNext < gidTblLen; ++gidIndexNext) {
-    NCCLCHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix, prefixlen, userRoceVersion, gidIndexNext,
-                                 gidIndex));
+    NCCLCHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily/*地址family*/, prefix/*前缀*/, prefixlen/*前缀长度*/, userRoceVersion/*roce版本*/, gidIndexNext/*备选*/,
+                                 gidIndex/*出参，首个*/));
   }
 
   return ncclSuccess;

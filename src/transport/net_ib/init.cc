@@ -68,10 +68,10 @@ static int ncclIbCompareVDevsByPlane(const void* a, const void* b) {
   return ncclIbCompareDevs(&ncclIbDevs[idxA], &ncclIbDevs[idxB]);
 }
 
-static ncclResult_t ncclIbGetPciPath(char* devName, char** path, char* fullPath) {
+static ncclResult_t ncclIbGetPciPath(char* devName/*ib设备名称*/, char** path/*取设备路径*/, char* fullPath) {
   char devicePath[PATH_MAX];
   snprintf(devicePath, PATH_MAX, "/sys/class/infiniband/%s/device", devName);
-  char* p = realpath(devicePath, NULL);
+  char* p = realpath(devicePath, NULL);/*取设备路径*/
   // set fullPath to empty if realpath returned NULL
   snprintf(fullPath, PATH_MAX, "%s", p ? p : "");
   if (p == NULL) {
@@ -500,7 +500,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         struct ibv_device_attr devAttr;
         memset(&devAttr, 0, sizeof(devAttr));
         if (ncclSuccess != wrap_ibv_query_device(context, &devAttr)) {
-        	/** 查询设备属性失败，跳过该设备 */
+          /** 查询设备属性失败，跳过该设备 */
           WARN("NET/IB : Unable to query device %s", devices[d]->name);
           if (ncclSuccess != wrap_ibv_close_device(context)) {
             ret = ncclInternalError;
@@ -512,6 +512,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
           struct ibv_port_attr portAttr;
           if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
+        	  /*查询port属性*/
             WARN("NET/IB : Unable to query port_num %d", port_num);
             continue;
           }
@@ -552,7 +553,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             }
           }
           for (int dev = devOffset; dev < devCount; ++dev) {
-            ncclIbDevs[ncclNIbDevs].device = d;
+            ncclIbDevs[ncclNIbDevs].device = d;/*记录设备索引*/
             ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;/*记录设备对应的provider*/
             ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
             ncclIbDevs[ncclNIbDevs].vendorId = devAttr.vendor_id;
@@ -565,6 +566,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
             // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
             uint64_t querySpeed = 0;
+            /*取speed*/
             if (wrap_ibv_query_port_speed(context, port_num, &querySpeed) == ncclSuccess) {
               // ibv_query_port_speed returns speed in granularity of 100 Mbps
               ncclIbDevs[ncclNIbDevs].speed = querySpeed * 100;
@@ -597,6 +599,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
             NCCLCHECK(ncclIbStatsInit(&ncclIbDevs[ncclNIbDevs].stats));
 
+            /*如果是命中userIfId,则取railId,planeId*/
             ncclIbDevs[ncclNIbDevs].railId = (userIfId >= 0) ? userIfs[userIfId].rail : -1;
             ncclIbDevs[ncclNIbDevs].planeId = (userIfId >= 0) ? userIfs[userIfId].plane : -1;
 

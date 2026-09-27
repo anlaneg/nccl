@@ -14,6 +14,7 @@ char ncclIbIfName[MAX_IF_NAME_SIZE + 1];
 union ncclSocketAddress ncclIbIfAddr;
 
 int ncclNMergedIbDevs = -1;
+/*ib设备数目*/
 int ncclNIbDevs = -1;
 struct ncclIbMergedDev ncclIbMergedDevs[MAX_IB_VDEVS];
 struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];

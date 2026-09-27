@@ -508,8 +508,8 @@ fail:
   goto exit;
 }
 
-/*如果指定了NCCL_COMM_ID环境变量，则由环境变量设置root地址；否则自身创建root*/
-ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle, struct ncclComm* comm) {
+/*如果指定了NCCL_COMM_ID环境变量，则由环境变量设置root地址(即handle）；否则自身创建root，用bootstrapNetIfAddr做handle*/
+ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle/*出参*/, struct ncclComm* comm) {
   memset(handle, 0, sizeof(ncclBootstrapHandle));
 
   const char* env = ncclGetEnv("NCCL_COMM_ID");
@@ -554,7 +554,7 @@ ncclResult_t bcastGrowHandle(struct ncclBootstrapHandle* handle, struct ncclComm
   // Single rank parent already has the handle, no need to broadcast
   if (parent->nRanks == 1) return ncclSuccess;
   if (isRoot) {
-    NCCLCHECK(bootstrapSend(parent->bootstrap, 0, BOOTSTRAP_TAG_GROW_BOUNDARY, handle,
+    NCCLCHECK(bootstrapSend(parent->bootstrap, 0/*发给0号*/, BOOTSTRAP_TAG_GROW_BOUNDARY, handle,
                             sizeof(struct ncclBootstrapHandle)));
     NCCLCHECK(bootstrapSend(parent->bootstrap, parent->nRanks - 1, BOOTSTRAP_TAG_GROW_BOUNDARY, handle,
                             sizeof(struct ncclBootstrapHandle)));
