@@ -167,8 +167,8 @@ struct ncclProxyConnector {
 
 struct ncclConnector {
   int connected;
-  int hasSeen;
-  int p2pOnly;
+  int hasSeen;/**标明已完成PREConnect */
+  int p2pOnly;/** 是否仅用于P2P操作 */
   struct ncclProxyConnector proxyConn;
   struct ncclTransportComm* transportComm;/*对应的transport*/
   void* transportResources;

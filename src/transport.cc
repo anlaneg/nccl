@@ -36,10 +36,10 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
     struct ncclTransport* transport = ncclTransports[t];
     struct ncclTransportComm* transportComm = type == 1 ? &transport->send : &transport->recv;
     int ret = 0;
-    /**检查此transport是否可以连接 */
+    /**检查此transport是否可以连接(比如节点内，节点外) */
     NCCLCHECK(transport->canConnect(&ret/*出参，可连接时为真*/, comm, graph, myInfo, peerInfo));
     if (ret) {
-      /*t号transport可连接*/
+      /*t号transport可连接，记录此连接对应的transportComm指针*/
       connector->transportComm = transportComm;
       /*初始化*/
       NCCLCHECK(transportComm->setup(comm, graph, myInfo, peerInfo, connect, connector, channelId, connIndex));
@@ -131,13 +131,14 @@ ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP
   return ncclSuccess;
 }
 
-ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex) {
+ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph/*用哪个算法，NULl表示p2p setup */, int connIndex) {
   // Stream used during transport setup; need for P2P pre-connect + CUDA Graph
   ncclResult_t ret = ncclSuccess;
   struct ncclConnect** data; // Store intermediate send/recvData structs for connect
   struct ncclConnect** recvData = NULL; // Points to entries inside data for given recv connection within a channel
   struct ncclConnect** sendData = NULL; // Points to entries inside data for given send connection within a channel
   int done = 0;
+  /**/
   int maxPeers = ncclParamConnectRoundMaxPeers();
 
   struct timeval timeStart, timeLast;
@@ -178,7 +179,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     }
     recvData[p] = data[p];
     int sendChannels = 0, recvChannels = 0/*记录recvChannel总数*/;
-    int type;
+    int type;/*确定使用哪种transport*/
     TIME_START(0);
     for (int c = 0; c < MAXCHANNELS; c++) {
       if (recvMask & (1ULL << c)) {
@@ -211,11 +212,13 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
       }
     } else {
       if (recvChannels) {
+    	  /*发送recvData[p]*/
         NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag, recvData[p],
                                     sizeof(struct ncclConnect) * recvChannels),
                       ret, fail);
       }
       if (sendChannels) {
+    	  /*发送sendData[p]*/
         NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, sendPeer, bootstrapTag, sendData[p],
                                     sizeof(struct ncclConnect) * sendChannels),
                       ret, fail);

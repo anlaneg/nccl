@@ -82,33 +82,36 @@ inline ncclResult_t ncclGroupErrCheck(ncclResult_t ret) {
 
 // Add comm to this thread's group
 inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
+	/*如未加入则处理，否则不处理*/
   if (comm->groupNext[type] == reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID)) {
     // Insert comm into ncclGroupCommHead adjacent to sibling comms. This preserves
     // the users program order yet insures siblings occur consecutively. This
     // is required by doLaunches() in "group.cc".
-    struct ncclComm** pp = &ncclGroupCommHead[type];
+    struct ncclComm** pp = &ncclGroupCommHead[type];/*本group内type类型的首个comm*/
+    /*comm->intraComm0是本进程负责的所有rank中首个rank对应的comm,查找已挂载的同族comm*/
     while (*pp != nullptr && comm->intraComm0 != (*pp)->intraComm0) pp = &(*pp)->groupNext[type];
 
     // didn't find its clique, we need to insert it with ascending order based on commHash
-    if (*pp == nullptr) {
+    if (*pp == nullptr) {/*没有找到（即同族没有加入），按commHash大小在ncclGroupCommHead链表上排队*/
       pp = &ncclGroupCommHead[type];
       while (*pp != nullptr && (*pp)->commHash < comm->commHash) pp = &(*pp)->groupNext[type];
     }
-    comm->groupNext[type] = *pp;
-    *pp = comm;
+    comm->groupNext[type] = *pp;/*先将尾链挂好*/
+    *pp = comm;/*再让前链指向自身（完成串入）*/
     // Comms gets a new memory stack scope upon joining. Each task batched for
     // this comm is allocated there.
     if (type == ncclGroupTaskTypeCollective || type == ncclGroupTaskTypeRawTask) {
       // Initialize planner
       ncclMemoryStackPush(&comm->memScoped);
-      ncclKernelPlanner::Peer* tmp = comm->planner.peers;
-      ncclIntruQueue<ncclTaskRma, &ncclTaskRma::next>* tmpRmaQueues = comm->planner.rmaTaskQueues;
+      ncclKernelPlanner::Peer* tmp = comm->planner.peers;/*保存此值*/
+      ncclIntruQueue<ncclTaskRma, &ncclTaskRma::next>* tmpRmaQueues = comm->planner.rmaTaskQueues;/*保存此值*/
       int numRmaCtx = comm->config.numRmaCtx;
-      memset(&comm->planner, 0, sizeof(comm->planner));
-      comm->planner.peers = tmp;
+      memset(&comm->planner, 0, sizeof(comm->planner));/*清空planner中所有内容*/
+      comm->planner.peers = tmp;/*还原peers指针*/
       comm->planner.bcast_info.minBcastPeer = INT_MAX;
       comm->planner.bcast_info.maxBcastPeer = INT_MIN;
-      comm->planner.rmaTaskQueues = tmpRmaQueues;
+      comm->planner.rmaTaskQueues = tmpRmaQueues;/*还原rmaTaskQueues*/
+      /*重新初始化rmaTaskQueues中各队列*/
       if (comm->planner.rmaTaskQueues != NULL) {
         for (int i = 0; i < numRmaCtx; i++) {
           ncclIntruQueueConstruct(&comm->planner.rmaTaskQueues[i]);
@@ -116,6 +119,7 @@ inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
       }
     }
   }
+  /*同一group内需要统一的阻塞非阻塞用法（因此这里可以直接使用最后一个comm的情况）*/
   ncclGroupBlocking = comm->config.blocking;
 }
 

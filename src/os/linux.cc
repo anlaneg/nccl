@@ -589,6 +589,7 @@ void ncclOsCpuZero(ncclAffinity& affinity) {
   CPU_ZERO(&affinity);
 }
 
+/*取cpu数量*/
 int ncclOsCpuCount(const ncclAffinity& affinity) {
   return CPU_COUNT(&affinity);
 }
@@ -616,6 +617,7 @@ ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity) {
   return ncclSuccess;
 }
 
+/*设置亲和*/
 ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity) {
   int result = sched_setaffinity(0, sizeof(ncclAffinity), &affinity);
   if (result == -1) {

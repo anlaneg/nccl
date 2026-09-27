@@ -1209,10 +1209,13 @@ static ncclResult_t socketConnect(void* commState, int peer, int tag, struct ncc
   struct bootstrapState* state = (struct bootstrapState*)commState;
 
   struct socketAckInfo ack = (struct socketAckInfo){state->rank, tag};
+  /*初始化socket*/
   NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap,
                                state->abortFlag),
                 ret, fail);
+  /*执行连接*/
   NCCLCHECKGOTO(ncclSocketConnect(sock), ret, fail);
+  /*向对端发送ack*/
   NCCLCHECKGOTO(socketSend(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
   return ncclSuccess;
 fail:
@@ -1304,6 +1307,7 @@ ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int s
   bool encrypted;
   NCCLCHECK(ncclGetCryptConnectionMode(&encrypted));
   if (!encrypted) {
+	  /*不加密，执行同步发送*/
     NCCLCHECK(bootstrapSendSync(commState, peer, tag, data, size));
     return ncclSuccess;
   }

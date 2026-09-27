@@ -493,9 +493,9 @@ struct ncclKernelPlanner {
 
   struct Peer {
     bool sendSeen, recvSeen;
-    struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> sendQueue;
-    struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> recvQueue;
-    struct ncclIntruQueue<struct ncclTaskBcast, &ncclTaskBcast::next> bcastQueue;
+    struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> sendQueue;/*发送队列*/
+    struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> recvQueue;/*接收队列*/
+    struct ncclIntruQueue<struct ncclTaskBcast, &ncclTaskBcast::next> bcastQueue;/*广播队列*/
   };
   struct ncclTaskCollSorter collSorter;
   struct Peer* peers /*[nRanks]*/;/*以gpu编号为索引，记录每个gpu的发送和接收队列 */
@@ -513,7 +513,7 @@ struct ncclKernelPlanner {
   // The list of user streams aggregated over all tasks present.
   struct ncclCudaStreamList* streams;
   // The most recent user stream. Ignored if streams==nullptr
-  cudaStream_t streamRecent;
+  cudaStream_t streamRecent;/*记录最近最到的cudastream*/
   // The graph capturing all user streams or invalid if none. Thus we restrict the
   // user that all streams must be captured in the same graph or not captured
   // at all. Technically we could probably relax this, but that would mean
@@ -565,7 +565,7 @@ struct ncclKernelPlanner {
 #define NCCL_MAGIC 0x0280028002800280 // Nickel atomic number is 28.
 
 typedef enum ncclGroupTaskType {
-  ncclGroupTaskTypeCollective = 0,
+  ncclGroupTaskTypeCollective = 0,/*集合通信类型的task*/
   ncclGroupTaskTypeSymRegister = 1,
   ncclGroupTaskTypeRawTask = 2,
   ncclGroupTaskTypeMgmtTask = 3,
@@ -616,8 +616,8 @@ struct ncclComm {
   void* bootstrap;/*记录bootstrap阶段状态struct bootstrapState*/
   bool isGrow; // true if this comm is created via ncclCommGrow
   // Bitmasks for ncclTransportP2pSetup
-  uint64_t* connectSend;/*数组，每个元素指出发送可使用的channel id*/
-  uint64_t* connectRecv;/*数组，每个元素指出接收可使用的channel id*/
+  uint64_t* connectSend;/*数组，每个元素指出发送可使用的channel id mask*/
+  uint64_t* connectRecv;/*数组，每个元素指出接收可使用的channel id mask*/
   struct ncclTopoGraph graphs[NCCL_NUM_ALGORITHMS];
   int maxTreePattern;
   bool initAlgoChannels[NCCL_NUM_ALGORITHMS];
@@ -680,7 +680,7 @@ struct ncclComm {
   bool ccEnable;
 
   // Counter for tracking CUDA launches (P2P and collectives included)
-  uint64_t opCount;
+  uint64_t opCount;/*在队中的操作数（通过taskAppend）*/
   // Collective operation counter
   uint64_t collOpCount;
 
@@ -787,7 +787,12 @@ struct ncclComm {
 
   // Next comm in this thread's active ncclGroup[Start|End](). Holds "0x1" when
   // this comm is not yet in a group.
-  struct ncclComm* groupNext[ncclGroupTaskTypeNum];/** 下一个任务的communicator (按任务类型分组)*/
+  /** 下一个任务的communicator (按任务类型分组)
+   * 如果 groupNext[type] 是 0x01 → 未加入 → 执行插入。
+   * 如果 非 0x01 → 已在 group 中 → 跳过（第二次调用不重复加入）。
+   * 每种类型独立指针，同一个 comm 可以同时挂在多个类型链表上（比如同时有 Collective 任务和 P2P 任务）。
+   * */
+  struct ncclComm* groupNext[ncclGroupTaskTypeNum];
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;/*用于将自已串连到preconnect*/
   int localPersistentRefs; // number of persistent plan-lists capturing this comm

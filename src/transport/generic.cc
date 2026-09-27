@@ -19,21 +19,26 @@ ncclResult_t ncclTransportRingConnect(struct ncclComm* comm) {
   struct ringConnInfo* ringInfo = NULL;
   ncclResult_t ret = ncclSuccess;
   if (comm && comm->nRanks > 1) {
+	/*先初始化为默认值*/
     comm->useGdr = true;
     comm->useNetPXN = false;
     for (int c = 0; c < comm->nChannels; c++) {
       struct ncclChannel* channel = comm->channels + c;
-      NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->ring.prev, 1, &channel->ring.next, 0), ret, fail);
+      NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->ring.prev/*前一个*/, 1, &channel->ring.next/*后一个*/, 0), ret, fail);
     }
     NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &comm->graphs[NCCL_ALGO_RING], 0), ret, fail);
     if (ncclParamLocalRegister() || ncclParamGraphRegister()) {
       NCCLCHECK(ncclCalloc(&ringInfo, comm->nRanks));
+      /*填写自身是否支持gdr,使用netPxn*/
       ringInfo[comm->rank].useGdr = comm->useGdr;
       ringInfo[comm->rank].useNetPXN = comm->useNetPXN;
+      /*完成所有peer交换*/
       NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, ringInfo, sizeof(struct ringConnInfo)), ret, fail);
+      /*只要有一个ring不支持gdr，则不使用Gdr,只要有一个支持netpxn,则使用pxn*/
       for (int i = 0; i < comm->nRanks; ++i) {
         if (!ringInfo[i].useGdr) comm->useGdr = false;
         if (ringInfo[i].useNetPXN) comm->useNetPXN = true;
+        /*已确定两者是否使用，直接跳出*/
         if (comm->useGdr == false && comm->useNetPXN == true) break;
       }
     }

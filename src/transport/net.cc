@@ -2130,7 +2130,7 @@ static ncclResult_t recvProxyDeregBuffer(struct ncclProxyConnection* connection,
   return ncclSuccess;
 }
 
-/**提供跨节点通信(其下封装nettransport,比如socket,ib等) */
+/**提供跨节点通信(其下封装net transport,比如socket,ib等) */
 struct ncclTransport netTransport = {
   "NET",
   canConnect,/*判断是否可连接*/

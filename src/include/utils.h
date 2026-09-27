@@ -234,15 +234,17 @@ T* ncclIntruQueueMpscAbandon(struct ncclIntruQueueMpsc<T, next>* me);
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ncclMemoryStack {
-  struct Hunk {
+  struct Hunk {/**一整块大内存 */
+    /**链接上一块 */
     struct Hunk* above; // reverse stack pointer
     size_t size; // size of this allocation (including this header struct)
   };
+  /**大对象（超过Hunk大小的） */
   struct Unhunk { // proxy header for objects allocated out-of-hunk
     struct Unhunk* next;
     void* obj;
   };
-  struct Frame {
+  struct Frame {/**一次push/pop操作的内存帧 */
     struct Hunk* hunk; // top of non-empty hunks
     uintptr_t bumper, end; // points into top hunk
     struct Unhunk* unhunks;
@@ -253,7 +255,7 @@ struct ncclMemoryStack {
   static void* allocate(struct ncclMemoryStack* me, size_t size, size_t align);
 
   struct Hunk stub;
-  struct Frame topFrame;
+  struct Frame topFrame;/**栈顶帧 */
 };
 
 inline void ncclMemoryStackConstruct(struct ncclMemoryStack* me) {
@@ -302,6 +304,8 @@ inline Header* ncclMemoryStackAllocInlineArray(struct ncclMemoryStack* me, size_
   return (Header*)obj;
 }
 
+/*申请内存后常见的需要一一释放，这个模块提供了多次申请一次释放（通过ncclMemoryStackPop）
+ * 且支持嵌套（此函数即为嵌套开始）*/
 inline void ncclMemoryStackPush(struct ncclMemoryStack* me) {
   using Frame = ncclMemoryStack::Frame;
   Frame tmp = me->topFrame;
@@ -334,6 +338,7 @@ inline void ncclMemoryPoolConstruct(struct ncclMemoryPool* me) {
   me->head = nullptr;
 }
 
+/*通过此接口进行内存申请*/
 template <typename T>
 inline T* ncclMemoryPoolAlloc(struct ncclMemoryPool* me, struct ncclMemoryStack* backing) {
   using Cell = ncclMemoryPool::Cell;

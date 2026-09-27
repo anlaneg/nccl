@@ -405,7 +405,7 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
       memcpy((void*)(workNode + 1), (void*)&devWork, workNode->size);
     }
   next:
-    ncclIntruQueueEnqueue(&planner->collWorkQueue, workNode);
+    ncclIntruQueueEnqueue(&planner->collWorkQueue, workNode);/*入队到collWorkQueue中*/
     task = task->next;
   }
   if (!ncclIntruQueueEmpty(&planner->tmpCollWorkQueue)) {
@@ -1250,6 +1250,7 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
 
   plan->threadPerBlock = std::max(plan->threadPerBlock, NCCL_MAX_NTHREADS);
   if (!plan->kernelSpecialized) {
+	  /*选p2p对应的kernel function*/
     plan->kernelFn = ncclDevKernelForFunc[ncclDevFuncId_P2p()];
     plan->kernelSpecialized = ncclDevKernelForFuncIsSpecialized[ncclDevFuncId_P2p()];
   }
@@ -1892,7 +1893,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   ncclResult_t ret = ncclSuccess;
   struct ncclKernelPlanner* planner = &comm->planner;
   int nChannels = countOneBits(plan->channelMask);
-  void* sym = plan->kernelFn;
+  void* sym = plan->kernelFn;/*计划采用的kernel函数*/
   dim3 grid = {(unsigned)nChannels, 1, 1};
   dim3 block = {(unsigned)plan->threadPerBlock, 1, 1};
   int smem = plan->isSymColl ? plan->kernelDynSmem : ncclShmemDynamicSize(comm->cudaArch);
@@ -1910,6 +1911,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   int driverVersion;
   NCCLCHECKGOTO(ncclCudaDriverVersion(&driverVersion), ret, do_return);
 
+  /*通过sym查找function*/
   CUfunction fn;
   CUDACHECKGOTO(cudaGetFuncBySymbol(&fn, sym), ret, do_return);
 
@@ -2006,7 +2008,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
       WARN("CUDA launch-completion events require CUDA 12.3 or newer; recording the user event before launch");
       CUDACHECKGOTO(cudaEventRecord(plan->launchCompletionEvent, launchStream), ret, do_return);
     }
-    CUCHECKGOTO(cuLaunchKernel(fn, grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, launchStream, nullptr,
+    CUCHECKGOTO(cuLaunchKernel(fn/*cuda函数*/, grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, launchStream, nullptr,
                                extra),
                 ret, do_return);
   }
@@ -2670,17 +2672,17 @@ ncclResult_t ncclPlannerSetCapturingGraph(struct ncclComm* comm, struct ncclInfo
   return ncclSuccess;
 }
 
-static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, ncclFunc_t coll, ncclFunc_t collAPI,
-                                  void* buff, size_t count, ncclDataType_t datatype, int peer, bool allowUB) {
+static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, ncclFunc_t coll/** 操作符 */, ncclFunc_t collAPI,
+                                  void* buff/** 数据指针 */, size_t count/**数据数目 */, ncclDataType_t datatype/**数据类型 */, int peer/*对端编号*/, bool allowUB) {
   struct ncclKernelPlanner* planner = &comm->planner;
 
   // Determine peer and basic parameters.
-  ssize_t nBytes = count * ncclTypeSize(datatype);
-  bool isSendNotRecv = coll == ncclFuncSend;
+  ssize_t nBytes = count * ncclTypeSize(datatype);/** 计算数据大小，单位字节 */
+  bool isSendNotRecv = coll == ncclFuncSend;/** 是否为send操作 */
 
   // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
-  ncclGroupCommJoin(comm, ncclGroupTaskTypeCollective);
-  info->coll = coll;
+  ncclGroupCommJoin(comm, ncclGroupTaskTypeCollective);/*将此Comm串起*/
+  info->coll = coll;/** 记录操作符 */
   // Set capturing graph. Called here so that profiler can emit a group API event with this information
   NCCLCHECK(ncclPlannerSetCapturingGraph(comm, info));
   bool isGraphCaptured = ncclCudaGraphValid(planner->capturingGraph);
@@ -2693,26 +2695,31 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
   p2p->func = coll;
   p2p->collAPI = collAPI;
   p2p->buff = buff;
-  p2p->count = count;
-  p2p->datatype = datatype;
-  p2p->root = peer;
-  p2p->bytes = nBytes;
+  p2p->count = count;/** 数据数目 */
+  p2p->datatype = datatype;/** 数据类型 */
+  p2p->root = peer;/** 对端编号 */
+  p2p->bytes = nBytes;/** 数据大小，单位字节 */
   p2p->allowUB = allowUB;
   p2p->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
   p2p->eActivationMask = ncclProfilerApiState.eActivationMask;
   p2p->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
   p2p->p2pApiEventHandle = ncclProfilerApiState.p2pApiEventHandle;
   p2p->profilerTag = info->collConfig.userProfilerTag;
+  /**send,recv操作转换为p2p并入队到对应的peerbuff队列 */
   ncclIntruQueueEnqueue(isSendNotRecv ? &planner->peers[peer].sendQueue : &planner->peers[peer].recvQueue, p2p);
   planner->nTasksP2p += 1;
-  if (isSendNotRecv) planner->nTasksP2pSend += 1;
-  else planner->nTasksP2pRecv += 1;
+  if (isSendNotRecv) planner->nTasksP2pSend += 1;/** 增加send task数目 */
+  else planner->nTasksP2pRecv += 1;/** 增加recv task数目 */
 
   // Mark channels that need pre-connect
   if (comm->rank != peer) {
+	  /** 如果当前gpu不是给自已收发(即不是自环P2P操作) */
     if (!(isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen)) {
       // planner->peers[peer].send/recvSeen is private to each comm, so we need to set it anyway.
       (isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen) = true;
+      /*找出peer在p2p通信中的round（轮次）即哪一轮自peer发送/接收
+      comm->p2pSchedule[] 是初始化时预计算的调度表，长度 = nRanks。表内每一项 {sendRank, recvRank} 描述：在第 round 轮 P2P 交换中，本 rank 向谁发、从谁收。
+      */
       int round = 0;
       while (peer != (isSendNotRecv ? comm->p2pSchedule[round].sendRank : comm->p2pSchedule[round].recvRank)) {
         round += 1;
@@ -2726,10 +2733,10 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
             // the send/recv connector is shared among split shared comms. We need to set hasSeen to
             // 1 in order to avoid duplicate connection setup if user group sendrecv ops with split
             // shared comms together.
-            comm->channels[channelId].peers[peer]->send[1].hasSeen = 1;
-            comm->channels[channelId].peers[peer]->send[1].p2pOnly = 1;
+            comm->channels[channelId].peers[peer]->send[1].hasSeen = 1;/**标明已完成PREConnect */
+            comm->channels[channelId].peers[peer]->send[1].p2pOnly = 1;/** 标明此连接用于P2P操作 */
             comm->connectSend[peer] |= (1ULL << channelId);
-            ncclGroupCommPreconnect(comm);
+            ncclGroupCommPreconnect(comm);/*加入PreConnect链表*/
           }
         } else {
           if (comm->channels[channelId].peers[peer]->recv[1].hasSeen == 0) {
@@ -2737,7 +2744,7 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
             comm->channels[channelId].peers[peer]->recv[1].hasSeen = 1;
             comm->channels[channelId].peers[peer]->recv[1].p2pOnly = 1;
             comm->connectRecv[peer] |= (1ULL << channelId);
-            ncclGroupCommPreconnect(comm);
+            ncclGroupCommPreconnect(comm);/*加入PreConnect链表*/
           }
         }
       }
@@ -3339,18 +3346,20 @@ static void ncclRecordCollConfigLaunchCompletionEvent(struct ncclComm* comm) {
 
 // Converts `info` to a task and adds it to `comm->planner`. Single-rank collectives
 // execute immediately and do not need a task.
-static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
+static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* 要入队的info */) {
   ncclFunc_t collAPI = info->coll;
   bool hasLaunchCompletionEvent = ncclInfoHasLaunchCompletionEvent(info);
 
   if (ncclParamEnqueueRearchEnable()) {
     NCCLCHECK(rawTaskAppend(comm, info));
   } else if (info->coll == ncclFuncSend || info->coll == ncclFuncRecv) {
-    NCCLCHECK(p2pTaskAppend(comm, info, info->coll, collAPI, (void*)info->recvbuff, info->count, info->datatype,
-                            info->root, true));
+	  /** 处理send和recv操作 */
+    NCCLCHECK(p2pTaskAppend(comm, info, info->coll/** 操作符 */, collAPI, (void*)info->recvbuff/** 接收数据指针 */, info->count, info->datatype/** 数据类型 */,
+                            info->root/*对端编号*/, true));
   } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) {
     NCCLCHECK(rmaTaskAppend(comm, info));
   } else {
+	  /*其它非send,recv操作在此处理*/
     // Empty collectives can be discarded.
     if (info->count == 0) return ncclSuccess;
 
@@ -3493,15 +3502,15 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   if (ncclProfilerApiState.profilerGroupDepth > 0) {
     ncclProfilerApiState.profilerGroupDepth++;
   }
-  NCCLCHECK(ncclGroupStartInternal());
+  NCCLCHECK(ncclGroupStartInternal());/*增加group层数*/
   ret = ncclSuccess;
   int devOld = -1;
   // Check whether communicator is ready to communicate
   NCCLCHECKGOTO(ncclCommEnsureReady(info->comm), ret, fail);
 
   if (info->comm->checkMode != ncclCheckModeDefault) {
-    CUDACHECKGOTO(cudaGetDevice(&devOld), ret, fail);
-    CUDACHECKGOTO(cudaSetDevice(info->comm->cudaDev), ret, fail);
+    CUDACHECKGOTO(cudaGetDevice(&devOld), ret, fail);/**获取并保存当前gpu编号 */
+    CUDACHECKGOTO(cudaSetDevice(info->comm->cudaDev), ret, fail);/**设置comm的gpu编号 */
   }
   // If info->comm->checkMode == ncclCheckModeDebugGlobal, ArgsCheck will enqueue info
   // for collectives and the pairs of peers for sendrecv for global check later
@@ -3515,12 +3524,13 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
              reinterpret_cast<int64_t>(info->sendbuff), reinterpret_cast<int64_t>(info->recvbuff), info->count,
              info->datatype, info->op, info->root, info->comm, info->stream);
 
-  NCCLCHECKGOTO(taskAppend(info->comm, info), ret, fail);
+  NCCLCHECKGOTO(taskAppend(info->comm, info), ret, fail);/**将任务完成入队 */
 
   info->comm->opCount++;
 exit:
-  if (devOld != -1) CUDACHECK(cudaSetDevice(devOld));
+  if (devOld != -1) CUDACHECK(cudaSetDevice(devOld));/*还原原来的gpu编号*/
   ncclGroupErrCheck(ret);
+  /*标记group结束，只有group=0，才会真正的执行*/
   NCCLCHECK(ncclGroupEndInternal());
   /* if depth is 1, ncclGroupEndInternal() will trigger group ops. The state can change
    * so we have to check state here. */

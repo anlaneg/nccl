@@ -35,6 +35,12 @@ thread_local int ncclGroupDepth = 0; // depth of ncclGroupStart nesting
 thread_local ncclResult_t ncclGroupError = ncclSuccess;/*用于记录错误码*/
 /*用于记录当前线程在一个group内保存的comm head列表（会在group end时被处理）
  * ncclGroupCommJoin负责向此变量中增加元素
+ * 每类任务一根链表（ncclGroupTaskTypeNum 种类型：Collective / P2P / RawTask / Preconnect 等），
+ * thread_local 保证多线程各自独立 group。链表节点是 ncclComm，
+ * 链表指针字段是 comm->groupNext[type]——每种类型独立指针，
+ * 同一个 comm 可以同时挂在多个类型链表上（比如同时有 Collective 任务和 P2P 任务）。
+ * 如果 groupNext[type] 是 0x01 → 未加入 → 执行插入。
+ * 如果 非 0x01 → 已在 group 中 → 跳过（第二次调用不重复加入）。
  * */
 thread_local struct ncclComm* ncclGroupCommHead[ncclGroupTaskTypeNum] = {nullptr};
 /*用于记录设置的preconnectHead，ncclGroupCommPreconnect用于增加元素*/
@@ -233,6 +239,7 @@ struct ncclMgmtTaskJob {
   struct ncclComm* comm;
 };
 
+/*建连*/
 ncclResult_t ncclP2PPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclPreconnectJob* job = (struct ncclPreconnectJob*)job_;
   struct ncclComm* comm = job->comm;
@@ -243,11 +250,12 @@ ncclResult_t ncclP2PPreconnectFunc(struct ncclAsyncJob* job_) {
   return ncclSuccess;
 }
 
+/*按集合通信算法调用相应的preConnect*/
 ncclResult_t ncclCollPreconnect(struct ncclComm* comm, bool* algoNeedConnect) {
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; ++i) {
     if (algoNeedConnect[i]) {
       switch (i) {
-      case NCCL_ALGO_RING:
+      case NCCL_ALGO_RING:/*环形算法*/
         {
           NCCLCHECK(ncclTransportRingConnect(comm));
           break;
@@ -353,6 +361,7 @@ ncclResult_t ncclCollPreconnectFunc(struct ncclAsyncJob* job_) {
   ncclResult_t ret = ncclSuccess;
 
   if (!job_->isThreadMain) CUDACHECK(cudaSetDevice(comm->cudaDev));
+  /*设置cpu亲和*/
   if (!job_->isThreadMain && ncclOsCpuCount(comm->cpuAffinity)) ncclOsSetAffinity(comm->cpuAffinity);
   NCCLCHECKGOTO(ncclCollPreconnect(comm, job->algoNeedConnect), ret, fail);
 
@@ -499,6 +508,7 @@ ncclResult_t doLaunches(struct ncclComm* head, int taskType) {
             } else if (plan->isRma) {
               NCCLCHECKGOTO(ncclLaunchRma(comm, plan), result, failure);
             } else {
+            	/*加载kernel*/
               NCCLCHECKGOTO(ncclLaunchKernel(comm, plan), result, failure);
             }
           }
@@ -781,14 +791,14 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
   ncclResult_t ret = ncclSuccess;
   struct ncclGroupJob* gjob = (struct ncclGroupJob*)job_;/*此group对应的job*/
   /*取这三种待执行内容*/
-  struct ncclComm** groupCommHeadMain = gjob->groupCommHead;
+  struct ncclComm** groupCommHeadMain = gjob->groupCommHead;/*按类型划分的链表*/
   struct ncclComm* groupCommPreconnectHeadMain = gjob->groupCommPreconnectHead;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsMain = &gjob->asyncJobs;
   bool* groupAbortFlag = &gjob->abortFlag;/*取job的abort指针*/
 
   /*groupCommPreconnectHead链表上所有元素，生成ncclPreconnectJob*/
   if (!simInfo && groupCommPreconnectHeadMain != nullptr) {
-    /**preConnect链表不空时，按顺序生成ncclPreconnectJob并挂在asyncJobsMain中 */
+    /**preConnect链表不空时（在处理前需要先处理建连），按顺序生成ncclPreconnectJob并挂在asyncJobsMain中 */
     struct ncclComm* comm = groupCommPreconnectHeadMain;
     do {
       struct ncclPreconnectJob* job;/**preConnect任务的job */
@@ -861,12 +871,13 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
 
   /* Connect channels at runtime if cumem is supported */
   if (groupCommHeadMain[ncclGroupTaskTypeCollective] != nullptr) {
-    /**collective任务链表不空 */
-    struct ncclComm* cliqueHead = groupCommHeadMain[ncclGroupTaskTypeCollective];
+    /**集合通信任务链表不空 */
+    struct ncclComm* cliqueHead = groupCommHeadMain[ncclGroupTaskTypeCollective];/*首个即为首comm*/
     struct ncclComm* comm = NULL;
+    /**初始化异步任务队列asyncCollJobs,asyncDebugJobs */
     struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncCollJobs;
     struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncDebugJobs;
-    ncclIntruQueueConstruct(&asyncCollJobs);/**初始化异步任务队列asyncCollJobs */
+    ncclIntruQueueConstruct(&asyncCollJobs);
     ncclIntruQueueConstruct(&asyncDebugJobs);
     do {
       // We need to preconnect connections for collectives clique by clique to avoid
@@ -876,8 +887,9 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
       do {
     	  /*入队列asyncCollJobs中*/
         NCCLCHECKGOTO(ncclPrepareTasksAndCollPreconnect(comm, simInfo, &asyncCollJobs), ret, fail);
-        comm = comm->groupNext[ncclGroupTaskTypeCollective];
-      } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*同一类型，也会阶段*/);
+        comm = comm->groupNext[ncclGroupTaskTypeCollective];/*沿集合通信task*/
+      } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*后面的comm不再与前面的comm是同一个族*/);
+
       /**启动异步任务队列中的任务,执行collective job*/
       // connect
       NCCLCHECKGOTO(asyncJobLaunch(&asyncCollJobs, groupAbortFlag), ret, fail);
@@ -925,8 +937,9 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
   }
 
   if ((!simInfo) && (groupCommHeadMain[ncclGroupTaskTypeCollective] != nullptr)) {
-    /**simInfo为空，collective任务链表不空 */
-    NCCLCHECKGOTO(doLaunches(groupCommHeadMain[ncclGroupTaskTypeCollective], ncclGroupTaskTypeCollective), ret, fail);/** +++启动collective任务链表中的任务 */
+    /**simInfo为空，且collective任务链表不空,
+     * 启动集合通信任务链表中的任务*/
+    NCCLCHECKGOTO(doLaunches(groupCommHeadMain[ncclGroupTaskTypeCollective], ncclGroupTaskTypeCollective), ret, fail);
   }
 
   while (!ncclIntruQueueEmpty(asyncJobsMain)) {
