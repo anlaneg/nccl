@@ -2974,6 +2974,7 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
   int driverVersion;
   NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
   if (driverVersion < 12050) {
+	  /*版本过低*/
     WARN("One-sided RMA requires CUDA driver 12.5 or later (found %d.%d).", driverVersion / 1000,
          (driverVersion % 1000) / 10);
     return ncclInvalidUsage;
@@ -3357,6 +3358,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
     NCCLCHECK(p2pTaskAppend(comm, info, info->coll/** 操作符 */, collAPI, (void*)info->recvbuff/** 接收数据指针 */, info->count, info->datatype/** 数据类型 */,
                             info->root/*对端编号*/, true));
   } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) {
+	  /*rma相关操作处理*/
     NCCLCHECK(rmaTaskAppend(comm, info));
   } else {
 	  /*其它非send,recv操作在此处理*/

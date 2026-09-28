@@ -93,7 +93,7 @@ struct ncclDevrState {
   struct ncclShadowPool shadows;
   struct ncclDevCommWindowTable* windowTable;
 
-  struct ncclIntruQueue<struct ncclDevrRegTask, &ncclDevrRegTask::next> regTaskQueue;
+  struct ncclIntruQueue<struct ncclDevrRegTask, &ncclDevrRegTask::next> regTaskQueue;/*用于注册regTask*/
   struct ncclIntruQueue<struct ncclDevrCommCreateTask, &ncclDevrCommCreateTask::next> commCreateTaskQueue;
 };
 

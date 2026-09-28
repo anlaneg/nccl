@@ -44,6 +44,7 @@ void *allGather(int my_rank, int total_ranks, int local_device,
 
   ncclUniqueId nccl_unique_id;
   if (my_rank == 0) {
+	  /*0号获取unique_id*/
     printf("Starting AllGather example with %d ranks (Copy Engine enabled)\n", total_ranks);
     NCCLCHECK(ncclGetUniqueId(&nccl_unique_id));
   }
@@ -51,8 +52,8 @@ void *allGather(int my_rank, int total_ranks, int local_device,
   // Distribute unique ID.
   // This step ensures all ranks have the same unique ID for communicator
   // creation
+  /*通过等barrier设置root unique_id,使所有线程同步(这个当前看着不合适，采用的是多线程，而变量又是全局的）*/
   util_broadcast(0, my_rank, &nccl_unique_id);
-
   // Set device context for this rank
   // Each rank manages its assigned GPU device
   CUDACHECK(cudaSetDevice(local_device));
@@ -84,14 +85,14 @@ void *allGather(int my_rank, int total_ranks, int local_device,
          (float)send_size_bytes / (1024 * 1024),
          (float)recv_size_bytes / (1024 * 1024));
 
-  float *h_data = (float *)malloc(send_size_bytes);
+  float *h_data = (float *)malloc(send_size_bytes);/*申请主机侧要发送的内存*/
 
   // Allocate buffers using NCCL allocator
   // NCCL's allocator is compatible with symmetric memory layouts
   void *d_sendbuff;
   void *d_recvbuff;
-  NCCLCHECK(ncclMemAlloc(&d_sendbuff, send_size_bytes));
-  NCCLCHECK(ncclMemAlloc(&d_recvbuff, recv_size_bytes));
+  NCCLCHECK(ncclMemAlloc(&d_sendbuff, send_size_bytes));/*设备侧申请发送buffer*/
+  NCCLCHECK(ncclMemAlloc(&d_recvbuff, recv_size_bytes));/*设备侧申请接收buffer*/
 
   // ========================================================================
   // STEP 3: Register Symmetric Memory Windows
@@ -117,8 +118,9 @@ void *allGather(int my_rank, int total_ranks, int local_device,
   // Initialize data - each rank contributes its rank value
   // This creates a simple test pattern for verification
   for (size_t i = 0; i < sendcount; i++) {
-    h_data[i] = (float)my_rank;
+    h_data[i] = (float)my_rank;/*设置发送内存的内容*/
   }
+  /*复制到侧备侧sendbuffer中*/
   CUDACHECK(cudaMemcpy(d_sendbuff, h_data, send_size_bytes, cudaMemcpyHostToDevice));
   printf("  Rank %d data initialized (value: %d)\n", my_rank, my_rank);
 

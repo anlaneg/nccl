@@ -405,6 +405,7 @@ ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
 
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
 
+  /*出队处理regTask*/
   while (!ncclIntruQueueEmpty(&comm->devrState.regTaskQueue)) {
     struct ncclDevrRegTask* task = ncclIntruQueueDequeue(&comm->devrState.regTaskQueue);
     NCCLCHECKGOTO(ncclDevrWindowRegisterInGroup(comm, task->userPtr, task->userSize, task->winFlags, task->outWinDev),
@@ -421,6 +422,7 @@ ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
     free(task);
   }
 
+  /*出队处理ceInitTask*/
   while (!ncclIntruQueueEmpty(&comm->ceInitTaskQueue)) {
     struct ncclCeInitTask* task = ncclIntruQueueDequeue(&comm->ceInitTaskQueue);
     NCCLCHECKGOTO(ncclCeInit(task->comm), ret, fail);
@@ -850,7 +852,7 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
           job->comm = comm;
           ncclIntruQueueEnqueue(&asyncSymJobs, (struct ncclAsyncJob*)job);/**将符号申请与注册任务添加到异步任务队列中 */
           comm = comm->groupNext[type];/**取同一类型的下一个communicator,进行入队*/
-        } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*？？？*/);
+        } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*仅同族处理*/);
         /**
          * 启动异步任务队列中的任务,
          * 跑完符号申请与注册任务（这一类型的将并行被执行，同一类型如果intraComm0不同也不并行执行）

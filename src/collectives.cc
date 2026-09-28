@@ -425,6 +425,7 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int
   return ncclEnqueueCheck(&info);/**recv操作入队处理 */
 }
 
+/*把本地数据写入**远端**内存并附带信号*/
 NCCL_API(ncclResult_t, ncclPutSignal, const void* localbuff, size_t count, ncclDataType_t datatype, int peer,
          ncclWindow_t peerWin, size_t peerWinOffset, int sigIdx, int ctx, unsigned int flags, ncclComm_t comm,
          cudaStream_t stream);
@@ -456,6 +457,7 @@ ncclResult_t ncclPutSignal(const void* localbuff, size_t count, ncclDataType_t d
   return ncclEnqueueCheck(&info);
 }
 
+/*同步远端信号。*/
 NCCL_API(ncclResult_t, ncclSignal, int peer, int sigIdx, int ctx, unsigned int flags, ncclComm_t comm,
          cudaStream_t stream);
 ncclResult_t ncclSignal(int peer, int sigIdx, int ctx, unsigned int flags, ncclComm_t comm, cudaStream_t stream) {
@@ -483,6 +485,7 @@ ncclResult_t ncclSignal(int peer, int sigIdx, int ctx, unsigned int flags, ncclC
   return ncclEnqueueCheck(&info);
 }
 
+/*等待远端信号。*/
 NCCL_API(ncclResult_t, ncclWaitSignal, int nDesc, ncclWaitSignalDesc_t* signalDescs, ncclComm_t comm,
          cudaStream_t stream);
 ncclResult_t ncclWaitSignal(int nDesc, ncclWaitSignalDesc_t* signalDescs, ncclComm_t comm, cudaStream_t stream) {

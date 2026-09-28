@@ -119,7 +119,7 @@ int util_broadcast(int root, int my_rank, ncclUniqueId *arg) {
       MPI_Bcast(arg, sizeof(ncclUniqueId), MPI_BYTE, root, MPI_COMM_WORLD));
 #else
   if (my_rank == root) {
-    nccl_unique_id = *arg;
+    nccl_unique_id = *arg;/*自身就是root,则直接设置全局变量*/
   }
   int barrier_err = pthread_barrier_wait(&barrier);/*等待barrier*/
   if (barrier_err != 0 && barrier_err != PTHREAD_BARRIER_SERIAL_THREAD) {
@@ -128,6 +128,7 @@ int util_broadcast(int root, int my_rank, ncclUniqueId *arg) {
     abort();
   }
   if (my_rank != root) {
+	  /*barrier完成，为其它rank设置unique_id（自全局变量中拿）*/
     *arg = nccl_unique_id;
   }
 #endif
@@ -256,13 +257,13 @@ int run_parallel(context_t *ctx, void *(*ncclExample)(int, int, int, int)) {
     thread_contexts[i].total_ranks = ctx->total_ranks;
     thread_contexts[i].devices_per_rank = 1;
     thread_contexts[i].func = (void *)ncclExample;/*线程执行函数*/
-    /*创建线程*/
+    /*创建线程并发运行ncclExample函数*/
     pthread_create(&ctx->threads[i], NULL, thread_wrapper, &thread_contexts[i]);
   }
 
   // Wait for all threads to complete
   for (int i = 0; i < ctx->total_ranks; i++) {
-    pthread_join(ctx->threads[i], NULL);
+    pthread_join(ctx->threads[i], NULL);/*等待线程退出*/
   }
 
   free(thread_contexts);

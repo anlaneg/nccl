@@ -1146,7 +1146,7 @@ fail:
   return ret;
 }
 
-ncclResult_t ncclDevrWindowRegisterInGroup(struct ncclComm* comm, void* userPtr, size_t userSize, int winFlags,
+ncclResult_t ncclDevrWindowRegisterInGroup(struct ncclComm* comm, void* userPtr/*内存起始地址*/, size_t userSize/*内存大小*/, int winFlags,
                                            ncclWindow_t* outWinDev) {
   ncclResult_t ret = ncclSuccess;
   CUdeviceptr memAddr = 0;
@@ -1796,7 +1796,8 @@ fail:
   goto exit;
 }
 
-NCCL_API(ncclResult_t, ncclCommWindowRegister, ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win,
+/*为comm注册内存窗口*/
+NCCL_API(ncclResult_t, ncclCommWindowRegister, ncclComm_t comm, void* buff/*内存地址*/, size_t size/*大小*/, ncclWindow_t* win/*出参，内存窗口*/,
          int winFlags);
 ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags) {
   NCCLCHECK(CommCheck(comm, __func__, "comm"));
@@ -1845,15 +1846,15 @@ ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, nc
     task->userSize = size;
     task->winFlags = winFlags;
     task->outWinDev = win;
-    ncclIntruQueueEnqueue(&comm->devrState.regTaskQueue, task);
-    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);
+    ncclIntruQueueEnqueue(&comm->devrState.regTaskQueue, task);/*注册struct ncclDevrRegTask*/
+    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);/*注册comm到symregister链*/
 
     // Initialize RMA CE alongside the first window registration
     if (ncclDevrWinRegEnabled(winFlags, ncclDevrRegisterRma) && comm->hostRmaSupport &&
         !comm->rmaState.rmaCeState.initialized && ncclIntruQueueEmpty(&comm->rmaCeInitTaskQueue)) {
       NCCLCHECKGOTO(ncclCalloc(&ceTask, 1), ret, fail);
       ceTask->comm = comm;
-      ncclIntruQueueEnqueue(&comm->rmaCeInitTaskQueue, ceTask);
+      ncclIntruQueueEnqueue(&comm->rmaCeInitTaskQueue, ceTask);/*注册struct ncclRmaCeInitTask**/
       ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);
     }
   }
