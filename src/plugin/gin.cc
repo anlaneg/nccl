@@ -47,7 +47,9 @@ typedef struct ginPluginLib {
   int physDevs;                                 // Number of physical devices
 } ginPluginLib_t;
 
+/*记录gin插件加载数目*/
 static int pluginCount = 0;
+/*记录gin插件的lib信息*/
 static ginPluginLib_t pluginLibs[NCCL_GIN_MAX_PLUGINS] = {0};
 static std::mutex pluginMutex;
 static std::once_flag initPluginLibsOnceFlag;
@@ -72,7 +74,7 @@ static ncclResult_t ncclGinPluginLoad(ginPluginLib_t* pluginLib) {
   // after unload, reopen the same library by its saved name/path.
   if (pluginLib->dlHandle == NULL) {
     pluginLib->dlHandle = ncclOpenGinPluginLib(pluginLib->name);
-    if (pluginLib->dlHandle == nullptr) goto fail;
+    if (pluginLib->dlHandle == nullptr) goto fail;/*加载失败，退出*/
   }
 
   // load gin
@@ -194,6 +196,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
   return ncclSuccess;
 }
 
+/*初始化环境变量指定的lib，尝试加载net插件对应的lib,以及内置ib插件，ginproxy插件做为gin的备选插件*/
 static void initPluginLibsOnceFunc() {
   char* ginPluginName = nullptr;
   const char* defaultGinPlugin = "libnccl-gin.so";
@@ -216,14 +219,14 @@ static void initPluginLibsOnceFunc() {
     while (ginPluginName) {
       // So, we can have at most( NCCL_GIN_MAX_PLUGINS - (NCCL_GIN_NUM_RESERVED_PLUGINS)) in the NCCL_GIN_PLUGIN list
       if (pluginCounter >= (NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_RESERVED_PLUGINS)) {
-    	  /*指定的插件数过多*/
+    	  /*指定的插件lib数过多*/
         INFO(NCCL_NET | NCCL_ENV, "NCCL_GIN_PLUGIN list contains more than %d plugins, ignoring the rest",
              (NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_RESERVED_PLUGINS));
         break;
       }
       // need to leave space for the name + "\n"
       if ((strlen(ginPluginName) + 1) <= MAX_STR_LEN) {
-    	  /*设置指定的插件名称*/
+    	  /*设置指定的插件lib名称*/
         pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
         pluginLibs[pluginCounter].refCount = ncclParamGinPluginRefCount();
         strcpy(pluginLibs[pluginCounter].name, ginPluginName);
@@ -234,7 +237,7 @@ static void initPluginLibsOnceFunc() {
              "NCCL_GIN_PLUGIN list contains a plugin name %s longer than %d characters, ignoring it.", ginPluginName,
              MAX_STR_LEN);
       }
-      ginPluginName = strtok_r(nullptr, ",", &savePtr);
+      ginPluginName = strtok_r(nullptr, ",", &savePtr);/*下一个*/
     }
     if (envGinPluginList) free(envGinPluginList);
   } else {
@@ -246,19 +249,22 @@ static void initPluginLibsOnceFunc() {
   }
 
   // Also check if the NET plugin has GIN support
+  /*尝试增加net插件是否也支持gin*/
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetNetPluginLib(ncclPluginTypeGin)) != NULL) {
-	  /*复用net插件的gin支持成功*/
+	/*复用net插件做为gin插件成功*/
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
+    /*增加net插件名称*/
     strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeGin));
   }
 
   // Add internal ib plugin
-  pluginLibs[pluginCounter].ncclGin = &ncclGinIbGdaki;/*添加内置ginib gdaki插件*/
-  pluginLibs[pluginCounter].state = ncclGinPluginStateInitReady;
+  /*添加内置ginib gdaki插件做为gin插件*/
+  pluginLibs[pluginCounter].ncclGin = &ncclGinIbGdaki;
+  pluginLibs[pluginCounter].state = ncclGinPluginStateInitReady;/*指明已初始化*/
   pluginLibs[pluginCounter].version = ncclGinVersion[0];/*设置版本号*/
   pluginCounter++;
   // Add gin proxy as fallback
-  pluginLibs[pluginCounter].ncclGin = &ncclGinProxy;/*添加gin代理*/
+  pluginLibs[pluginCounter].ncclGin = &ncclGinProxy;/*添加gin代理做为gin插件*/
   pluginLibs[pluginCounter].state = ncclGinPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclGinProxyVersion;
   pluginCounter++;
@@ -279,7 +285,7 @@ static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex
 /*gin插件初始化*/
 ncclResult_t ncclGinInit(struct ncclComm* comm) {
   if (comm->compCap < 70) {
-	  /*算力能力过低，指明不支持*/
+	/*算力能力过低，指明不支持*/
     /* GIN only supported for Volta and later */
     INFO(NCCL_INIT, "Compute Capability (%d) is not sufficient to enable GIN.  Require Volta (70) or newer.",
          comm->compCap);
@@ -287,11 +293,13 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
   }
 
   bool initialized = false;
+  /*加载备选插件到pluginLibs*/
   std::call_once(initPluginLibsOnceFlag, initPluginLibsOnceFunc);
   std::lock_guard<std::mutex> lock(pluginMutex);
   for (int pluginIndex = 0; pluginIndex < pluginCount; pluginIndex++) {
     if (pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS) &&
         pluginLibs[pluginIndex].state == ncclGinPluginStateLoadReady) {
+    	/*执行加载*/
       NCCLCHECK(ncclGinPluginLoad(&pluginLibs[pluginIndex]));
     }
     if (pluginLibs[pluginIndex].state >= ncclGinPluginStateInitReady) {

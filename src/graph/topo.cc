@@ -2074,7 +2074,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     if (rma) {
       netInfo.net = 0;
       netInfo.coll = 0;
-      netInfo.gin = 0;
+      netInfo.gin = 0;/*不支持gin*/
       netInfo.rma = 1;
       netInfo.netPluginIndex = comm->rmaPluginIndex;
       netInfo.dmaBufSupport = comm->dmaBufSupport;

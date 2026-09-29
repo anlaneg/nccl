@@ -11,6 +11,7 @@
 
 static ncclGin_v14_t* ncclGin_v14;
 
+/*取v14对应的符号*/
 ncclGin_t* getNcclGin_v14(void* lib) {
   ncclGin_v14 = (ncclGin_v14_t*)dlsym(lib, "ncclGinPlugin_v14");
   if (ncclGin_v14) {

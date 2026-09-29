@@ -149,6 +149,7 @@ void* ncclOpenNetPluginLib(const char* name) {
 }
 
 void* ncclOpenGinPluginLib(const char* name) {
+	/*打开gin插件*/
   return openPluginLib(ncclPluginTypeGin, name);
 }
 
@@ -184,7 +185,7 @@ void* ncclGetGinPluginLib(enum ncclPluginType type) {
 void* ncclGetNetPluginLib(enum ncclPluginType type) {
   if (libNames[ncclPluginTypeNet]) {
     // increment the reference counter of the net library
-	  /*此类型复用net类型的lib名称*/
+	/*net插件有设置lib,此类型复用net类型的lib名称*/
     libNames[type] = strdup(libNames[ncclPluginTypeNet]);
     /*此类型复用net类型的lib位置*/
     ncclPluginLibPaths[type] = strdup(ncclPluginLibPaths[ncclPluginTypeNet]);
