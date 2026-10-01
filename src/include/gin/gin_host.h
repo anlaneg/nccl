@@ -28,7 +28,9 @@ struct ncclGinStateDevComm {
 struct ncclGinBackendState {
   ncclGinType_t ginType;      // GIN backend type.
   ncclGin_t* ncclGin;
+  /*此插件初始化时获得的context*/
   void* ginInstance;          // Plugin's per-comm opaque context.
+  /*对应的插件索引*/
   int pluginIndex;            // Index into pluginLibs[].
   int ginCommCount;
   void* ginComms[NCCL_GIN_MAX_CONNECTIONS];
@@ -55,7 +57,7 @@ struct ncclGinState {
   struct ncclGinStateDevComm* devComms;
   ncclGinConnectionType_t ginConnectionType;
 
-  int numActiveBackends;
+  int numActiveBackends;/*backends数组有效长度*/
   struct ncclGinBackendState backends[NCCL_GIN_MAX_ACTIVE_BACKENDS];
 };
 

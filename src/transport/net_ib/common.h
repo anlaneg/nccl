@@ -95,8 +95,8 @@ enum ncclIbRailPolicy {
 
 struct alignas(64) ncclIbDev {
   std::mutex mutex;
-  int device;/*设备索引*/
-  uint64_t guid;
+  int device;/*ib设备编号*/
+  uint64_t guid;/*来源于**sys_image_guid**：整台**系统一个**，标识 "这台主机"。*/
   uint32_t vendorId;/*设备vendorId*/
   uint32_t vendorPartId;
   char fwVer[64];/*设备fw版本*/
@@ -109,7 +109,7 @@ struct alignas(64) ncclIbDev {
   ibv_pd* pd;
   char devName[MAXNAMESIZE];/*ib设备名称*/
   char fullPciPath[PATH_MAX];/*设备pci地址*/
-  char* pciPath;
+  char* pciPath;/*设备pci路径*/
   int realPort;
   int maxQp;/*支持的最大qp*/
   float latency;

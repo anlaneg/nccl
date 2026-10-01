@@ -121,7 +121,7 @@ static ncclResult_t ncclRmaPluginInit(struct ncclComm* comm, rmaPluginLib_t* plu
   // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->state == ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
 	  /*取设备数目*/
-    if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) goto fail;
+    if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) goto fail;/*设备如为0，则此插件初始化失败*/
     pluginLib->physDevs = ndev;
   }
 
@@ -141,12 +141,13 @@ fail:
   goto exit;
 }
 
+/*rma插件与comm绑定*/
 static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginIndex, bool* isAssigned) {
   *isAssigned = false;
 
   if (pluginLibs[pluginIndex].state >= ncclRmaPluginStateEnabled) {
     INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Assigned plugin %s to comm", pluginLibs[pluginIndex].ncclRma->name);
-    comm->rmaState.rmaProxyState.ncclRma = pluginLibs[pluginIndex].ncclRma;
+    comm->rmaState.rmaProxyState.ncclRma = pluginLibs[pluginIndex].ncclRma;/*指定rma插件对象*/
     comm->rmaState.rmaProxyState.rmaVersion = pluginLibs[pluginIndex].version;
     comm->rmaPluginIndex = pluginIndex;
   }
@@ -157,7 +158,7 @@ static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginI
 
 static ncclResult_t ncclRmaPluginDisableOtherExternal(int pluginIndex) {
   // Only if an external plugin is enabled, disable other external plugins
-  if (pluginIndex >= (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS)) return ncclSuccess;
+  if (pluginIndex >= (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS)) return ncclSuccess;/*内置插件直接返回*/
   char names[MAX_STR_LEN * (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_INTERNAL_PLUGINS)] = {0};
   for (int i = 0; i < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS); i++) {
     if (i != pluginIndex && pluginLibs[i].state >= ncclRmaPluginStateEnabled) {
@@ -173,9 +174,10 @@ static ncclResult_t ncclRmaPluginDisableOtherExternal(int pluginIndex) {
   return ncclSuccess;
 }
 
+/*rma插件初始化*/
 static void initPluginLibsOnceFunc() {
   char* rmaPluginName = nullptr;
-  const char* defaultRmaPlugin = "libnccl-rma.so";
+  const char* defaultRmaPlugin = "libnccl-rma.so";/*rma插件默认名称*/
   const char* envRmaPlugin = nullptr;
   char* envRmaPluginList = nullptr;
   char* savePtr = nullptr;
@@ -184,7 +186,7 @@ static void initPluginLibsOnceFunc() {
   memset(pluginLibs, 0, NCCL_RMA_MAX_PLUGINS * sizeof(rmaPluginLib_t));
   envRmaPlugin = ncclGetEnv("NCCL_RMA_PLUGIN");
   if (envRmaPlugin) {
-	  /*通过环境变量指明了rma插件*/
+	/*通过环境变量指明了rma插件*/
     INFO(NCCL_ENV | NCCL_NET, "NCCL_RMA_PLUGIN set by environment to %s", envRmaPlugin);
     if (strcasecmp(envRmaPlugin, "none") == 0) envRmaPlugin = "";/*如指定为none,按未指定处理*/
     envRmaPluginList = strdup(envRmaPlugin);
@@ -222,23 +224,25 @@ static void initPluginLibsOnceFunc() {
 
   // check if the GIN plugin has RMA support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetGinPluginLib(ncclPluginTypeRma)) != NULL) {
+	  /*复用gin插件的rma支持*/
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
     strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeRma));
   }
   // Also check if the NET plugin has RMA support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetNetPluginLib(ncclPluginTypeRma)) != NULL) {
+	  /*复用net插件的rma支持*/
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
     strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeRma));
   }
 
   // Add internal ib plugin
-  pluginLibs[pluginCounter].ncclRma = &ncclRmaIbProxy;/*增加ib代理*/
+  pluginLibs[pluginCounter].ncclRma = &ncclRmaIbProxy;/*增加RmaIbProxy内置插件*/
   pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclRmaVersion[0];
   pluginCounter++;
 
   // Add internal socket RMA plugin.
-  pluginLibs[pluginCounter].ncclRma = &ncclRmaSocketProxy;/*增加socket代理*/
+  pluginLibs[pluginCounter].ncclRma = &ncclRmaSocketProxy;/*增加RmaSocketProxy内置插件*/
   pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclRmaVersion[0];
   pluginCounter++;
@@ -257,6 +261,7 @@ static ncclResult_t ncclRmaPluginFinalize(struct ncclComm* comm, int pluginIndex
   return ncclSuccess;
 }
 
+/*rma插件初始化*/
 ncclResult_t ncclRmaInit(struct ncclComm* comm) {
   bool initialized = false;
   comm->rmaPluginIndex = -1;
@@ -265,11 +270,12 @@ ncclResult_t ncclRmaInit(struct ncclComm* comm) {
   for (int pluginIndex = 0; pluginIndex < pluginCount; pluginIndex++) {
     if (pluginIndex < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS) &&
         pluginLibs[pluginIndex].state == ncclRmaPluginStateLoadReady) {
+    	/*加载外部插件*/
       NCCLCHECK(ncclRmaPluginLoad(&pluginLibs[pluginIndex]));
     }
     if (pluginLibs[pluginIndex].state >= ncclRmaPluginStateInitReady) {
       // plugin init must be done by all comms to setup the context, therefore we use ">="
-      NCCLCHECK(ncclRmaPluginInit(comm, &pluginLibs[pluginIndex]));
+      NCCLCHECK(ncclRmaPluginInit(comm, &pluginLibs[pluginIndex]));/*初始化rdma插件*/
       if (pluginLibs[pluginIndex].state == ncclRmaPluginStateEnabled) {
         bool isAssigned = false;
         /*插件开启，将其assign到comm*/
@@ -286,6 +292,7 @@ ncclResult_t ncclRmaInit(struct ncclComm* comm) {
     }
   }
   if (initialized) {
+	  /*ginProxy插件在此处init*/
     NCCLCHECK(ncclGinProxyInit(comm));
   }
   if (!initialized) INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Failed to initialize any plugin");

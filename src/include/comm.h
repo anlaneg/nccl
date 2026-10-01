@@ -607,8 +607,8 @@ struct ncclComm {
   ncclNet_t* ncclNet;
   void* netContext;
   void* rmaContext;
-  int netPluginIndex;
-  int rmaPluginIndex;/*ncclNet在网络插件数组中对应的index*/
+  int netPluginIndex;/*ncclNet在网络插件数组中对应的index*/
+  int rmaPluginIndex;/*rma插件对应的index*/
   int ncclNetVer;
   ncclNetDeviceType netDeviceType;
   ncclCollNet_t* ncclCollNet;

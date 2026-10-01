@@ -81,7 +81,7 @@ static char* getLibPath(void* handle) {
 #endif
 
 /*尝试加载指定名称的插件*/
-static void* openPluginLib(enum ncclPluginType type, const char* libName/*库名称*/) {
+static void* openPluginLib(enum ncclPluginType type/*插件类型*/, const char* libName/*库名称*/) {
   int openErr, len = PATH_MAX;
   char libName_[MAX_STR_LEN] = {0};
   char openErrStr[MAX_STR_LEN + 1] = {0};

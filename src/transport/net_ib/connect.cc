@@ -353,6 +353,7 @@ ncclResult_t ncclIbGidInfoQuery(struct ibv_context* context, uint8_t portNum, st
   gidInfo->link_layer = portAttr->link_layer;
   NCCLCHECK(ncclIbGetGidIndex(context, portNum, portAttr, &gidInfo->localGidIndex));
   if (gidInfo->localGidIndex < 0) return ncclInternalError;
+  /*通过gid索引取gid*/
   NCCLCHECK(wrap_ibv_query_gid(context, portNum, gidInfo->localGidIndex, &gidInfo->localGid));
   return ncclSuccess;
 }

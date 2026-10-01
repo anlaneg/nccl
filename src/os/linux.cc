@@ -385,46 +385,47 @@ ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr,
   return ncclSuccess;
 }
 
+/*找maxIfs个匹配的接口*/
 ncclResult_t ncclOsFindInterfaces(const char* prefixList, char* names, union ncclSocketAddress* addrs, int sock_family,
                                   int maxIfNameSize, int maxIfs, int* found) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN + 1];
 #endif
   struct netIf userIfs[MAX_IFS];
-  bool searchNot = prefixList && prefixList[0] == '^';
+  bool searchNot = prefixList && prefixList[0] == '^';/*结果取反*/
   if (searchNot) prefixList++;
-  bool searchExact = prefixList && prefixList[0] == '=';
+  bool searchExact = prefixList && prefixList[0] == '=';/*严格匹配*/
   if (searchExact) prefixList++;
-  int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);
+  int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);/*取匹配列表*/
 
   *found = 0;
   struct ifaddrs *interfaces, *interface;
   SYSCHECK(getifaddrs(&interfaces), "getifaddrs");
   for (interface = interfaces; interface && *found < maxIfs; interface = interface->ifa_next) {
-    if (interface->ifa_addr == NULL) continue;
+    if (interface->ifa_addr == NULL) continue;/*跳过没有地址的*/
 
     /* We only support IPv4 & IPv6 */
     int family = interface->ifa_addr->sa_family;
-    if (family != AF_INET && family != AF_INET6) continue;
+    if (family != AF_INET && family != AF_INET6) continue;/*跳过非ipv4,ipv6的*/
 
     /* Only consider running interfaces, i.e. UP and physically attached. */
-    if (!(interface->ifa_flags & IFF_RUNNING)) continue;
+    if (!(interface->ifa_flags & IFF_RUNNING)) continue;/*跳过接口未up的*/
 
     TRACE(NCCL_INIT | NCCL_NET, "Found interface %s:%s", interface->ifa_name,
-          ncclSocketToString((union ncclSocketAddress*)interface->ifa_addr, line));
+          ncclSocketToString((union ncclSocketAddress*)interface->ifa_addr, line));/*找到一个备选的interface*/
 
     /* Allow the caller to force the socket family type */
-    if (sock_family != -1 && family != sock_family) continue;
+    if (sock_family != -1 && family != sock_family) continue;/*跳过family不匹配的*/
 
     /* We also need to skip IPv6 loopback interfaces */
     if (family == AF_INET6) {
       struct sockaddr_in6* sa = (struct sockaddr_in6*)(interface->ifa_addr);
-      if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr)) continue;
+      if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr)) continue;/*跳过loopback*/
     }
 
     // check against user specified interfaces
     if (!(matchIfList(interface->ifa_name, -1, userIfs, nUserIfs, searchExact) ^ searchNot)) {
-      continue;
+      continue;/*与用户指明的filter不匹配的*/
     }
 
     // Check that this interface has not already been saved

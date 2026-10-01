@@ -18,7 +18,7 @@ static ncclResult_t ncclGinIbGdrSupport(bool* gdrSupport, bool gdaki) {
   *gdrSupport = true;
   bool peerMemSupport = gdaki ? ncclIbPeerMemSupport() == ncclSuccess : // GDAKI does not support nv_peer_mem.
                                 ncclIbGdrSupport() == ncclSuccess;
-  if (peerMemSupport) return ncclSuccess;
+  if (peerMemSupport) return ncclSuccess;/*peerMem支持，则成功*/
 
   if (ncclIbDmaBufSupport(0) == ncclSuccess) return ncclSuccess;
 
@@ -48,6 +48,7 @@ NCCL_PARAM(GinIbTc, "GIN_IB_TC", -1);
 extern int64_t ncclParamIbTc();
 
 static std::mutex ncclGinIbGdakiLockMutex;
+/*标记gin ib gdaki设备总数（当前仅考虑mellanox设备）*/
 static int ncclGinIbGdakiNDevs = -1;
 int ncclGinIbGdakiDevIndexes[MAX_IB_DEVS];
 
@@ -58,8 +59,10 @@ ncclResult_t ncclGinIbGdakiInitOnce() {
     int64_t ginType = ncclParamGinType();
     if (ginType != -1 && ginType != NCCL_GIN_TYPE_GDAKI) {
       ncclGinIbGdakiNDevs = 0;
-      return ncclSuccess;
+      return ncclSuccess;/*ginType指明为非gdaki,gdaki返回0*/
     }
+
+    /*只考虑mellanox设备*/
     for (int i = 0; i < ncclNIbDevs; i++) {
       if (ncclIbDevs[i].ibProvider == IB_PROVIDER_MLX5) {
         ncclGinIbGdakiDevIndexes[ndevs] = i;
@@ -88,22 +91,24 @@ static bool ncclNetIbDevIsMlx5(int dev) {
 // Initlialize GDAKI or PROXY backend. ginType can force a particular backend.
 // If provided, overwrite ginIb with the backend (generic ginIb case).
 ncclResult_t ncclGinIbInitType(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction, int type) {
-  NCCLCHECK(ncclIbInitDevices(logFunction, nullptr));
+  NCCLCHECK(ncclIbInitDevices(logFunction, nullptr));/*初始化ib设备*/
   if (ncclNIbDevs == 0) return ncclInternalError; // Caught in plugin init code, not propagated to user.
 
   if (type == NCCL_GIN_TYPE_GDAKI) {
+	  /*gdaki初始化*/
     NCCLCHECK(ncclGinIbGdakiInitOnce());
+    /*数目为0，直接返回失败*/
     if (ncclGinIbGdakiNDevs == 0) return ncclInternalError;
   }
 
   bool gdrSupport;
   NCCLCHECK(ncclGinIbGdrSupport(&gdrSupport, type == NCCL_GIN_TYPE_GDAKI));
-  if (!gdrSupport) return ncclInternalError;
+  if (!gdrSupport) return ncclInternalError;/*gdr不支持，直接返错误*/
 
   ncclNetCommConfig_t* netCommConfig = nullptr;
   NCCLCHECK(ncclCalloc(&netCommConfig, 1));
   netCommConfig->trafficClass = NCCL_NET_TRAFFIC_CLASS_UNDEF;
-  *ctx = netCommConfig;
+  *ctx = netCommConfig;/*设置要返回的ncclNetCommConfig*/
   return ncclSuccess;
 }
 
@@ -273,11 +278,13 @@ ncclResult_t ncclGinIbCloseColl(void* collComm) {
 
 #include "gdaki/gin_host_gdaki.h"
 
-ncclResult_t ncclGinIbGdakiInit(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
+/*初始化此插件*/
+ncclResult_t ncclGinIbGdakiInit(void** ctx/*出参*/, uint64_t commId, ncclDebugLogger_t logFunction) {
   return ncclGinIbInitType(ctx, commId, logFunction, NCCL_GIN_TYPE_GDAKI);
 }
 
-ncclResult_t ncclGinIbGdakiDevices(int* ndev) {
+/*返回设备数*/
+ncclResult_t ncclGinIbGdakiDevices(int* ndev/*出参，设备总数*/) {
   std::lock_guard<std::mutex> lock(ncclGinIbGdakiLockMutex);
   *ndev = ncclGinIbGdakiNDevs;
   return ncclSuccess;
@@ -355,7 +362,7 @@ ncclResult_t ncclGinIbGdakiQueryLastError(void* ginCtx, bool* hasError) {
 
 ncclGin_t ncclGinIbGdaki = {"GIN_IB_GDAKI",
                             ncclGinIbGdakiInit,
-                            ncclGinIbGdakiDevices,
+                            ncclGinIbGdakiDevices,/*非mellanox网卡，当前仅返回0个设备*/
                             ncclGinIbGdakiGetGinProperties,
                             ncclGinIbGdakiGetProperties,
                             ncclGinIbGdakiListen,
@@ -377,7 +384,8 @@ struct ncclRmaIbProxyMrHandle {
   uint32_t* rkeys;
 };
 
-ncclResult_t ncclRmaIbProxyInit(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
+/*初始化rma ib proxy*/
+ncclResult_t ncclRmaIbProxyInit(void** ctx/*出参*/, uint64_t commId, ncclDebugLogger_t logFunction) {
   return ncclGinIbInitType(ctx, commId, logFunction, NCCL_GIN_TYPE_PROXY);
 }
 
@@ -953,7 +961,7 @@ ncclResult_t ncclRmaIbProxyIFlush(void* rmaCtx, int context, void* mhandle, uint
 
 // No support for NCCL_IB_SPLIT_DATA_ON_QPS or NCCL_IB_MERGE_NICS
 ncclRma_t ncclRmaIbProxy = {"RMA_IB_PROXY",
-                            ncclRmaIbProxyInit,
+                            ncclRmaIbProxyInit,/*初始化，本例仅做了相关kernel支持检查，返回了context*/
                             ncclIbDevices,
                             ncclRmaIbProxyGetRmaProperties,
                             ncclRmaIbProxyGetProperties,

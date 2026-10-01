@@ -236,13 +236,14 @@ ncclResult_t ncclFindInterfaces(char* ifNames/*出参，找到的接口*/, union
 	  /*未指定名称*/
     // Try to automatically pick the right one
     // Start with IB
-    NCCLCHECK(ncclOsFindInterfaces("ib"/*选择ib开头的接口*/, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
+    NCCLCHECK(ncclOsFindInterfaces("ib"/*选择ib开头的以太接口*/, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
     // else see if we can get some hint from COMM ID
     if (*nIfs == 0) {
       const char* commId = ncclGetEnv("NCCL_COMM_ID");
       if (commId && strlen(commId) > 1) {
         INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commId);
         // Try to find interface that is in the same subnet as the IP in comm id
+        /*如果指明了COMM_ID,则找一个与COMM_ID同网段的地址*/
         union ncclSocketAddress idAddr;
         NCCLCHECK(ncclSocketGetAddrFromString(&idAddr, commId));
         NCCLCHECK(ncclFindInterfaceMatchSubnet(ifNames, ifAddrs, &idAddr, ifNameMaxSize, nIfs));

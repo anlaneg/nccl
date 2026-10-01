@@ -26,6 +26,7 @@ int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {14, 13};
 getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v14, getNcclGin_v13};
 
 #define NCCL_GIN_NUM_RESERVED_PLUGINS 3
+/*GIN内部插件总数*/
 #define NCCL_GIN_NUM_INTERNAL_PLUGINS 2
 
 typedef enum ncclGinPluginState {
@@ -40,10 +41,13 @@ typedef enum ncclGinPluginState {
 typedef struct ginPluginLib {
   char name[MAX_STR_LEN];                       // Name of the plugin library
   void* dlHandle;                               // Handle to the plugin library
+  /*插件结构体*/
   ncclGin_t* ncclGin;                           // Pointer to the plugin structure
   int version;                                  // Version of the plugin
+  /*插件状态*/
   ncclGinPluginState_t state;                   // State of the plugin
   int refCount;                                 // Reference count
+  /*物理设备数目（初始化时填充）*/
   int physDevs;                                 // Number of physical devices
 } ginPluginLib_t;
 
@@ -79,7 +83,8 @@ static ncclResult_t ncclGinPluginLoad(ginPluginLib_t* pluginLib) {
 
   // load gin
   for (int i = 0; i < NCCL_GIN_VERSION_COUNT; i++) {
-    pluginLib->version = ncclGinVersion[i];
+    pluginLib->version = ncclGinVersion[i];/*取得版本*/
+    /*利用此版本符号查询函数拿到符号*/
     pluginLib->ncclGin = getNcclGin[i](pluginLib->dlHandle);
     if (pluginLib->ncclGin) break;
   }
@@ -102,7 +107,8 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* pluginLib, void** outContext) {
+/*初始化gin插件,调用gin->init,devices，设置*/
+static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* pluginLib/*gin插件*/, void** outContext/*出参，init出参*/) {
   int ndev;
   bool ginInitCompleted = false;
   // Init must be called for each new comm to set the right context
@@ -110,6 +116,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   if (pluginLib->state >= ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (!pluginLib->ncclGin->init ||
         pluginLib->ncclGin->init(outContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
+    	/*初始化失败，禁用此plugin*/
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
       ginInitCompleted = true;
@@ -117,6 +124,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   }
   if (pluginLib->state == ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) {
+    	/*取设备失败，如必要执行finalize*/
       if (ginInitCompleted) {
         pluginLib->ncclGin->finalize(*outContext);
         *outContext = NULL;
@@ -138,12 +146,13 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
   if (pluginLibs[pluginIndex].state >= ncclGinPluginStateEnabled) {
     ncclGin_t* gin = pluginLibs[pluginIndex].ncclGin;
     ncclNetProperties_t props;
-    NCCLCHECK(gin->getProperties(0, &props));
+    NCCLCHECK(gin->getProperties(0, &props));/*取首个设备的属性*/
 
     int64_t ginType = ncclParamGinType();
-    bool isExternal = pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS);
+    bool isExternal = pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS);/*是否外部gin插件*/
 
     if (ginType != -1 && props.netDeviceType != ginType) {
+    	/*批定了Gtype，但设备属性中的gintype与之不匹配，不采纳此插件*/
       INFO(NCCL_INIT | NCCL_NET, "GIN/Plugin: Skipping plugin %s index %d type %d: NCCL_GIN_TYPE=%ld requested",
            gin->name, pluginIndex, props.netDeviceType, ginType);
       return ncclSuccess;
@@ -155,6 +164,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
         ncclGin_t* prev_gin = pluginLibs[idx].ncclGin;
         NCCLCHECK(prev_gin->getProperties(0, &prev_props));
         if (props.netDeviceType == prev_props.netDeviceType) {
+        	/*device type与前一个插件不匹配，跳过此插件*/
           INFO(NCCL_INIT | NCCL_NET,
                "GIN/Plugin: Skipping plugin %s index %d type %d, GIN type previously assigned plugin %s index %d",
                gin->name, pluginIndex, props.netDeviceType, prev_gin->name, idx);
@@ -176,6 +186,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     ncclGinType_t backendType = static_cast<ncclGinType_t>(props.netDeviceType);
     struct ncclGinState* ginState = &comm->sharedRes->ginState;
     if (ginState->numActiveBackends >= NCCL_GIN_MAX_ACTIVE_BACKENDS) {
+    	/*活跃backend过多*/
       WARN("GIN/Plugin: Max active backends reached, skipping plugin %s type %d", gin->name, props.netDeviceType);
       return ncclSuccess;
     }
@@ -188,7 +199,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     ginState->supported = true;/*指明支持*/
 
     ncclGinProperties_t ginProperties;
-    NCCLCHECK(gin->getGinProperties(&ginProperties));
+    NCCLCHECK(gin->getGinProperties(&ginProperties));/*取gin属性*/
     backend->supportsStrongSignals = ginProperties.supportsStrongSignals;
     backend->supportsVASignals = ginProperties.supportsVASignals;
   }
@@ -273,11 +284,11 @@ static void initPluginLibsOnceFunc() {
 
 static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex, void* ginContext) {
   if (pluginLibs[pluginIndex].ncclGin && pluginLibs[pluginIndex].state == ncclGinPluginStateEnabled) {
-    NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(ginContext));
+    NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(ginContext));/*执行destroy*/
   }
   pluginLibs[pluginIndex].refCount--;
   if (pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS)) {
-    NCCLCHECK(ncclGinPluginUnload(&pluginLibs[pluginIndex]));
+    NCCLCHECK(ncclGinPluginUnload(&pluginLibs[pluginIndex]));/*非内置gin插件执行unload*/
   }
   return ncclSuccess;
 }
@@ -299,17 +310,19 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
   for (int pluginIndex = 0; pluginIndex < pluginCount; pluginIndex++) {
     if (pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS) &&
         pluginLibs[pluginIndex].state == ncclGinPluginStateLoadReady) {
-    	/*执行加载*/
+      /*对非内部插件执行加载*/
       NCCLCHECK(ncclGinPluginLoad(&pluginLibs[pluginIndex]));
     }
     if (pluginLibs[pluginIndex].state >= ncclGinPluginStateInitReady) {
       // plugin init must be done by all comms to setup the context, therefore we use ">="
       void* ginContext = NULL;
+      /*初始化gin插件*/
       NCCLCHECK(ncclGinPluginInit(comm, &pluginLibs[pluginIndex], &ginContext));
       if (pluginLibs[pluginIndex].state == ncclGinPluginStateEnabled) {
         bool isAssigned = false;
         NCCLCHECK(ncclGinPluginAssignToComm(comm, pluginIndex, ginContext, &isAssigned));
         if (!isAssigned) {
+        	/*assigned失败，此插件被跳过，执行finalize*/
           NCCLCHECK(ncclGinPluginFinalize(comm, pluginIndex, ginContext));
         } else {
           initialized = true;

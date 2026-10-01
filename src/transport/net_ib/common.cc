@@ -8,7 +8,7 @@
 #include "common.h"
 #include "p2p_resiliency.h"
 
-/*ib使用的接口名称*/
+/*ib使用的网络接口(netdev)名称*/
 char ncclIbIfName[MAX_IF_NAME_SIZE + 1];
 /*ib使用的接口地址*/
 union ncclSocketAddress ncclIbIfAddr;
@@ -17,6 +17,7 @@ int ncclNMergedIbDevs = -1;
 /*ib设备数目*/
 int ncclNIbDevs = -1;
 struct ncclIbMergedDev ncclIbMergedDevs[MAX_IB_VDEVS];
+/*记录ib设备信息*/
 struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];
 int ncclIbRelaxedOrderingEnabled = 0;
 uint64_t ncclIbSpeedChangeCounter = 0;

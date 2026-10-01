@@ -14,6 +14,7 @@
 #define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
 static int ncclIbGdrModuleLoaded = 0; // 1 = true, 0 = false
 static void ibGdrSupportInitOnce() {
+	/*只要以下几个kernel模块中有一个可访问，则支持gdr*/
   // Check for the nv_peer_mem module being loaded
   ncclIbGdrModuleLoaded = KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
                           KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
@@ -24,6 +25,7 @@ static void ibGdrSupportInitOnce() {
 ncclResult_t ncclIbGdrSupport() {
   static std::once_flag once;
   std::call_once(once, ibGdrSupportInitOnce);
+  /*如未载，则返回失败*/
   if (!ncclIbGdrModuleLoaded) return ncclSystemError;
   return ncclSuccess;
 }
@@ -71,6 +73,7 @@ failure:
 // ncclSuccess : DMA-BUF support is available
 // ncclSystemError : DMA-BUF is not supported by the kernel
 ncclResult_t ncclIbDmaBufSupport(int dev) {
+	/*检查kernel是否支持dma buffer*/
   static std::once_flag onces[MAX_IB_DEVS];
   // init the device only once
   ibDmaSupportInitDev = dev;

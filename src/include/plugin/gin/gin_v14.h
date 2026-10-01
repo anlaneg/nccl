@@ -28,13 +28,13 @@ typedef struct {
   // Name of the GIN support (mainly for logs)
   const char* name;
   // Initialize the GIN support.
-  ncclResult_t (*init)(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction);
+  ncclResult_t (*init/*初始化*/)(void** ctx/*出参*/, uint64_t commId, ncclDebugLogger_t logFunction);
   // Return the number of adapters capable of doing GIN operations.
-  ncclResult_t (*devices)(int* ndev);
+  ncclResult_t (*devices/*获得设备*/)(int* ndev/*出参，设备总数*/);
   // Get the GIN properties.
-  ncclResult_t (*getGinProperties)(ncclGinProperties_v14_t* ginProps);
+  ncclResult_t (*getGinProperties/*取gin属性*/)(ncclGinProperties_v14_t* ginProps);
   // Get various device properties.
-  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v12_t* props);
+  ncclResult_t (*getProperties/*取设备属性*/)(int dev, ncclNetProperties_v12_t* props);
   // Create a receiving object and provide a handle to connect to it. The
   // handle can be up to NCCL_NET_HANDLE_MAXSIZE bytes and will be exchanged
   // between ranks to create connections.
@@ -63,6 +63,6 @@ typedef struct {
   ncclResult_t (*queryLastError)(void* ginCtx, bool* hasError);
 
   // Finalize the GIN support
-  ncclResult_t (*finalize)(void* ctx);
+  ncclResult_t (*finalize/*销毁*/)(void* ctx/*init时返回的context*/);
 } ncclGin_v14_t;
 #endif // end include guard

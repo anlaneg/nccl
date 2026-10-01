@@ -11,7 +11,7 @@
 #define NCCL_NET_MAX_DEVS_PER_NIC_V12 8
 
 typedef struct {
-  int ndevs;
+  int ndevs;/*devs数组有效长度*/
   int devs[NCCL_NET_MAX_DEVS_PER_NIC_V12];
 } ncclNetVDeviceProps_v12_t;
 

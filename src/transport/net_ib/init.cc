@@ -42,6 +42,7 @@ static int ncclIbMatchVfPath(const char* path1, const char* path2) {
   }
 }
 
+/*按bdf对两个设备进行排序*/
 static int ncclIbCompareDevs(const void* dev1, const void* dev2) {
   // Compare devices using the last component of the PCI path.
   // Note: fullPciPath is never NULL but empty if not found by realpath.
@@ -63,13 +64,14 @@ static int ncclIbCompareVDevsByPlane(const void* a, const void* b) {
   int idxB = *(const int*)b;
   int16_t planeA = ncclIbDevs[idxA].planeId;
   int16_t planeB = ncclIbDevs[idxB].planeId;
-  if (planeA != planeB) return (planeA < planeB) ? -1 : 1;
+  if (planeA != planeB) return (planeA < planeB) ? -1 : 1;/*先按planeId比较*/
   // Equal planes tie-break on PCIe BDF, same ordering as in the initial sort
-  return ncclIbCompareDevs(&ncclIbDevs[idxA], &ncclIbDevs[idxB]);
+  return ncclIbCompareDevs(&ncclIbDevs[idxA], &ncclIbDevs[idxB]);/*再按bdf比较*/
 }
 
-static ncclResult_t ncclIbGetPciPath(char* devName/*ib设备名称*/, char** path/*取设备路径*/, char* fullPath) {
+static ncclResult_t ncclIbGetPciPath(char* devName/*ib设备名称*/, char** path/*出参，取设备路径*/, char* fullPath/*出参，此设备全路径*/) {
   char devicePath[PATH_MAX];
+  /*例如：/sys/class/infiniband/rocep158s0/device -> ../../../0000:9e:00.0*/
   snprintf(devicePath, PATH_MAX, "/sys/class/infiniband/%s/device", devName);
   char* p = realpath(devicePath, NULL);/*取设备路径*/
   // set fullPath to empty if realpath returned NULL
@@ -209,16 +211,19 @@ fail:
 
 ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   if (ncclParamIbMergeNics() == 0 && props->ndevs > 1) {
+	  /*没有开启merge nics选项*/
     INFO(NCCL_NET, "NET/IB : Skipping makeVDevice, NCCL_IB_MERGE_NICS=0");
     return ncclInvalidUsage;
   }
 
   if (props->ndevs == 0) {
+	  /*不能提供零*/
     WARN("NET/IB : Can't make virtual NIC with 0 devices");
     return ncclInvalidUsage;
   }
 
   if (ncclNMergedIbDevs == MAX_IB_VDEVS) {
+	  /*达到最大数*/
     WARN("NET/IB : Cannot allocate any more virtual devices (%d)", MAX_IB_VDEVS);
     return ncclInvalidUsage;
   }
@@ -226,6 +231,7 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   ncclNetVDeviceProps_t sortedProps = *props;
   // Sort sub-devices by planeId so sub-device indices align by plane across all merged devices.
   if (ncclParamIbSortMergeNics()) {
+	  /*对传入的值进行排序*/
     qsort(sortedProps.devs, sortedProps.ndevs, sizeof(int), ncclIbCompareVDevsByPlane);
     props = &sortedProps;
   }
@@ -377,7 +383,7 @@ static ncclResult_t ncclIbAutoPolicy(enum ncclIbRailPolicy* policy, int* nDevs) 
 }
 
 // Attempt to assign a rail and plane ID for devices (after they have been sorted by PCIe path)
-static ncclResult_t ncclIbAutoAssignRailPlane(int d, const char** uniquePaths, int* uniqueCount) {
+static ncclResult_t ncclIbAutoAssignRailPlane(int d/*ib设备编号*/, const char** uniquePaths, int* uniqueCount) {
   int nDevs;
   enum ncclIbRailPolicy policy;
   NCCLCHECK(ncclIbAutoPolicy(&policy, &nDevs));
@@ -500,7 +506,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         struct ibv_device_attr devAttr;
         memset(&devAttr, 0, sizeof(devAttr));
         if (ncclSuccess != wrap_ibv_query_device(context, &devAttr)) {
-          /** 查询设备属性失败，跳过该设备 */
+          /** 跳过查询设备属性失败的 */
           WARN("NET/IB : Unable to query device %s", devices[d]->name);
           if (ncclSuccess != wrap_ibv_close_device(context)) {
             ret = ncclInternalError;
@@ -512,7 +518,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
           struct ibv_port_attr portAttr;
           if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
-        	  /*查询port属性*/
+        	  /*跳过查询port属性失败的*/
             WARN("NET/IB : Unable to query port_num %d", port_num);
             continue;
           }
@@ -530,7 +536,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
 
           // check for mlx5 data direct support only once for a each device
           if (devCount == -1) {
-            devCount = 1;/*第一个设备时进入*/
+            devCount = 1;/*第一个ib设备时进入*/
             devOffset = 0;
             if (ncclParamIbDataDirect() > 0 && ibProvider == IB_PROVIDER_MLX5 && ncclMlx5dvDmaBufCapable(context)) {
             	/*仅mellanx卡,且支持dma buffer时进入(用户还需要开启）*/
@@ -559,6 +565,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             ncclIbDevs[ncclNIbDevs].vendorId = devAttr.vendor_id;
             ncclIbDevs[ncclNIbDevs].vendorPartId = devAttr.vendor_part_id;
             // fwVer has the same size as fw_ver: copy it in full and always NUL-terminate.
+            /*fw版本号*/
             memcpy(ncclIbDevs[ncclNIbDevs].fwVer, devAttr.fw_ver, sizeof(ncclIbDevs[ncclNIbDevs].fwVer));
             ncclIbDevs[ncclNIbDevs].fwVer[sizeof(ncclIbDevs[ncclNIbDevs].fwVer) - 1] = '\0';
             ncclIbDevs[ncclNIbDevs].portAttr = portAttr;
@@ -656,6 +663,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       }
     }
     // sort devices to ensure a consistent order across nodes
+    /*通过bdf对ib设备进行排序*/
     if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
     // Once sorted, get the realPort ID, the plane index, and create the virtual devices.
     // Doing it after sorting ensures that devices will have consistent realPort IDs and plane indexes accross ranks.
@@ -683,8 +691,8 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       // Add this plain physical device to the list of virtual devices (after sorting)
       int vDev;
       ncclNetVDeviceProps_t vProps = {0};
-      vProps.ndevs = 1;
-      vProps.devs[0] = d;
+      vProps.ndevs = 1;/*指定devs数组长度为1*/
+      vProps.devs[0] = d;/*设备编号*/
       NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
     }
     char addrline[SOCKET_NAME_MAXLEN + 1];

@@ -174,7 +174,7 @@ struct ncclRmaProxyCtx {
 struct ncclRmaProxyState {
   struct ncclComm* comm;
   ncclRma_t* ncclRma;
-  int rmaVersion;
+  int rmaVersion;/*插件版本*/
   void* rmaInstance;
   bool connected;
   int rmaType;

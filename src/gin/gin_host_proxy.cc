@@ -708,7 +708,7 @@ ncclResult_t ncclGinProxyInit(struct ncclComm* comm) {
     return ncclInvalidArgument;
   }
   ncclGinProxy.name = rmaBackend->name;
-  ncclGinProxy.init = rmaBackend->init;
+  ncclGinProxy.init = rmaBackend->init;/*使用rmaBackend的初始化函数*/
   ncclGinProxy.devices = rmaBackend->devices;
   ncclGinProxy.getProperties = rmaBackend->getProperties;
   ncclGinProxy.finalize = rmaBackend->finalize;
