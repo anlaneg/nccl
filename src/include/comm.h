@@ -96,8 +96,8 @@ struct ncclUserRedOp {
 };
 
 struct ncclNodeRanks {
-  int localRanks;
-  int* localRankToRank;
+  int localRanks;/*此node上有多少个rank*/
+  int* localRankToRank;/*此node上的localRank对应的Rank编号*/
 };
 
 struct cliqueInfo {
@@ -604,7 +604,7 @@ struct ncclComm {
   float minLocalNetBw; // Minimum total network bandwidth local to a GPU
   float minNetBw; // Minimum bw of any network device local to a rank
 
-  ncclNet_t* ncclNet;
+  ncclNet_t* ncclNet;/*网络插件（例如：ncclNetIb)*/
   void* netContext;
   void* rmaContext;
   int netPluginIndex;/*ncclNet在网络插件数组中对应的index*/
@@ -651,20 +651,21 @@ struct ncclComm {
   int minDriverVersion; // min CUDA driver version
   bool cuMemGdrSupport;  // global cuMem GDR support
 
+  /*集群cpu体系是否混杂*/
   int cpuArch;   // architecture - As defined in src/include/graph.h, e.g. x86/arm/ppc/mixed
   int cpuVendor; // vendor - As defined in src/include/graph.h
 
-  int node;
-  int nNodes;
-  int localRank;
-  int localRanks;
-  int maxLocalRanks;
-  int minLocalRanks;
-  int* rankToNode;
-  int* rankToLocalRank;
-  int* localRankToRank;
+  int node;/*当前rank所在node编号*/
+  int nNodes;/*集群有多少个node(一般指多少台机器）*/
+  int localRank;/*当前rank在所在node上的localrank编号*/
+  int localRanks;/*当前rank所在的node上共有多少个rank*/
+  int maxLocalRanks;/*集群内节点内最大的localRank数*/
+  int minLocalRanks;/*集群内节点内最小的localRank数*/
+  int* rankToNode;/*记录各rank所在的node编号*/
+  int* rankToLocalRank;/*记录各rank在其所在的node上的localrank编号（从0开始编）*/
+  int* localRankToRank;/*当前node上localRanktoRank的映射表*/
   // localRanks and localRanktoRank for all nodes
-  struct ncclNodeRanks* nodeRanks;
+  struct ncclNodeRanks* nodeRanks;/*记录各node上ranks情况(见结构体内注释）*/
   // MNNVL: Multi-Node NVLink
   int MNNVL; // true when MNNVL is available
   struct cliqueInfo clique; // Our MNNVL clique information
@@ -685,8 +686,10 @@ struct ncclComm {
   uint64_t collOpCount;
 
   // Channels for collectives
+  /*指明本comm tree&ring可用并行channel数目*/
   int nChannels; // connection nChannels
   int collChannels; // enqueue nChannels
+  /*vnlink 的channel数*/
   int nvlsChannels; // enqueue nChannels
   int nvlsTreeMaxChunkSize;
 
@@ -694,9 +697,9 @@ struct ncclComm {
   int nvlsHeads[MAXCHANNELS];
   // Channels (per peer) for p2p
   int p2pnChannels;
-  int p2pnChannelsPerPeer;
+  int p2pnChannelsPerPeer;/*设置p2p每个peer之间channel总数*/
   int p2pSchedGroupSize;
-  int p2pMaxPeers;
+  int p2pMaxPeers;/*系统peer最大数*/
 
   // Should this comm allocate LL buffers for network P2P connections?
   bool allocP2pNetLLBuffers;
@@ -873,7 +876,7 @@ struct ncclComm {
 
   // buffer registration cache
   struct ncclRegCache regCache;/*buffer注册cache*/
-  int isAllNvlink;
+  int isAllNvlink;/*集群是否全nvlink*/
   bool isAllDirectP2p; // Subject to NCCL_P2P_LEVEL (for local ranks only).
   bool isAllCudaP2p; // Raw CUDA capability (for local ranks only).
   bool isAllDirectNvlink; // All GPUs are directly connected to each other through NVLink.

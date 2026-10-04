@@ -64,7 +64,7 @@ struct ncclReg {
 struct ncclRegCache {
   struct ncclReg** slots;
   int capacity/*slots可用的总大空间*/, population/*slots当前已填充的数目*/;
-  uintptr_t pageSize;
+  uintptr_t pageSize;/*页大小*/
 };
 
 ncclResult_t ncclRegCleanup(struct ncclComm* comm);

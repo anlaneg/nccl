@@ -62,9 +62,10 @@ extern int ncclNMergedIbDevs;
 #define MAX_MERGED_DEV_NAME (MAXNAMESIZE * NCCL_IB_MAX_DEVS_PER_NIC) + NCCL_IB_MAX_DEVS_PER_NIC
 struct alignas(64) ncclIbMergedDev {
   ncclNetVDeviceProps_t vProps;
-  int speed;
+  int speed;/*多个设备的speed总和*/
   int16_t railId;
-  int16_t planeId;
+  int16_t planeId;/*plane mask（每个dev的plane掩码）*/
+  /*多个设备的名称（通过'+'相连）*/
   char devName[MAX_MERGED_DEV_NAME]; // Up to NCCL_IB_MAX_DEVS_PER_NIC * name size, and a character for each '+'
 };
 

@@ -118,6 +118,7 @@ ncclResult_t ncclTopoGetDevNodes(struct ncclTopoSystem* system, int64_t baseId, 
                                  int* nNodes);
 
 // Local (myself)
+/*自已到自已，同一个设备*/
 #define PATH_LOC 0
 
 // Connection traversing NVLink
@@ -130,9 +131,11 @@ ncclResult_t ncclTopoGetDevNodes(struct ncclTopoSystem* system, int64_t baseId, 
 #define PATH_C2C 3
 
 // Connection traversing at most a single PCIe bridge
+/*共同在同一个pcie switch下*/
 #define PATH_PIX 4
 
 // Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+/*在不同的pcie switch下，但在相同的pcie host bridge下*/
 #define PATH_PXB 5
 
 // Connection between a GPU and a NIC using the C2C connection to the CPU and the PCIe connection to the NIC
@@ -143,18 +146,22 @@ ncclResult_t ncclTopoGetDevNodes(struct ncclTopoSystem* system, int64_t baseId, 
 #define PATH_PXN 7
 
 // Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+/*共同在一个CPU下，即分属于一个或多个host bridge，此时互联需要经过host brige*/
 #define PATH_PHB 8
 
 // Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+/*共同节点是System(即分属于不同的numa node,此时互联需要过QPI)*/
 #define PATH_SYS 9
 
 // Connection through the network
 #define PATH_NET 10
 
 // New type of path which should precede PATH_PIX
+/*同一个NIC的多个端口*/
 #define PATH_PORT PATH_NVL
 
 // Disconnected
+/*认定为断开（未通到<system>节点，不可达）*/
 #define PATH_DIS 11
 extern const char* topoPathTypeStr[];
 
@@ -177,16 +184,17 @@ struct ncclTopoGraph {
   int id; // ring : 0, tree : 1, collnet : 2, nvls : 3, collnetDirect : 4
   /*拓扑模式 */
   int pattern;
+  /*是否容许跨轨*/
   int crossNic;
   int collNet;
   int minChannels;
   int maxChannels;
   // Output
-  /*规划出几条并行通道*/
+  /*规划出几条并行通道（这此字段均是集群对齐的）*/
   int nChannels;
-  /*节点内估算带宽*/
+  /*节点内估算带宽（同机GPU-GPU）每通道带宽*/
   float bwIntra;
-  /*节点间估算带宽*/
+  /*节点间估算带宽（跨机 GPU-NIC-NIC-GPU)每通道带宽*/
   float bwInter;
   /*节点间估算延迟*/
   float latencyInter;
@@ -199,8 +207,9 @@ struct ncclTopoGraph {
   int sameChannels;
   /*节点间跳数*/
   int nHops;
+  /*指明各channel中本机各gpu rank的排列顺序*/
   int intra[MAXCHANNELS * NCCL_TOPO_MAX_NODES];
-  int64_t inter[MAXCHANNELS * 2];
+  int64_t inter[MAXCHANNELS * 2];/*指明各channel中前一个net节点，后一个net节点*/
 };
 ncclResult_t ncclTopoCompute(struct ncclTopoSystem* system, struct ncclTopoGraph* graph);
 
@@ -209,15 +218,20 @@ ncclResult_t ncclTopoDumpGraphs(struct ncclTopoSystem* system, int ngraphs, stru
 
 struct ncclTopoRanks {
   int crossNicRing;
+  /*用于描述整个本机片段用于连接其它机器的recv边界（即从其它机器收的rank)*/
   int ringRecv[MAXCHANNELS];
+  /*用于描述整个本机片段用于连接其它机器的send边界(即向其它机器发的rank)*/
   int ringSend[MAXCHANNELS];
+  /*用于描述当前rank在本机片段内部的recv边界（即从本机收的rank)*/
   int ringPrev[MAXCHANNELS];
+  /*用于描述当前rank在本机片段内部的send边界（即向本机发的rank)*/
   int ringNext[MAXCHANNELS];
-  int treeToParent[MAXCHANNELS];
-  int treeToChild0[MAXCHANNELS];
-  int treeToChild1[MAXCHANNELS];
+  int treeToParent[MAXCHANNELS];/*本机哪个rank连接父机器*/
+  int treeToChild0[MAXCHANNELS];/*本机哪个rank连接第一个子机器（leftchild)*/
+  int treeToChild1[MAXCHANNELS];/*本机哪个rank连接第二个子机器(rightchild)*/
+  /*nvlink通信中，head负责额外的中转工作，即用于节点间通信（这也是为什么前面在算拓扑时head算了两份流量）*/
   int nvlsHeads[MAXCHANNELS];
-  int nvlsHeadNum;
+  int nvlsHeadNum;/*nvlsHeads数组的有效长度*/
 };
 
 ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs, struct ncclTopoRanks* topoRanks);

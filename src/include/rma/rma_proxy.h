@@ -173,7 +173,7 @@ struct ncclRmaProxyCtx {
 
 struct ncclRmaProxyState {
   struct ncclComm* comm;
-  ncclRma_t* ncclRma;
+  ncclRma_t* ncclRma;/*rma插件对象,例如：ncclRmaIbProxy*/
   int rmaVersion;/*插件版本*/
   void* rmaInstance;
   bool connected;

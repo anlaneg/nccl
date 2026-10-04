@@ -1204,13 +1204,14 @@ struct socketAckInfo {
   int tag;
 };
 
+/*与peer建立连接，并向peer发送ack(指明tag)*/
 static ncclResult_t socketConnect(void* commState, int peer, int tag, struct ncclSocket* sock) {
   ncclResult_t ret = ncclSuccess;
   struct bootstrapState* state = (struct bootstrapState*)commState;
 
   struct socketAckInfo ack = (struct socketAckInfo){state->rank, tag};
   /*初始化socket*/
-  NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap,
+  NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer/*目的地址*/, state->magic, ncclSocketTypeBootstrap,
                                state->abortFlag),
                 ret, fail);
   /*执行连接*/
@@ -1664,32 +1665,39 @@ struct bootstrapPeerSocketOp {
 };
 static ncclResult_t bootstrapPeerConnectOp(void* opaque) {
   struct bootstrapPeerSocketOp* op = (struct bootstrapPeerSocketOp*)opaque;
-  NCCLCHECK(socketConnect(op->commState, op->peer, op->tag, op->sock));
+  /*执行连接*/
+  NCCLCHECK(socketConnect(op->commState, op->peer/*对端*/, op->tag/*标记，这个tag用的真妙*/, op->sock/*出参，创建的socket*/));
   return ncclSuccess;
 }
 static ncclResult_t bootstrapPeerAcceptOp(void* opaque) {
   struct bootstrapPeerSocketOp* op = (struct bootstrapPeerSocketOp*)opaque;
-  NCCLCHECK(socketAccept(op->commState, op->peer, op->tag, op->sock));
+  /*执行accept*/
+  NCCLCHECK(socketAccept(op->commState, op->peer, op->tag/*标记，这个tag用的真妙*/, op->sock/*出参，创建的socket*/));
   return ncclSuccess;
 }
 
-ncclResult_t bootstrapIntraNodeAllGather(void* commState, int* ranks, int rank, int nranks, void* allData, int size) {
-  if (nranks == 1) return ncclSuccess;
+/*在一组ranks之间收集allData数据（这个函数处处透着机灵）*/
+ncclResult_t bootstrapIntraNodeAllGather(void* commState, int* ranks/*整组rank列表*/, int rank/*自身rank在ranks中的索引*/, int nranks/*rank列表长度*/, void* allData/*总数据*/, int size/*单片数据大小*/) {
+  if (nranks == 1) return ncclSuccess;/*仅有一个rank，直接返回*/
   ncclResult_t ret = ncclSuccess;
   TRACE(NCCL_INIT, "rank %d nranks %d size %d - ENTER", rank, nranks, size);
 
-  int prevRank = ranks[(rank - 1 + nranks) % nranks];/*前一个rank */
-  int nextRank = ranks[(rank + 1) % nranks];/*后一个rank */
+  int prevRank = ranks[(rank - 1 + nranks) % nranks];/*自身rank的前一个rank */
+  int nextRank = ranks[(rank + 1) % nranks];/*自身rank的后一个rank */
   // intraNode bootstrap is done defacto using the socket-based implementation
   struct ncclSocket recvSocket, sendSocket;
-  struct bootstrapPeerSocketOp connectOp = {commState, nextRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER, &sendSocket};
+  /*向后一个发*/
+  struct bootstrapPeerSocketOp connectOp = {commState, nextRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER/*指明为节点内allgather*/, &sendSocket};
+  /*从前一个收*/
   struct bootstrapPeerSocketOp acceptOp = {commState, prevRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER, &recvSocket};
   NCCLCHECK(ncclSocketInit(&recvSocket));
   NCCLCHECKGOTO(ncclSocketInit(&sendSocket), ret, fail);
-  NCCLCHECKGOTO(bootstrapConcurrent(bootstrapPeerConnectOp, &connectOp, bootstrapPeerAcceptOp, &acceptOp), ret, fail);
+  NCCLCHECKGOTO(bootstrapConcurrent(bootstrapPeerConnectOp/*连接peer*/, &connectOp, bootstrapPeerAcceptOp/*接收连接*/, &acceptOp), ret, fail);
 
+  /*双向ring完成allData内容交换*/
   NCCLCHECKGOTO(socketRingAllGather(&sendSocket, &recvSocket, rank, nranks, (char*)allData, size), ret, fail);
 
+  /*临时socket，关闭掉*/
   NCCLCHECKGOTO(ncclSocketClose(&sendSocket), ret, fail);
   NCCLCHECKGOTO(ncclSocketClose(&recvSocket), ret, fail);
 

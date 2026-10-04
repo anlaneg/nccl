@@ -26,6 +26,7 @@
 #define U32_LEN 32 // using uint32_t
 #define CPU_SET_N_U32 (CPU_SETSIZE / U32_LEN)
 
+/*字符串形式cpumask转换为cpuset*/
 static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set, int cpuOffset = 0) {
   if (cpuOffset < 0 || cpuOffset >= CPU_SETSIZE) return ncclInvalidArgument;
   uint32_t cpumasks[CPU_SET_N_U32] = {0};
@@ -34,7 +35,7 @@ static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set, int 
   int m = CPU_SET_N_U32;
   char* str = strdup(maskStr);
   char* savePtr = NULL;
-  char* token = strtok_r(str, ",", &savePtr);
+  char* token = strtok_r(str, ",", &savePtr);/*字符串cpumask转为整数cpumask*/
   while (token != NULL && m > 0) {
     cpumasks[--m] = strtoul(token, NULL, /*base = hex*/ 16);
     token = strtok_r(NULL, ",", &savePtr);
@@ -42,7 +43,7 @@ static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set, int 
   free(str);
 
   // list all the CPUs as part of the CPU set, starting with the lowest mask (= current value of m)
-  ncclOsCpuZero(*set);
+  ncclOsCpuZero(*set);/*将以上得到的cpumask转换为cpuset*/
   for (int a = 0; (a + m) < CPU_SET_N_U32; a++) {
     // each mask is U32_LEN CPUs, list them all if the bit is on
     for (int i = 0; i < U32_LEN; ++i) {

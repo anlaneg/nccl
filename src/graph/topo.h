@@ -57,16 +57,22 @@
 extern const char* topoNodeTypeStr[];
 
 // We want link types and path types to match as much as possible
+/*LOOPBACK(节点到自身）*/
 #define LINK_LOC 0
+/*NVLINK（通过NVLINK相连）*/
 #define LINK_NVL 1
 // Skipping 2 for PATH_NVB
+/*Chip-to-Chip，通过芯片相连*/
 #define LINK_C2C 3
+/*通过PCIE相连*/
 #define LINK_PCI 4
 // Skipping 5 for PATH_PXB
 // Skipping 6 for PATH_PXN
 // Skipping 7 for PATH_P2C
 // Skipping 8 for PATH_PHB
+/*跳socket/QPI/UPI*/
 #define LINK_SYS 9
+/*通过网络相连*/
 #define LINK_NET 10
 extern const char* topoLinkTypeStr[];
 
@@ -74,20 +80,23 @@ extern int64_t ncclParamPxnC2c();
 
 struct ncclTopoNode;
 struct ncclTopoLink {
-  int type;
-  float bw;
-  struct ncclTopoNode* remNode;
+  int type;/*link类型枚举（是真实的硬件标签），例如LINK_PCI*/
+  float bw;/*带宽*/
+  struct ncclTopoNode* remNode;/*远端节点*/
 };
 // Allows for up to 32 NICs per node on GB200-NVL72
 #define NCCL_TOPO_MAX_LINKS 576
 #define NCCL_TOPO_MAX_HOPS (NCCL_TOPO_MAX_NODES * NCCL_TOPO_NODE_TYPES)
 
+/*用来表示一组link,即一段path*/
 struct ncclTopoLinkList {
   struct ncclTopoLink** list;
+  /*list数组当前使用量*/
   int count;     // Number of links stored in list.
+  /*list数组当前最大容量*/
   int capacity;  // Number of entries allocated for list.
-  float bw;
-  int type;
+  float bw;/*带宽*/
+  int type;/*path类型，path是沿途最差的一跳的综合描述。*/
 };
 
 #define NCCL_TOPO_UNDEF (-1)
@@ -97,6 +106,7 @@ struct ncclTopoLinkList {
 #define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
 #define NCCL_TOPO_ID_LOCAL_ID(id) (id & NCCL_TOPO_ID_LOCAL_ID_MASK)
 #define NCCL_TOPO_LOCAL_NIC_ID(numaid, busid) (((int64_t)numaid << 56) + busid)
+/*systemid,localid分用uint64_t*/
 #define NCCL_TOPO_ID(systemid, localid) (((int64_t)systemid << 56) + (localid & NCCL_TOPO_ID_LOCAL_ID_MASK))
 #define NCCL_TOPO_GPU_LOCAL_RANK_SHIFT 40
 #define NCCL_TOPO_GPU_LOCAL_ID(busId, localRankOnDev) \
@@ -108,25 +118,28 @@ struct ncclTopoLinkList {
   ((mloPart) != NCCL_TOPO_UNDEF ? ((busId) | NCCL_TOPO_MLOPART(mloPart)) : (busId))
 
 struct ncclTopoNode {
-  int type;/**节点类型 */
-  int64_t id;
+  int type;/**topo节点类型(比如CPU等) */
+  int64_t id;/*节点编号*/
   // Type specific data
   union {
     struct {
       int dev; // NVML dev number
-      int rank;
-      int cudaCompCap;
-      int gdrSupport;
+      int rank;/*gpu所属的rank*/
+      int cudaCompCap;/*gpu算力*/
+      int gdrSupport;/*是否支持gdr*/
       int mloPart; // MLOPart partition index, or NCCL_TOPO_UNDEF if not MLOPart
       struct ncclTopoNode* parent; // parent DEV node
-    } gpu;
+    } gpu;/*gpu节点取值*/
     struct {
+    	/*vendor,device,sub_vendor,sub_device拼成的id*/
       uint64_t device;  // Same as pci.device, a combination of vendor, device, subsystem_vendor and subsystem_device
+      /*NVML设备编号*/
       int dev; // NVML dev number
-      int cudaCompCap;
+      int cudaCompCap;/*算力*/
       int nGpus; // number of GPU partitions attached to this DEV node
     } dev;
     struct {
+    	/*设备编号*/
       int dev; // Plugin dev number
       uint64_t vendor; // PCI vendor ID
       uint64_t device; // PCI device ID
@@ -143,25 +156,31 @@ struct ncclTopoNode {
       int planeId;
     } net;
     struct {
-      int arch;
-      int vendor;
-      int model;
-      ncclAffinity affinity;
-    } cpu;
+      int arch;/*cpu体系对应的字典中的索引*/
+      int vendor;/*cpu vendor对应的字典中的索引*/
+      int model;/*cpu model对应的字典中的索引*/
+      ncclAffinity affinity;/*cpu亲呢性对应的cpuset*/
+    } cpu/*cpu节点内容*/;
     struct {
       uint64_t device;
     } pci;
   };
-  int nlinks;
+  int nlinks;/*links数组有效长度*/
+  /*记录此节点到其它邻接（注意是邻接不是所有）设备间的link情况（带宽按从大到小排列；link类型；及对端设备指针）*/
   struct ncclTopoLink links[NCCL_TOPO_MAX_LINKS];
   // Pre-computed paths to GPUs and NICs
-  struct ncclTopoLinkList* paths[NCCL_TOPO_NODE_TYPES];/**路径数组,每种类型一个指针 */
+  /*记录此节点经过一组怎样的link可以到达（见ncclTopoLinkList中的list成员）
+   * 目的地（这个目的地由ncclTopoLinkList指针来隐式指出的，指明了所有目的地，
+   * 由于目的地的数目是多个长度还不确定，这里用了指针，
+   * 因此在申请时会依据总数来申请，见ncclTopoSetPaths函数。之后所有访问将使用
+   * paths[type][dst]的形式来体现）*/
+  struct ncclTopoLinkList* paths[NCCL_TOPO_NODE_TYPES];
   // Used during search
   uint64_t used;
 };
 
 struct ncclTopoNodeSet {
-  int count;
+  int count;/*节点集合长度，nodes节点的长度*/
   struct ncclTopoNode nodes[NCCL_TOPO_MAX_NODES];
 };
 
@@ -171,9 +190,10 @@ struct ncclTopoNetRailKeyList {
 
 struct ncclTopoSystem {
   int systemId;
+  /*记录各系统host对应的hash*/
   uint64_t hostHashes[NCCL_TOPO_MAX_NODES];
   int nHosts;
-  /*不同类型的节点*/
+  /*在system下的不同类型的节点（比如gpu,nic,cpu等）*/
   struct ncclTopoNodeSet nodes[NCCL_TOPO_NODE_TYPES];
   float maxBw;
   float totalBw;
@@ -216,7 +236,7 @@ struct ncclTopoNetInfo {
   int mergePolicy;
   const char* forceMerge;
   // dev count tracking functions (not part of ncclNet)
-  ncclResult_t (*getDevCount)(int, int*, int*);
+  ncclResult_t (*getDevCount)(int, int*/*出参，物理设备数*/, int*/*出参，虚拟设备数*/);/*取物理设备，虚拟设备数目*/
   ncclResult_t (*setVirtDevCount)(int, int);
   // ncclNet API functions
   const char* name;
@@ -271,6 +291,7 @@ static ncclResult_t ncclTopoIdToIndex(struct ncclTopoSystem* system, int type, i
   return ncclInternalError;
 }
 
+/*取rank对应的gpu在system中的节点索引*/
 static ncclResult_t ncclTopoRankToIndex(struct ncclTopoSystem* system, int rank, int* index, bool showWarn) {
   *index = -1;
   for (int i = 0; i < system->nodes[GPU].count; i++) {

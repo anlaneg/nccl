@@ -1234,7 +1234,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   int nChannelsOrig;
   struct allGatherInfo* allGather3Data = NULL;
   struct ncclTopoRanks** allTopoRanks = NULL;
-  int *nodesFirstRank = NULL, *nodesTreePatterns = NULL;
+  int *nodesFirstRank = NULL, *nodesTreePatterns/*记录各节点上tree算法对应的pattern*/ = NULL;
   int* rings = NULL;
   int* nvbPeers = NULL;
   struct ncclProxyConnector proxyConn;
@@ -1446,14 +1446,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // Dump XML if requested by user
   const char* dumpXmlFile;
-  dumpXmlFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE");/**取topo dump文件路径 */
+  dumpXmlFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE");/**取指定的topo dump文件路径 */
   if (dumpXmlFile) {
-	   /*给定dumpXmlFile，从dumpXmlFile中获取拓扑结构,写到文件 */
+	   /*加载本机拓扑结构，给定dumpXmlFile，构建的内容输出到dumpXmlFile */
        NCCLCHECKGOTO(ncclTopoGetSystem(comm, NULL, dumpXmlFile), ret, fail);
   }
 
   // Topo detection / System graph creation
-  NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);/**加载拓扑结构到comm->topo */
+  /**加载本机拓扑结构到comm->topo，这个函数返回，我们就拿到了本机所有gpu与nic间的层次
+   * 及link反映（之后就可以计算本机任意两个设备之间的path了） */
+  NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);
   // Compute paths between GPUs and NICs
   NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
   // Remove inaccessible GPUs and unused NICs
@@ -1465,7 +1467,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   // Decide on comm's CPU architecture.
   NCCLCHECKGOTO(ncclTopoComputeCommCPU(comm), ret, fail);
   // Print final topology
-  NCCLCHECKGOTO(ncclTopoPrint(comm->topo), ret, fail);
+  NCCLCHECKGOTO(ncclTopoPrint(comm->topo), ret, fail);/*显示最终拓扑*/
   timers[TIMER_INIT_TOPO] = clockNano() - timers[TIMER_INIT_TOPO];
 
   // Set Affinity to a CPU local the our GPU, so that all memory we allocate
@@ -1486,35 +1488,44 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   timers[TIMER_INIT_GRAPHS] = clockNano();
   // Get rings and trees
   memset(ringGraph, 0, sizeof(struct ncclTopoGraph));
-  ringGraph->id = 0;
+  ringGraph->id = 0;/*ring形graph编号为0*/
   ringGraph->pattern = NCCL_TOPO_PATTERN_RING;
   ringGraph->minChannels = 1;
   ringGraph->maxChannels = MAXCHANNELS / 2;
+  /*计算ring型拓扑最大channel情况*/
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, ringGraph), ret, fail);
+  /*显示ring型拓扑情况*/
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, ringGraph), ret, fail);
 
   memset(treeGraph, 0, sizeof(struct ncclTopoGraph));
-  treeGraph->id = 1;
+  treeGraph->id = 1;/*tree形graph编号为1*/
   treeGraph->pattern = NCCL_TOPO_PATTERN_BALANCED_TREE;
+  /*保证和ring型channel一致（方便切换）*/
   treeGraph->minChannels = ringGraph->nChannels;
   treeGraph->maxChannels = ringGraph->nChannels;
+  /*计算树型拓扑最大channel情况（本质上机间的tree,实际上就是一条chain,
+   * 和ring的区别仅在最后一个节点要不要去连第一个节点。只有机间时，对多个机器
+   * 才能形成tree形，当然本节点为了在处理本机chain的同时通知到外部节点，本节点的
+   * chain还需要与机间的tree连起来，此处还不是时候)
+   * */
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, treeGraph), ret, fail);
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, treeGraph), ret, fail);
 
   memset(collNetChainGraph, 0, sizeof(struct ncclTopoGraph));
-  collNetChainGraph->id = 2;
+  collNetChainGraph->id = 2;/*netchain形graph编号为2*/
   collNetChainGraph->pattern = NCCL_TOPO_PATTERN_TREE;
   collNetChainGraph->collNet = 1;
   collNetChainGraph->minChannels = ringGraph->nChannels;
   collNetChainGraph->maxChannels = ringGraph->nChannels;
 
   memset(collNetDirectGraph, 0, sizeof(struct ncclTopoGraph));
-  collNetDirectGraph->id = 4;
+  collNetDirectGraph->id = 4;/*netdirect形graph编号为4*/
   collNetDirectGraph->pattern = NCCL_TOPO_PATTERN_COLLNET_DIRECT;
   collNetDirectGraph->collNet = 1;
   collNetDirectGraph->minChannels = 1;
   collNetDirectGraph->maxChannels = MAXCHANNELS;
   if (comm->config.collnetEnable) {
+	  /*collnet开启时，创建collnet拓扑*/
     NCCLCHECKGOTO(ncclTopoCompute(comm->topo, collNetChainGraph), ret, fail);
     NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, collNetChainGraph), ret, fail);
     NCCLCHECKGOTO(ncclTopoCompute(comm->topo, collNetDirectGraph), ret, fail);
@@ -1522,11 +1533,12 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   }
 
   memset(nvlsGraph, 0, sizeof(struct ncclTopoGraph));
-  nvlsGraph->id = 3;
+  nvlsGraph->id = 3;/*nvlink形graph编号为3*/
   nvlsGraph->pattern = NCCL_TOPO_PATTERN_NVLS;
   nvlsGraph->minChannels = 1;
   nvlsGraph->maxChannels = MAXCHANNELS;
   if (comm->nvlsSupport) {
+	  /*计算nvlink拓扑最大channel,计算中nvlink按星型通信来考虑*/
     NCCLCHECKGOTO(ncclTopoCompute(comm->topo, nvlsGraph), ret, fail);
     NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, nvlsGraph), ret, fail);
   }
@@ -1536,12 +1548,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->allocP2pNetLLBuffers = ncclParamAllocP2pNetLLBuffers() == 1;
 
   if (comm->rank == ncclParamGraphDumpFileRank()) {
+	  /*指明了此rank来dump各拓扑结果，在此处生成拓扑*/
     struct ncclTopoGraph* dumpGraphs[5] = {ringGraph, treeGraph, collNetDirectGraph, collNetChainGraph, nvlsGraph};
     NCCLCHECKGOTO(ncclTopoDumpGraphs(comm->topo, 5, dumpGraphs), ret, fail);
   }
 
   // Cap maxP2pPeers to nRanks
   if (comm->config.maxP2pPeers != NCCL_CONFIG_UNDEF_INT && comm->config.maxP2pPeers > comm->nRanks) {
+	  /*规范maxP2pPeer使其等于系统rank数目*/
     INFO(NCCL_INIT, "Max P2P Peers %d is too high, capping to communicator size %d", comm->config.maxP2pPeers,
          comm->nRanks);
     comm->config.maxP2pPeers = comm->nRanks;
@@ -1553,20 +1567,24 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   // we temporarily store the start time of the subsequent one in an as-of-yet unused CONNECT timer.
   timers[TIMER_INIT_CONNECT] = clockNano();
   // AllGather3 - begin
-  NCCLCHECKGOTO(ncclCalloc(&allGather3Data, nranks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&allGather3Data, nranks), ret, fail);/*申请allGather3Data，准备全rank交换*/
 
   if (comm->ncclNet && comm->ncclNet->devices) {
     int gpu;
+    /*取网络插件识别的本机设备数*/
     NCCLCHECKGOTO(comm->ncclNet->devices(&localNetDeviceCount), ret, fail);
+    /*此rank使用的gpu在topo中的索引*/
     NCCLCHECKGOTO(ncclTopoRankToIndex(comm->topo, comm->rank, &gpu, false), ret, fail);
     NCCLCHECKGOTO(ncclTopoGetLocalNetCountByBw(comm->topo, gpu, &localNetCountByBw, &localNetBw), ret, fail);
   }
   if (collNetSupport(comm)) {
+	  /*支持collnet,取collnet插件发现的设备数*/
     NCCLCHECKGOTO(collNetDevices(comm, &localCollNetCount), ret, fail);
   }
   INFO(NCCL_INIT, "Rank %d: %d Net devices", rank, localNetDeviceCount);
   INFO(NCCL_INIT, "Rank %d: %d CollNet devices", rank, localCollNetCount);
 
+  /*填充本rank在allGather3中的信息*/
   for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
     allGather3Data[rank].graphInfo[a].pattern = graphs[a]->pattern;
     allGather3Data[rank].graphInfo[a].nChannels = graphs[a]->nChannels;
@@ -1592,12 +1610,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   NCCLCHECK(ncclTopoPathAllNVLink(comm->topo, &comm->isAllNvlink));
   allGather3Data[rank].isAllNvlink = comm->isAllNvlink;
 
+  /*本置本comm可用的channels数目*/
   comm->nChannels = std::min(treeGraph->nChannels, ringGraph->nChannels);
   NCCLCHECKGOTO(ncclTopoPreset(comm, graphs, &allGather3Data[rank].topoRanks), ret, fail);
 
-  /*交换allGather3Data*/
+  /*全rank交换计算的allGather3Data*/
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allGather3Data, sizeof(*allGather3Data)), ret, fail);
 
+  /*现在我们拿到了全rank计算的topo数据，当前我们在填充时机间的信息还没有填*/
   // Determine nNodes, firstRanks, ...
   NCCLCHECKGOTO(ncclCalloc(&nodesFirstRank, nranks), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&nodesTreePatterns, nranks), ret, fail);
@@ -1605,24 +1625,30 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->minNetCount = INT_MAX;
   comm->minLocalNetBw = allGather3Data[rank].localNetBw;
 
+  /*遍历所有rank*/
   for (int r = 0; r < nranks; r++) {
-    int node;
+    int node/*当前node索引*/;
+    /*此rank的recv ring[0]即用于收另一个机器的，收集这些rank编号（rank编号本就是集群唯一的）
+     * 到nodesFirstRank中，如果nodesFirstRank集合中已包含本fristRank,则node数不会达到
+     * comm->nNodes,如果达到，说明此firstRank第一次被发现，则放入集合，同时主机数comm->nNodes数加1*/
     int firstRank = allGather3Data[r].topoRanks.ringRecv[0];
     for (node = 0; node < comm->nNodes && nodesFirstRank[node] != firstRank; node++);
     if (node == comm->nNodes) {
       comm->nNodes++;
       nodesFirstRank[node] = firstRank;
       // Record tree pattern of each node as they can be different depending on sm arch
+      /*记录此节点上tree算法对应的pattern,可查找拓扑过程中各机器可能选择不同*/
       nodesTreePatterns[node] = allGather3Data[r].graphInfo[NCCL_ALGO_TREE].pattern;
     }
     comm->rankToNode[r] = node;
 
     if (comm->cpuArch != allGather3Data[r].cpuArch && comm->cpuArch != NCCL_TOPO_CPU_ARCH_MIXED) {
-      comm->cpuArch = NCCL_TOPO_CPU_ARCH_MIXED;
+      comm->cpuArch = NCCL_TOPO_CPU_ARCH_MIXED;/*主机间cpu体系混杂*/
     }
     if (comm->cpuVendor != allGather3Data[r].cpuVendor && comm->cpuVendor != NCCL_TOPO_CPU_VENDOR_MIXED) {
-      comm->cpuVendor = NCCL_TOPO_CPU_VENDOR_MIXED;
+      comm->cpuVendor = NCCL_TOPO_CPU_VENDOR_MIXED;/*主机间cpu vendor混杂*/
     }
+    /*收集集群localnet，collnet的最大，最小数*/
     minLocalNetCount = std::min(minLocalNetCount, allGather3Data[r].localNetDeviceCount);
     maxLocalNetCount = std::max(maxLocalNetCount, allGather3Data[r].localNetDeviceCount);
     minLocalCollNetCount = std::min(minLocalCollNetCount, allGather3Data[r].localCollNetCount);
@@ -1634,14 +1660,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->minLocalNetBw = std::min(comm->minLocalNetBw, allGather3Data[r].localNetBw);
   }
   if (rank == 0) {
+	  /*仅0号rank处理*/
     INFO(NCCL_INIT, "Local Net device counts across ranks: min %d max %d", minLocalNetCount, maxLocalNetCount);
     INFO(NCCL_INIT, "Local CollNet device counts across ranks: min %d max %d", minLocalCollNetCount,
          maxLocalCollNetCount);
 
     // Check Net device count mismatch
-    if (minLocalNetCount != maxLocalNetCount) {
+    if (minLocalNetCount != maxLocalNetCount) {/*集群中各机器localnet数不相等*/
       // Log mismatched ranks first
       for (int r = 0; r < nranks; r++) {
+    	  /*显示哪个rank的local net device小于集群最大值*/
         if (allGather3Data[r].localNetDeviceCount < maxLocalNetCount) {
           INFO(NCCL_INIT, "Rank %d has %d local Net devices (max %d).", r, allGather3Data[r].localNetDeviceCount,
                maxLocalNetCount);
@@ -1662,10 +1690,10 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     }
 
     // Check CollNet device count mismatch
-    if (minLocalCollNetCount != maxLocalCollNetCount) {
+    if (minLocalCollNetCount != maxLocalCollNetCount) {/*collnet数在集群中也不唯一*/
       // Log mismatched ranks first
       for (int r = 0; r < nranks; r++) {
-        if (allGather3Data[r].localCollNetCount < maxLocalCollNetCount) {
+        if (allGather3Data[r].localCollNetCount < maxLocalCollNetCount) {/*输出log*/
           INFO(NCCL_INIT, "Rank %d has %d local CollNet devices (max %d).", r, allGather3Data[r].localCollNetCount,
                maxLocalCollNetCount);
         }
@@ -1718,6 +1746,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   // And fill the ranks arrays
   for (int r = 0; r < comm->nRanks; r++) {
     int node = comm->rankToNode[r];
+    /*给各node上localRank到rank的映射给值*/
     comm->nodeRanks[node].localRankToRank[comm->nodeRanks[node].localRanks++] = r;
   }
   comm->node = comm->rankToNode[rank];
@@ -1727,9 +1756,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   NCCLCHECKGOTO(initNvlDomainInfo(comm), ret, fail);
 
+  /*显示本rank所在主机，对应localrank编号，localranks及0号localrank对应的rank编号*/
   TRACE(NCCL_INIT, "hostHash[%d] %lx localRank %d localRanks %d localRank0 %d", rank, comm->peerInfo[rank].hostHash,
         comm->localRank, comm->localRanks, comm->localRankToRank[0]);
   if (comm->localRank == -1 || comm->localRankToRank[0] == -1 || comm->localRanks == 0) {
+	  /*这种肯定是有bug了*/
     WARN("Failed to determine local ranks rank %d hostHash %lx pidHash %lx localRank %d localRanks %d localRank0 %d",
          rank, comm->peerInfo[rank].hostHash, comm->peerInfo[rank].pidHash, comm->localRank, comm->localRanks,
          comm->localRankToRank[0]);
@@ -1750,10 +1781,13 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   nChannelsOrig = comm->nChannels;
   comm->minNetBw = allGather3Data[rank].minNetBw;
   NCCLCHECKGOTO(ncclCalloc(&allTopoRanks, comm->nRanks), ret, fail);
+  /*上面申请了allTopoRanks,这里在循环里填充各rank的topo信息；并使当前rank的graphs和集群中其它
+   * rank的情况保持对齐；并使comm中字段也保持对齐*/
   for (int i = 0; i < nranks; i++) {
     allTopoRanks[i] = &allGather3Data[i].topoRanks;
     // Make sure we align all ranks so that the tuning is consistent across ranks
     for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
+      /*通过上层for遍历所有rank,使我们的graphs和集群内所有其它rank保持一致*/
       graphs[a]->nChannels = std::min(allGather3Data[i].graphInfo[a].nChannels, graphs[a]->nChannels);
       graphs[a]->sameChannels = std::min(allGather3Data[i].graphInfo[a].sameChannels, graphs[a]->sameChannels);
       graphs[a]->bwIntra = std::min(allGather3Data[i].graphInfo[a].bwIntra, graphs[a]->bwIntra);
@@ -1767,6 +1801,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->p2pMaxPeers = std::max(comm->p2pMaxPeers, allGather3Data[i].p2pMaxPeers);
     comm->minNetBw = std::min(comm->minNetBw, allGather3Data[i].minNetBw);
   }
+  /*集群中如果存在collnet channel为0的，禁用collnet*/
   if (graphs[NCCL_ALGO_COLLNET_CHAIN]->nChannels == 0) comm->config.collnetEnable = 0;
   if (graphs[NCCL_ALGO_NVLS]->nChannels == 0) comm->nvlsSupport = comm->nvlsChannels = 0;
 
@@ -1774,8 +1809,13 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     NCCLCHECKGOTO(ncclNvlsTuning(comm), ret, fail);
   }
 
+  /*tree与ring的channel数会再对齐一次，这样整个集群内tree&ring的channel数保持了一致
+   * 使其一致，就使得大消息与小消息有了tree,ring之间的互换的可行性
+   * */
   comm->nChannels = treeGraph->nChannels = ringGraph->nChannels = std::min(treeGraph->nChannels, ringGraph->nChannels);
   if (comm->nChannels < nChannelsOrig) {
+	  /*两次对齐使得channel数减少了，之前放在channels后面的channel就得前移了
+	   * （这里为什么不一次性前移memmove）*/
     // We started duplicating channels during Preset(), so we need to move the
     // duplicated channels since we have removed some.
     for (int i = 0; i < comm->nChannels; i++) {
@@ -1795,7 +1835,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->isOneRPN = (comm->maxLocalRanks == 1);
 
   NCCLCHECKGOTO(ncclCalloc(&rings, nranks * MAXCHANNELS), ret, fail);
-  NCCLCHECKGOTO(ncclTopoPostset(comm, nodesFirstRank, nodesTreePatterns, allTopoRanks, rings, graphs, parent), ret,
+  /*使不同node间连起来*/
+  NCCLCHECKGOTO(ncclTopoPostset(comm, nodesFirstRank/*所有节点上的首个rank*/, nodesTreePatterns, allTopoRanks/*所有rank的topo情况*/, rings, graphs, parent), ret,
                 fail);
 
   if (ncclNvlsTransportEnabled(comm)) {
@@ -1809,6 +1850,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   char line[1024];
   line[0] = '\0';
   for (int c = 0; c < comm->nChannels; c++) {
+	  /*显示各channel*/
     struct ncclTree* tree = &comm->channels[c].tree;
     snprintf(line + strlen(line), 1023 - strlen(line), " [%d] %d/%d/%d->%d->%d", c, tree->down[0], tree->down[1],
              tree->down[2], rank, tree->up);
@@ -2269,6 +2311,7 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   comm->cudaArch = cudaArch;
   comm->maxSharedMemOptin = maxSharedMem;
 
+  /*计算拓扑，交换拓扑*/
   NCCLCHECKGOTO(initTransportsRank(comm, job->parent, timers), res, fail);
 
   // Start the NCCL progress counter monitor that refreshes host counter mirrors.

@@ -11,8 +11,11 @@
 
 // NVL domain information struct
 typedef struct {
+	/*集群有多少个node*/
   int nNvlDomains;                    // number of NVLink domains
+  /*集群中包含rank最少的rank数是多少*/
   int minRanksPerNvlDomain;           // minimum ranks across all NVLink domains
+  /*集群中包含rank最多的rank数是多少*/
   int maxRanksPerNvlDomain;           // maximum ranks across all NVLink domains
 } ncclNvlDomainInfo_v5_t;
 

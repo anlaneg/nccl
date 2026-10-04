@@ -304,7 +304,7 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
     return;
   }
 
-  std::lock_guard<std::mutex> lock(ncclDebugMutex);
+  std::lock_guard<std::mutex> lock(ncclDebugMutex);/*抢这把锁，以便保证各rank可以排它输出*/
   uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
   if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED)
     ncclDebugInit();

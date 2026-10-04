@@ -209,7 +209,8 @@ fail:
   return ncclInternalError;
 }
 
-ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
+/*尝试合并props->ndevs个设备，返回合并后的设备编号d,合并设备填充到ncclIbMergedDevs[i]*/
+ncclResult_t ncclIbMakeVDeviceInternal(int* d/*出参，产生的mergeDev编号*/, ncclNetVDeviceProps_t* props/*要merge的多个设备*/) {
   if (ncclParamIbMergeNics() == 0 && props->ndevs > 1) {
 	  /*没有开启merge nics选项*/
     INFO(NCCL_NET, "NET/IB : Skipping makeVDevice, NCCL_IB_MERGE_NICS=0");
@@ -231,13 +232,13 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   ncclNetVDeviceProps_t sortedProps = *props;
   // Sort sub-devices by planeId so sub-device indices align by plane across all merged devices.
   if (ncclParamIbSortMergeNics()) {
-	  /*对传入的值进行排序*/
+	  /*对传入的值按planid,bdf进行排序*/
     qsort(sortedProps.devs, sortedProps.ndevs, sizeof(int), ncclIbCompareVDevsByPlane);
     props = &sortedProps;
   }
 
   // Always count up number of merged devices
-  ncclIbMergedDev* mDev = ncclIbMergedDevs + ncclNMergedIbDevs;
+  ncclIbMergedDev* mDev = ncclIbMergedDevs + ncclNMergedIbDevs;/*取待填充位置*/
   mDev->vProps.ndevs = 0;
   mDev->speed = 0;
   mDev->railId = ncclIbDevs[props->devs[0]].railId;
@@ -246,6 +247,7 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
 
   for (int i = 0; i < props->ndevs; i++) {
     ncclIbDev* dev = ncclIbDevs + props->devs[i];
+    /*数过超限，报错*/
     if (mDev->vProps.ndevs == NCCL_IB_MAX_DEVS_PER_NIC) return ncclInvalidUsage;
     mDev->vProps.devs[mDev->vProps.ndevs++] = props->devs[i];
     mDev->speed += dev->speed;
@@ -256,6 +258,7 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
 
     // Each successive time, copy the name '+' new name
     if (mDev->vProps.ndevs > 1) {
+    	/*通过'+'将多个设备名称合并*/
       snprintf(mDev->devName + strlen(mDev->devName), sizeof(mDev->devName) - strlen(mDev->devName), "+%s",
                dev->devName);
     // First time, copy the plain name
@@ -265,14 +268,16 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   }
 
   // Check link layers
-  ncclIbDev* dev0 = ncclIbDevs + props->devs[0];
-  for (int i = 1; i < props->ndevs; i++) {
+  ncclIbDev* dev0 = ncclIbDevs + props->devs[0];/*取0号设备*/
+  for (int i = 1/*从下一个设备开始*/; i < props->ndevs; i++) {
     if (props->devs[i] >= ncclNIbDevs) {
+    	/*提供的dev_id有误，超过了发现的ib设备总数*/
       WARN("NET/IB : Cannot use physical device %d, max %d", props->devs[i], ncclNIbDevs);
       return ncclInvalidUsage;
     }
     ncclIbDev* dev = ncclIbDevs + props->devs[i];
     if (dev->link != dev0->link) {
+    	/*两个设备的类型不一致*/
       WARN("NET/IB : Attempted to merge incompatible devices: [%d]%s:%d/%s and [%d]%s:%d/%s. Try selecting NICs of "
            "only one link type using NCCL_IB_HCA",
            props->devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), props->devs[i], dev->devName,
@@ -281,12 +286,13 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
     }
   }
 
-  *d = ncclNMergedIbDevs++;
+  *d = ncclNMergedIbDevs++;/*增加mergedIb设备总数*/
   INFO(NCCL_NET, "NET/IB : Made virtual device [%d] name=%s speed=%d ndevs=%d rail=%d plane=%d", *d, mDev->devName,
        mDev->speed, mDev->vProps.ndevs, mDev->railId, mDev->planeId);
   return ncclSuccess;
 }
 
+/*将props中指明的一组（或一个）设备merge成一个虚设备*/
 ncclResult_t ncclIbMakeVDevice(int* d, ncclNetVDeviceProps_t* props) {
   std::lock_guard<std::mutex> lock(ncclIbMutex);
   ncclResult_t res = ncclIbMakeVDeviceInternal(d, props);
@@ -433,6 +439,7 @@ static ncclResult_t ncclIbAutoAssignRailPlane(int d/*ib设备编号*/, const cha
   return ncclSuccess;
 }
 
+/*ib设备发现及初始化*/
 extern int64_t ncclIbArThreshold;
 ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
@@ -449,13 +456,14 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
   }
 
   if (ncclNIbDevs == -1) {
+	  /*未初始化，则进入*/
     std::lock_guard<std::mutex> lock(ncclIbMutex);
     wrap_ibv_fork_init();
     if (ncclNIbDevs == -1) {
       int nIpIfs = 0;
       ncclNIbDevs = 0;
       ncclNMergedIbDevs = 0;
-      /*找ib设备名称及ib设备对应的地址*/
+      /*为ib设备找接口名称及接口地址*/
       NCCLCHECK(ncclFindInterfaces(ncclIbIfName/*出参，找到的接口名称*/, &ncclIbIfAddr/*出参，出接口地址*/, MAX_IF_NAME_SIZE, 1/*最多找一个*/, &nIpIfs));
       if (nIpIfs != 1) {
     	  /*没有找到*/
@@ -484,7 +492,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         goto fail;
       }
 
-      /*遍历所有的ibverbs设备*/
+      /*遍历所有的ibverbs设备，填充ncclIbDevs表*/
       for (int d = 0; d < nIbDevs && ncclNIbDevs < MAX_IB_DEVS; d++) {
         struct ibv_context* context = NULL;
         /*打开此ib设备*/
@@ -624,7 +632,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                  ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar,
                  ncclIbDevs[ncclNIbDevs].oooRqSize);
 
-            /*为每个设备创建一个线程*/
+            /*为每个设备创建一个线程,处理异步事件*/
             ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
             /*指定线程名称*/
             ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
@@ -678,7 +686,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                     ret, fail);
       NCCLCHECKGOTO(ncclIbGetRealPort(ncclIbDevs[d].pciPath, &ncclIbDevs[d].realPort, d), ret, fail);
       snprintf(line + strlen(line), sizeof(line) - strlen(line), " [%d]%s:%d", d, ncclIbDevs[d].devName,
-               ncclIbDevs[d].portNum);
+               ncclIbDevs[d].portNum);/*显示设备索引，名称，port名称*/
       if (ncclIbDevs[d].railId != NCCL_NET_ID_UNDEF) {
         snprintf(line + strlen(line), sizeof(line) - strlen(line), ":%d", ncclIbDevs[d].railId);
       } else if (ncclIbDevs[d].planeId != NCCL_NET_ID_UNDEF) {
@@ -693,7 +701,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       ncclNetVDeviceProps_t vProps = {0};
       vProps.ndevs = 1;/*指定devs数组长度为1*/
       vProps.devs[0] = d;/*设备编号*/
-      NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
+      NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));/*为每个ib产生一个merge设备*/
     }
     char addrline[SOCKET_NAME_MAXLEN + 1];
     INFO(NCCL_INIT | NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "",
@@ -718,7 +726,7 @@ ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config
 }
 
 ncclResult_t ncclIbDevices(int* ndev) {
-  *ndev = ncclNMergedIbDevs;
+  *ndev = ncclNMergedIbDevs;/*返回merge的虚设备数目*/
   return ncclSuccess;
 }
 
@@ -755,15 +763,16 @@ ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   return ncclSuccess;
 }
 
-/*取ib属性*/
-ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
+/*取虚设备(merged dev)属性*/
+ncclResult_t ncclIbGetProperties(int dev/*设备编号*/, ncclNetProperties_t* props) {
   if (dev >= ncclNMergedIbDevs) {
+	  /*编号不得超过merge设备总数*/
     WARN("NET/IB : Requested properties for vNic %d, only %d vNics have been created", dev, ncclNMergedIbDevs);
     return ncclInvalidUsage;
   }
   struct ncclIbMergedDev* mergedDev = ncclIbMergedDevs + dev;
   // Take the rest of the properties from an arbitrary sub-device (should be the same)
-  NCCLCHECK(ncclIbGetPhysProperties(mergedDev->vProps.devs[0], props));
+  NCCLCHECK(ncclIbGetPhysProperties(mergedDev->vProps.devs[0], props));/*复用0号设备的属性*/
   props->name = mergedDev->devName;
   props->speed = mergedDev->speed;
   props->railId = mergedDev->railId;

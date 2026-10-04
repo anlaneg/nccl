@@ -18,12 +18,17 @@
 
 struct ncclTopoNodeList {
   struct ncclTopoNode* list[NCCL_TOPO_MAX_NODES];
-  int count;
+  int count;/*list列表有效数目*/
 };
 
-/**通过节点类型和ID，获取该节点的路径数组指针，用于后续设置路径 */
-static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t/**节点类型 */, int64_t id,
+/*
+ * 取源节点node到目标节点(t,id)的path路径表项
+ * 解释：node->paths[t][i] 即表示node源节点通过路种路径可以到达t类型的i号节点
+ * 参数中通过id来间接指定i,因此多了一道查询
+ * */
+static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t/**要获取的节点类型*/, int64_t id/*节点id*/,
                             struct ncclTopoLinkList** path) {
+  /*查找此id对应的path*/
   for (int i = 0; i < system->nodes[t].count; i++) {
     if (system->nodes[t].nodes[i].id == id) {
       *path = node->paths[t] + i;
@@ -37,12 +42,14 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
 NCCL_PARAM(NvbDisable, "NVB_DISABLE", 0);
 
 static ncclResult_t ncclTopoPathReserve(struct ncclTopoLinkList* path, int required) {
-  if (required <= path->capacity) return ncclSuccess;
+  if (required <= path->capacity) return ncclSuccess;/*可以分配*/
   if (required > NCCL_TOPO_MAX_HOPS) {
+	  /*超过最大值*/
     WARN("Path has %d hops, maximum is %d", required, NCCL_TOPO_MAX_HOPS);
     return ncclInternalError;
   }
 
+  /*不足分配，扩大最大容量*/
   int capacity = std::max(required + 2, path->capacity * 2);
   capacity = std::min(capacity, NCCL_TOPO_MAX_HOPS);
   NCCLCHECK(ncclReallocQuiet(&path->list, path->capacity, capacity));
@@ -50,11 +57,15 @@ static ncclResult_t ncclTopoPathReserve(struct ncclTopoLinkList* path, int requi
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclTopoSystem* system) {
+static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode/*源节点*/, struct ncclTopoSystem* system) {
   if (baseNode->paths[baseNode->type] == NULL) {
-    /*初始化此类型paths数组*/
+    /*初始化此类型paths数组
+     * 由于paths[baseNode->type]指向的是一个指针，这个指针需要记录到系统内所有baseNode->type类型设备
+     * 的路径，因此此指针长度为system->nodes[baseNode->type].count。
+     * */
     NCCLCHECK(ncclCalloc(baseNode->paths + baseNode->type, system->nodes[baseNode->type].count));
-    /**先置为disconnect */
+
+    /**到所有设备均先置为disconnect*/
     for (int i = 0; i < system->nodes[baseNode->type].count; i++) baseNode->paths[baseNode->type][i].type = PATH_DIS;
   }
 
@@ -62,30 +73,40 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
   struct ncclTopoNodeList nodeList;
   struct ncclTopoNodeList nextNodeList = {{0}, 0};
   nodeList.count = 1;
-  nodeList.list[0] = baseNode;/**baseNode做为第一个 */
+  nodeList.list[0] = baseNode;/*从baseNode开始遍历*/
   struct ncclTopoLinkList* basePath;
+  /*取从baseNode出发到自身的路径*/
   NCCLCHECK(getPath(system, baseNode, baseNode->type, baseNode->id, &basePath));
-  basePath->count = 0;
-  basePath->bw = LOC_BW;
-  basePath->type = PATH_LOC;
+  /*填充到自身的路径不需要经过link,属于直达*/
+  basePath->count = 0;/*无需link跳转*/
+  basePath->bw = LOC_BW;/*带宽最大*/
+  basePath->type = PATH_LOC;/*可直达*/
 
-  while (nodeList.count) {
+  while (nodeList.count/*存在节点未访问*/) {
     nextNodeList.count = 0;
     for (int n = 0; n < nodeList.count; n++) {
       struct ncclTopoNode* node = nodeList.list[n];
       struct ncclTopoLinkList* path;
+      /*取得已知的：从node出发到baseNode的路径情况*/
       NCCLCHECK(getPath(system, node, baseNode->type, baseNode->id, &path));
+
+      /*遍历此node的所有link（即物理连线）*/
       for (int l = 0; l < node->nlinks; l++) {
         struct ncclTopoLink* link = node->links + l;/**取l号link */
-        struct ncclTopoNode* remNode = link->remNode;
+        struct ncclTopoNode* remNode = link->remNode;/*此link对应的对端*/
         if (remNode->paths[baseNode->type] == NULL) {
-          /**初始化此类型paths数组*/
+          /*初始化remNode做源的paths数组*/
           NCCLCHECK(ncclCalloc(remNode->paths + baseNode->type, system->nodes[baseNode->type].count));
           for (int i = 0; i < system->nodes[baseNode->type].count; i++)
             remNode->paths[baseNode->type][i].type = PATH_DIS;
         }
+
         struct ncclTopoLinkList* remPath;
+        /*取从remNode出到到baseNode的路径remPath*/
         NCCLCHECK(getPath(system, remNode, baseNode->type, baseNode->id, &remPath));
+        /*当前path是已知的node->baseNode的路径，而remPath是remNode->baseNode的待更新路径
+         * 尝试remNode->node->baseNode 这样的形式，因此需要取这两段路径中带宽最小者，以便知道
+         * 这条路径的可用带宽*/
         float bw = std::min(path->bw, link->bw);
 
         // Only allow path to go through a DEV if either
@@ -93,6 +114,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
         // - NVB is enabled and remNode is a DEV and link type is NVLink and the path isn't too long for NVB;
         // else, discard the path.
         int pathMaxLength = (baseNode->type == GPU) ? 2 : 1;
+        /*DEV指的是物理gpu,不容许穿过*/
         ncclTopoNode* baseDevNode = (baseNode->type == GPU) ? baseNode->gpu.parent : baseNode;
         if (node != baseDevNode && node->type == DEV && (link->type != LINK_LOC || remNode->type != GPU) &&
             (ncclParamNvbDisable() || link->type != LINK_NVL || remNode->type != DEV || path->count > pathMaxLength)) {
@@ -103,13 +125,13 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
         // Don't consider LINK_NET as we only care about the NIC->GPU path.
         int newType = link->type == LINK_NET ? LINK_LOC : link->type;
         // Differentiate between one and multiple PCI switches
-        if (node->type == PCI && remNode->type == PCI) newType = PATH_PXB;
+        if (node->type == PCI && remNode->type == PCI) newType = PATH_PXB;/*同一个或多个pci switch下*/
         // Consider a path going through the CPU as PATH_PHB
-        if (link->type == LINK_PCI && (node->type == CPU || link->remNode->type == CPU)) newType = PATH_PHB;
+        if (link->type == LINK_PCI && (node->type == CPU || link->remNode->type == CPU)) newType = PATH_PHB;/*两端需要经过pci host bridge*/
         // Set 1 hop NVLink as NVB.
         if (node->type == DEV && path->type == PATH_NVL && newType == PATH_NVL && path->count == pathMaxLength)
           newType = PATH_NVB;
-        newType = std::max(path->type, newType);
+        newType = std::max(path->type, newType);/*数值越大，路径质量越差，距离越远*/
 
         // Update if better path type, OR same type with higher bw, OR same type/bw with strickly fewer hops.
         // Note: path->count +1 to account for the existing path + current candidate, see remPath->count update.
@@ -180,7 +202,7 @@ static void printNodePaths(struct ncclTopoSystem* system, struct ncclTopoNode* n
       snprintf(line + offset, linesize - offset, "%s/%lx-%lx (%d/%.1f/%s) ", topoNodeTypeStr[t],
                NCCL_TOPO_ID_SYSTEM_ID(system->nodes[t].nodes[n].id),
                NCCL_TOPO_ID_LOCAL_ID(system->nodes[t].nodes[n].id), node->paths[t][n].count, node->paths[t][n].bw,
-               topoPathTypeStr[node->paths[t][n].type]);
+               topoPathTypeStr[node->paths[t][n].type]/*显示path类型*/);
       offset = strlen(line);
 #endif
     }
@@ -191,30 +213,37 @@ static void printNodePaths(struct ncclTopoSystem* system, struct ncclTopoNode* n
 }
 
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system) {
+	/*显示gpu path*/
   for (int i = 0; i < system->nodes[GPU].count; i++) {
     printNodePaths(system, system->nodes[GPU].nodes + i);
   }
+  /*显示net path*/
   for (int i = 0; i < system->nodes[NET].count; i++) {
     printNodePaths(system, system->nodes[NET].nodes + i);
   }
+  /*显示gin path*/
   for (int i = 0; i < system->nodes[GIN].count; i++) {
     printNodePaths(system, system->nodes[GIN].nodes + i);
   }
+  /*显示rma path*/
   for (int i = 0; i < system->nodes[RMA].count; i++) {
     printNodePaths(system, system->nodes[RMA].nodes + i);
   }
   return ncclSuccess;
 }
 
-ncclResult_t ncclGetLocalCpu(struct ncclTopoSystem* system, int gpu, int* cpu) {
+/*从gpu出发到哪个cpu,带宽最大，跳数最小*/
+ncclResult_t ncclGetLocalCpu(struct ncclTopoSystem* system, int gpu, int* cpu/*出参，选中的cpu*/) {
   int localCpus[NCCL_TOPO_MAX_NODES], count;
+  /*取从此gpu到哪些cpu路径最优（path带宽最大，带宽相同时，path typ最优）*/
   NCCLCHECK(ncclTopoGetLocal(system, GPU, gpu, CPU, localCpus, &count, NULL));
   if (count == 0) {
     WARN("Error : could not find CPU close to GPU %d", gpu);
     return ncclInternalError;
   }
   struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[gpu].paths[CPU];
-  *cpu = localCpus[0];
+  *cpu = localCpus[0];/*取排首位的cpu备选*/
+  /*检查path中link跳数，跳数最小的cpu胜出*/
   for (int i = 1; i < count; i++) {
     if (paths[localCpus[i]].count < paths[*cpu].count) *cpu = localCpus[i];
   }
@@ -337,9 +366,11 @@ ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* syst
 
   // Rule out different nodes / isolated containers
   if (comm) {
+	  /*取两端信息*/
     info1 = comm->peerInfo + rank1;
     info2 = comm->peerInfo + rank2;
     if (info1->hostHash != info2->hostHash) {
+    	/*这两个rank不再同一个主机上*/
       if (comm->MNNVL) {
         NCCLCHECK(ncclTopoCheckMNNVL(comm, info1, info2, &mnnvl));
         if (mnnvl < 0) {
@@ -766,7 +797,8 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
 
   // Set direct paths to CPUs. We need them in many cases.
   for (int c = 0; c < system->nodes[CPU].count; c++) {
-    NCCLCHECK(ncclTopoSetPaths(system->nodes[CPU].nodes + c, system));
+	/*遍历各cpu节点，设置path*/
+    NCCLCHECK(ncclTopoSetPaths(system->nodes[CPU].nodes + c/*cpu序号*/, system));
   }
 
   // Set direct paths to DEVs, needed in the graph search.
@@ -803,8 +835,8 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
   for (int g = 0; g < system->nodes[GPU].count; g++) {
     for (int p = 0; p < system->nodes[GPU].count; p++) {
       int p2p;
-      NCCLCHECK(ncclTopoCheckP2p(comm, system, system->nodes[GPU].nodes[p].gpu.rank,
-                                 system->nodes[GPU].nodes[g].gpu.rank, &p2p, NULL, NULL, NULL));
+      NCCLCHECK(ncclTopoCheckP2p(comm, system, system->nodes[GPU].nodes[p].gpu.rank/*p号gpu对应的rank*/,
+                                 system->nodes[GPU].nodes[g].gpu.rank/*g号gpu对应的rank*/, &p2p, NULL, NULL, NULL));
       if (p2p == 0) {
         // Divert all traffic through the CPU
         int cpu;
@@ -958,31 +990,35 @@ void ncclTopoFree(struct ncclTopoSystem* system) {
 
 NCCL_PARAM(P2pPerChannelNetBw, "P2P_PER_CHANNEL_NET_BW", /*GB/s*/ 14);
 
-static ncclResult_t ncclTopoGetNchannels(struct ncclComm* comm, int g /*local gpu index*/, int peerRank,
-                                         int* nChannels) {
+static ncclResult_t ncclTopoGetNchannels(struct ncclComm* comm, int g /*local gpu index*/, int peerRank/*对端rank（全局rank中的任意一个）*/,
+                                         int* nChannels/*出参，channel数*/) {
   int peer;
   struct ncclTopoSystem* system = comm->topo;
   struct ncclTopoLinkList* path = NULL;
+  /*注意：peerRank是全局rank中的任意一个，而当前system表中仅有本机topo,
+   * 因此查询时会出现不在本机的rank返错的情况，所以这里也明确关闭的告警显示*/
   if (ncclTopoRankToIndex(system, peerRank, &peer, /*showWarn=*/false) == ncclSuccess) {
     // Same rank
     if (g == peer) {
+    	/*当前rank，直接返回-1*/
       *nChannels = -1;
       return ncclSuccess;
     }
     // Local rank
-    path = system->nodes[GPU].nodes[peer].paths[GPU] + g;
+    path = system->nodes[GPU].nodes[peer].paths[GPU] + g;/*取从peer到本gpu的路径*/
     if (path->type == PATH_NVL || path->type == PATH_NVB) {
       // NVLink-based connection (NVB uses NVLink)
       float nvlBw = ncclTopoNVLinkBw(system->nodes[GPU].nodes[g].gpu.cudaCompCap);
       *nChannels = 2 * std::max(1, (int)(path->bw / nvlBw));
     } else {
       // PCIe connection
-      *nChannels = 2;
+      *nChannels = 2;/*pcie并行数定为2，为什么？*/
     }
   } else {
     // Remote rank, use network
     int nNetChannels = comm->config.nChannelsPerNetPeer;
     if (nNetChannels == NCCL_CONFIG_UNDEF_INT) {
+    	/*未指定网间channel数，*/
       float netBw = 0.0;
       int netCount = 0;
       NCCLCHECK(ncclTopoGetLocalNetCountByBw(system, g, &netCount, &netBw));
@@ -1001,15 +1037,18 @@ extern int64_t ncclParamWorkArgsBytes();
 
 ncclResult_t ncclTopoComputeP2pChannelsPerPeer(struct ncclComm* comm) {
   int g = 0;
+  /*取本rank对应的gpu节点在system中的索引*/
   while (comm->topo->nodes[GPU].nodes[g].gpu.rank != comm->rank) g++;
+  /*没有发现我们对应的gpu节点，报错*/
   if (g == comm->topo->nodes[GPU].count) return ncclInternalError;
 
   int minChannels = MAXCHANNELS;
   for (int r = 0; r < comm->nRanks; r++) {
     int nChannels;
-    NCCLCHECK(ncclTopoGetNchannels(comm, g, r, &nChannels));
+    NCCLCHECK(ncclTopoGetNchannels(comm, g/*本端gpu*/, r/*全局rank中的任意一个*/, &nChannels));
     if (nChannels >= 0) minChannels = std::min(minChannels, nChannels);
   }
+  /*设置p2p每个peer之间channel总数*/
   comm->p2pnChannelsPerPeer = minChannels;
   comm->p2pMaxPeers = (comm->config.maxP2pPeers == NCCL_CONFIG_UNDEF_INT) ? comm->nRanks : comm->config.maxP2pPeers;
   return ncclSuccess;
@@ -1067,20 +1106,23 @@ ncclResult_t ncclTopoGetNvbGpus(struct ncclTopoSystem* system, int rank, int* nr
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type, int* min) {
+ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type/*目标硬件角色，比如gpu/pci/dev等*/, int* min/*出参，取gpu path中的最小path类型*/) {
   int minPath = PATH_SYS;
+  /*遍历系统所有gpu，查找gpu与type之间path type
+   * 数值最小的类型（最好的path type)，做为查找的起点*/
   for (int i = 0; i < system->nodes[GPU].count; i++) {
     struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[i].paths[type];
     if (paths == NULL) continue;
     for (int j = 0; j < system->nodes[type].count; j++) {
-      if (type == GPU && i == j) continue;
-      minPath = std::min(minPath, paths[j].type);
+      if (type == GPU && i == j) continue;/*跳过GPU自身*/
+      minPath = std::min(minPath, paths[j].type);/*取两个gpu间最小path类型*/
     }
   }
   *min = minPath;
   return ncclSuccess;
 }
 
+/*与ncclTopoGetGpuMinPath相对，取gpu与type之间最坏的path type,即查找的终点*/
 ncclResult_t ncclTopoGetGpuMaxPath(struct ncclTopoSystem* system, int type, int* max) {
   int maxPath = PATH_LOC;
   for (int i = 0; i < system->nodes[GPU].count; i++) {
@@ -1120,10 +1162,14 @@ ncclResult_t ncclTopoSplitNvLink(struct ncclTopoSystem* system, int* splitNvLink
   int *nvlDomain = NULL, *nvlDomainCount = NULL;
   // Compute NVLink domains
   NCCLCHECKGOTO(ncclCalloc(&nvlDomain, system->nodes[GPU].count), res, exit);
+  /*设置nvlDomain初值：0-$count，每个gpu认为在一个domain中*/
   for (int g = 0; g < system->nodes[GPU].count; g++) nvlDomain[g] = g;
   for (int g = 0; g < system->nodes[GPU].count; g++) {
     struct ncclTopoNode* gpu = system->nodes[GPU].nodes + g;
     int domain = nvlDomain[g];
+    /*g号gpu如何和p号gpu通信采用nvlink,则nvlDomain[p]指定为g对应的domain
+     * 也就是说，如果所有gpu与其它gpu可走nvlink，则domain为nvlDimain[*]=0
+     * 所之，如果有N个nvlink通信的岛，使得gpu被找成k组，则nvlDimain中就有k种不同的值*/
     for (int p = g + 1; p < system->nodes[GPU].count; p++) {
       if (gpu->paths[GPU][p].type == PATH_NVL) {
         nvlDomain[p] = domain;
@@ -1132,6 +1178,7 @@ ncclResult_t ncclTopoSplitNvLink(struct ncclTopoSystem* system, int* splitNvLink
   }
   // Compute number of GPUs per NVLink domain.
   NCCLCHECKGOTO(ncclCalloc(&nvlDomainCount, system->nodes[GPU].count), res, exit);
+  /*统计各gpu通信nvlink分组有多少种，不同组的计数就会大于1*/
   for (int g = 0; g < system->nodes[GPU].count; g++) {
     nvlDomainCount[nvlDomain[g]]++;
   }
@@ -1139,7 +1186,7 @@ ncclResult_t ncclTopoSplitNvLink(struct ncclTopoSystem* system, int* splitNvLink
   for (int g = 0; g < system->nodes[GPU].count; g++) {
     if (nvlDomainCount[g] > 1) nvlDomains++;
   }
-  *splitNvLink = nvlDomains == 2 ? 1 : 0;
+  *splitNvLink = nvlDomains == 2/*只考虑恰好有两个组的情况*/ ? 1 : 0;
 
 exit:
   if (nvlDomain) free(nvlDomain);

@@ -30,6 +30,7 @@
 #define BUSID_SIZE (sizeof("0000:00:00.0"))
 #define BUSID_REDUCED_SIZE (sizeof("0000:00"))
 
+/*各节点类型字符串*/
 const char* topoNodeTypeStr[] = {"GPU", "PCI", "NVS", "CPU", "NIC", "NET", "GIN", "RMA", "DEV", "CXB"};
 const char* topoLinkTypeStr[] = {"LOC", "NVL", "", "C2C", "PCI", "", "", "", "", "SYS", "NET"};
 const char* topoPathTypeStr[] = {"LOC", "NVL", "NVB", "C2C", "PIX", "PXB", "P2C", "PXN", "PHB", "SYS", "NET", "DIS"};
@@ -92,7 +93,10 @@ enum ncclNvLinkDeviceType {
   ncclNvLinkDeviceBridge, // IBM/Power NVLink bridge (Device 04ea)
 };
 
-ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id) {
+/*在system节点下，检查类型为type,编号为id对应的节点是否存在
+ * 如果存在，使其由node返回
+ * */
+ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode** node/*出参，查询到的节点*/, int type/*节点类型*/, uint64_t id) {
   for (int i = 0; i < system->nodes[type].count; i++) {
     if (system->nodes[type].nodes[i].id == id) {
       *node = system->nodes[type].nodes + i;
@@ -102,25 +106,28 @@ ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode*
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id) {
+ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNode** node/*出参，创建的节点*/, int type/*节点类型，例如CPU*/, uint64_t id) {
   if (system->nodes[type].count == NCCL_TOPO_MAX_NODES) {
     WARN("Error : tried to create too many nodes of type %d", type);
     return ncclInternalError;
   }
+
+  /*填充此节点*/
   struct ncclTopoNode* n = system->nodes[type].nodes + system->nodes[type].count;
   system->nodes[type].count++;
   n->type = type;
   n->id = id;
-  if (type == GPU) {
+  /*针对各节点类型，进行初始化*/
+  if (type == GPU) {/*GPU节点*/
     n->gpu.dev = NCCL_TOPO_UNDEF;
     n->gpu.rank = NCCL_TOPO_UNDEF;
     n->gpu.cudaCompCap = NCCL_TOPO_UNDEF;
     n->gpu.mloPart = NCCL_TOPO_UNDEF;
-  } else if (type == CPU) {
+  } else if (type == CPU) {/*CPU节点*/
     n->cpu.arch = NCCL_TOPO_UNDEF;
     n->cpu.vendor = NCCL_TOPO_UNDEF;
     n->cpu.model = NCCL_TOPO_UNDEF;
-  } else if (type == NET) {
+  } else if (type == NET) {/*net节点*/
     n->net.vendor = UINT64_MAX;
     n->net.device = UINT64_MAX;
     n->net.asic = 0ULL;
@@ -129,14 +136,14 @@ ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNo
     n->net.latency = 0.0;
     n->net.railId = NCCL_TOPO_UNDEF;
     n->net.planeId = NCCL_TOPO_UNDEF;
-  } else if (type == GIN || type == RMA) {
+  } else if (type == GIN || type == RMA) {/*gin/rma节点*/
     n->net.railId = NCCL_TOPO_UNDEF;
     n->net.planeId = NCCL_TOPO_UNDEF;
-  } else if (type == DEV) {
+  } else if (type == DEV) {/*dev节点*/
     n->dev.dev = NCCL_TOPO_UNDEF;
     n->dev.cudaCompCap = NCCL_TOPO_UNDEF;
   }
-  *node = n;
+  *node = n;/*设置出参*/
   return ncclSuccess;
 }
 
@@ -176,30 +183,33 @@ ncclResult_t ncclTopoRemoveNode(struct ncclTopoSystem* system, int type, int ind
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float bw) {
+/*增加node与remNode之间的有向邻接边(如不存在），修改bw,并使bw在node->links上从大到小排列*/
+ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type/*link类型*/, float bw/*带宽*/) {
   // Aggregate links into higher bw for NVLink
   struct ncclTopoLink* link;
   for (link = node->links; link - node->links != NCCL_TOPO_MAX_LINKS && link->remNode; link++) {
-    if (link->remNode == remNode && link->type == type) break;
+    if (link->remNode == remNode && link->type == type) break;/*在node->links数组中查找remNode*/
   }
   if (link - node->links == NCCL_TOPO_MAX_LINKS) {
+	/*没有找到，且link已满*/
     WARN("Error : too many Topo links (max %d)", NCCL_TOPO_MAX_LINKS);
     return ncclInternalError;
   }
-  if (link->remNode == NULL) node->nlinks++;
-  link->type = type;
-  link->remNode = remNode;
+  if (link->remNode == NULL) node->nlinks++;/*增加link*/
+  link->type = type;/*设置link类型*/
+  link->remNode = remNode;/*指向对端节点*/
+  /*增加带宽（上面的循环导致我们查到了link,这里将link带宽增加，达到汇聚nvlink带宽的目的）*/
   link->bw += bw;
 
   // Sort links in BW descending order
   struct ncclTopoLink linkSave;
   memcpy(&linkSave, link, sizeof(struct ncclTopoLink));
   while (link != node->links) {
-    if ((link - 1)->bw >= linkSave.bw) break;
-    memcpy(link, link - 1, sizeof(struct ncclTopoLink));
-    link--;
+    if ((link - 1)->bw >= linkSave.bw) break;/*按带宽大小排队*/
+    memcpy(link, link - 1, sizeof(struct ncclTopoLink));/*空出个空间*/
+    link--;/*前移*/
   }
-  memcpy(link, &linkSave, sizeof(struct ncclTopoLink));
+  memcpy(link, &linkSave, sizeof(struct ncclTopoLink));/*写入增加的link*/
   return ncclSuccess;
 }
 
@@ -286,7 +296,9 @@ ncclResult_t ncclTopoConnectCpus(struct ncclTopoSystem* system) {
       struct ncclTopoNode* cpu2 = system->nodes[CPU].nodes + p;
       if (n == p || (NCCL_TOPO_ID_SYSTEM_ID(cpu1->id) != NCCL_TOPO_ID_SYSTEM_ID(cpu2->id))) continue;
       float bw;
+      /*取cpu间带宽*/
       NCCLCHECK(ncclTopoGetInterCpuBw(cpu1, &bw));
+      /*cpu之间增加link_sys link*/
       NCCLCHECK(ncclTopoConnectNodes(cpu1, cpu2, LINK_SYS, bw));
     }
   }
@@ -294,18 +306,23 @@ ncclResult_t ncclTopoConnectCpus(struct ncclTopoSystem* system) {
 }
 
 static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoNode* prevNode, char* line, int offset) {
-  if (node->type == GPU) {
+  /*显示节点基本信息*/
+	if (node->type == GPU) {
+	  /*显示gpu*/
     char mloStr[128] = "";
     snprintf(mloStr, sizeof(mloStr), " [MLOPart %d]", node->gpu.mloPart);
-    sprintf(line + offset, "%s/%lx-%lx (%d)%s", topoNodeTypeStr[node->type], NCCL_TOPO_ID_SYSTEM_ID(node->id),
-            NCCL_TOPO_ID_LOCAL_ID(node->id), node->gpu.rank, (node->gpu.mloPart == -1) ? "" : mloStr);
+    sprintf(line + offset, "%s/%lx-%lx (%d)%s", topoNodeTypeStr[node->type]/*节点类型*/, NCCL_TOPO_ID_SYSTEM_ID(node->id)/*节点编号*/,
+            NCCL_TOPO_ID_LOCAL_ID(node->id)/*local id编号*/, node->gpu.rank/*从属的rank编号*/, (node->gpu.mloPart == -1) ? "" : mloStr);
   } else if (node->type == CPU) {
+	  /*显示cpu，例如"CPU/0-0 (1/1/3)"*/
     sprintf(line + offset, "%s/%lx-%lx (%d/%d/%d)", topoNodeTypeStr[node->type], NCCL_TOPO_ID_SYSTEM_ID(node->id),
-            NCCL_TOPO_ID_LOCAL_ID(node->id), node->cpu.arch, node->cpu.vendor, node->cpu.model);
+            NCCL_TOPO_ID_LOCAL_ID(node->id), node->cpu.arch/*cpu体系*/, node->cpu.vendor, node->cpu.model);
   } else if (node->type == PCI) {
+	  /*显示pci*/
     sprintf(line + offset, "%s/%lx-%lx (%lx)", topoNodeTypeStr[node->type], NCCL_TOPO_ID_SYSTEM_ID(node->id),
             NCCL_TOPO_ID_LOCAL_ID(node->id), node->pci.device);
   } else if (node->type == DEV) {
+	  /*显示dev*/
     sprintf(line + offset, "%s/%lx-%lx (%lx)", topoNodeTypeStr[node->type], NCCL_TOPO_ID_SYSTEM_ID(node->id),
             NCCL_TOPO_ID_LOCAL_ID(node->id), node->dev.device);
   } else {
@@ -315,11 +332,12 @@ static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoN
   INFO(NCCL_GRAPH, "%s", line);
   for (int i = 0; i < offset; i++) line[i] = ' ';
 
+  /*显示link*/
   for (int l = 0; l < node->nlinks; l++) {
     struct ncclTopoLink* link = node->links + l;
     if (link->type == LINK_LOC) {
-      sprintf(line + offset, "+ %s[%2.1f] - %s/%lx-%lx", topoLinkTypeStr[link->type], link->bw,
-              topoNodeTypeStr[link->remNode->type], NCCL_TOPO_ID_SYSTEM_ID(link->remNode->id),
+      sprintf(line + offset, "+ %s[%2.1f] - %s/%lx-%lx", topoLinkTypeStr[link->type]/*link类型*/, link->bw/*带宽*/,
+              topoNodeTypeStr[link->remNode->type]/*远端类型*/, NCCL_TOPO_ID_SYSTEM_ID(link->remNode->id),
               NCCL_TOPO_ID_LOCAL_ID(link->remNode->id));
       INFO(NCCL_GRAPH, "%s", line);
     } else if (link->type != LINK_PCI || link->remNode != prevNode) {
@@ -347,8 +365,10 @@ static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoN
 ncclResult_t ncclTopoPrint(struct ncclTopoSystem* s) {
   INFO(NCCL_GRAPH, "=== System : maxBw %2.1f totalBw %2.1f ===", s->maxBw, s->totalBw);
   char line[1024];
-  for (int n = 0; n < s->nodes[CPU].count; n++) NCCLCHECK(ncclTopoPrintRec(s->nodes[CPU].nodes + n, NULL, line, 0));
+  /*遍历所有cpu，显示节点基本信息及link信息*/
+  for (int n = 0; n < s->nodes[CPU].count; n++) NCCLCHECK(ncclTopoPrintRec(s->nodes[CPU].nodes + n/*n号CPU*/, NULL, line, 0));
   INFO(NCCL_GRAPH, "==========================================");
+  /*显示所有path信息*/
   NCCLCHECK(ncclTopoPrintPaths(s));
   return ncclSuccess;
 }
@@ -357,13 +377,16 @@ static ncclResult_t ncclTopoSort(struct ncclTopoNode* node, struct ncclTopoNode*
   // Shift all links to have upLink as last link
   if (upNode) {
     int l = 0;
+    /*找upNode对应的link索引l*/
     while (node->links[l].remNode != upNode) l++;
     struct ncclTopoLink upLink;
-    memcpy(&upLink, node->links + l, sizeof(struct ncclTopoLink));
+    memcpy(&upLink, node->links + l, sizeof(struct ncclTopoLink));/*其后元素前移*/
+    /*后面如果还有，也一并前移*/
     while (node->links[l + 1].remNode) {
       memcpy(node->links + l, node->links + l + 1, sizeof(struct ncclTopoLink));
       l++;
     }
+    /*uplink置于最后*/
     memcpy(node->links + l, &upLink, sizeof(struct ncclTopoLink));
   }
 
@@ -413,7 +436,7 @@ static ncclResult_t ncclTopoGetNetDevKey(struct ncclXmlNode* xmlNet, uint64_t* k
   // Create the unique key per device to be used for rail logic.
   // Note: virtual device might have the same key as their first physical device.
   uint64_t hacc[2] = {1, 1}, guid;
-  NCCLCHECK(xmlGetAttrUint64Default(xmlNet, "guid", &guid, 0));
+  NCCLCHECK(xmlGetAttrUint64Default(xmlNet, "guid", &guid, 0));/*取guid,默认为0*/
   eatHash(hacc, &guid);
   *key = digestHash(hacc);
   return ncclSuccess;
@@ -441,6 +464,7 @@ static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, st
     uint64_t railKey;
     int keyIndex;
     NCCLCHECK(ncclTopoGetNetDevKey(xmlNet, &railKey));
+    /*设置railKey，并转换为keyIndex*/
     NCCLCHECK(ncclTopoGetNetRailKeyIndex(list, railKey, &keyIndex));
     *rail = NCCL_TOPO_UNDEF_BIT | keyIndex;
   }
@@ -458,16 +482,18 @@ static ncclResult_t ncclTopoAddNetAsic(struct ncclXmlNode* xmlNet, int64_t netId
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclXmlNode* parent,
+/*填充net节点，在net与nic间创建link_net类型的link，并指明带宽为nic极限的MBps*/
+static ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet/*net节点*/, struct ncclXmlNode* parent/*nic的父节点，其上记录了nic的bdf*/,
                                    struct ncclTopoSystem* system, struct ncclTopoNode* nic, int systemId) {
   int dev;
   NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
 
-  int64_t netId = NCCL_TOPO_ID(systemId, dev);
+  int64_t netId = NCCL_TOPO_ID(systemId, dev);/*拼出netid*/
   struct ncclTopoNode* net;
-  NCCLCHECK(ncclTopoCreateNode(system, &net, NET, netId));
+  NCCLCHECK(ncclTopoCreateNode(system, &net, NET, netId));/*创建net节点*/
   net->net.dev = dev;
 
+  /*填充net节点*/
   int mbps;
   NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "speed", &mbps, 0), NCCL_GRAPH);
   if (mbps <= 0) mbps = 10000; // Some NICs define speed = -1
@@ -497,6 +523,7 @@ static ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclXmlNod
   else eatHash(hacc, &net->net.asic);
   net->net.pciId = digestHash(hacc);
 
+  /*在nic与net之间添加link_net类型的link,指明带宽为网口的MBps*/
   NCCLCHECK(ncclTopoConnectNodes(nic, net, LINK_NET, net->net.bw));
   NCCLCHECK(ncclTopoConnectNodes(net, nic, LINK_NET, net->net.bw));
   return ncclSuccess;
@@ -509,13 +536,14 @@ static ncclResult_t ncclTopoAddGin(struct ncclXmlNode* xmlNet, struct ncclXmlNod
 
   int64_t netId = NCCL_TOPO_ID(systemId, dev);
   struct ncclTopoNode* net;
+  /*也是创建net节点*/
   NCCLCHECK(ncclTopoCreateNode(system, &net, GIN, netId));
   net->net.dev = dev;
 
   int mbps;
   NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "speed", &mbps, 0), NCCL_GRAPH);
   if (mbps <= 0) mbps = 10000; // Some NICs define speed = -1
-  net->net.bw = mbps / 8000.0;
+  net->net.bw = mbps / 8000.0;/*设置带宽为Mbps*/
 
   if (parent) {
     NCCLCHECK(xmlGetAttrUint64Default(parent, "vendor", &net->net.vendor, UINT64_MAX));
@@ -526,16 +554,19 @@ static ncclResult_t ncclTopoAddGin(struct ncclXmlNode* xmlNet, struct ncclXmlNod
   NCCLCHECK(xmlGetAttrInt(xmlNet, "rail", &net->net.railId));
   NCCLCHECK(xmlGetAttrInt(xmlNet, "plane", &net->net.planeId));
 
+  /*在nic与net间建立link(link_net类型）,并置带宽为Mbps*/
   NCCLCHECK(ncclTopoConnectNodes(nic, net, LINK_NET, net->net.bw));
   NCCLCHECK(ncclTopoConnectNodes(net, nic, LINK_NET, net->net.bw));
   return ncclSuccess;
 }
 
+/*添加rma节点*/
 static ncclResult_t ncclTopoAddRma(struct ncclXmlNode* xmlNet, struct ncclXmlNode* parent,
                                    struct ncclTopoSystem* system, struct ncclTopoNode* nic, int systemId) {
   int dev;
   NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
 
+  /*也是创建net类型*/
   int64_t netId = NCCL_TOPO_ID(systemId, dev);
   struct ncclTopoNode* net;
   NCCLCHECK(ncclTopoCreateNode(system, &net, RMA, netId));
@@ -555,15 +586,18 @@ static ncclResult_t ncclTopoAddRma(struct ncclXmlNode* xmlNet, struct ncclXmlNod
   NCCLCHECK(xmlGetAttrInt(xmlNet, "rail", &net->net.railId));
   NCCLCHECK(xmlGetAttrInt(xmlNet, "plane", &net->net.planeId));
 
+  /*在net与Nic间创建link_net类型，并指明带宽*/
   NCCLCHECK(ncclTopoConnectNodes(nic, net, LINK_NET, net->net.bw));
   NCCLCHECK(ncclTopoConnectNodes(net, nic, LINK_NET, net->net.bw));
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* system, struct ncclTopoNode* nic,
+/*创建net节点，并指明net与nic间为link_net类型link,指明带宽*/
+ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* system, struct ncclTopoNode* nic/*nic节点*/,
                             int systemId) {
   // Find the closest PCI ancestor to the NIC
   struct ncclXmlNode* parent = xmlNic->parent;
+  /*从parent开始查找首个pci节点,这个Parent上记录的是nic的bdf值*/
   while (parent != NULL && strcmp(parent->name, "pci") != 0) parent = parent->parent;
 
   for (int s = 0; s < xmlNic->nSubs; s++) {
@@ -571,7 +605,7 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
     int net = strcmp(xmlNet->name, "net") == 0;
     int gin = strcmp(xmlNet->name, "gin") == 0;
     int rma = strcmp(xmlNet->name, "rma") == 0;
-    if (!net && !gin && !rma) continue;
+    if (!net && !gin && !rma) continue;/*忽略掉非(net,gin,rma)之外的tag*/
 
     // Physical NICs fused into a vNIC are marked net="0"; absent "net" remains enabled for older XML.
     if (net) NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "net", &net, 1));
@@ -580,13 +614,15 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
     NCCLCHECK(xmlGetAttrIndex(xmlNet, "dev", &index));
     // XML net nodes without "dev" attribute will be ignore
     if (index == -1) continue;
-    if (net) NCCLCHECK(ncclTopoAddNet(xmlNet, parent, system, nic, systemId));
+    /*按情况添加net/gin/rma节点*/
+    if (net) NCCLCHECK(ncclTopoAddNet(xmlNet, parent/*nic的父节点*/, system, nic, systemId));
     if (gin) NCCLCHECK(ncclTopoAddGin(xmlNet, parent, system, nic, systemId));
     if (rma) NCCLCHECK(ncclTopoAddRma(xmlNet, parent, system, nic, systemId));
   }
   return ncclSuccess;
 }
 
+/*添加gpu节点*/
 ncclResult_t ncclTopoAddGpu(struct ncclXmlNode* xmlGpu, struct ncclTopoSystem* system, struct ncclTopoNode* gpu) {
   NCCLCHECK(xmlGetAttrInt(xmlGpu, "rank", &gpu->gpu.rank));
   NCCLCHECK(xmlGetAttrInt(xmlGpu, "sm", &gpu->gpu.cudaCompCap));
@@ -597,6 +633,7 @@ ncclResult_t ncclTopoAddGpu(struct ncclXmlNode* xmlGpu, struct ncclTopoSystem* s
   return ncclSuccess;
 }
 
+/*将vendor,device,sub_verdor,sub_device拼成一个int64*/
 static ncclResult_t ncclTopoGetIntDevice(struct ncclXmlNode* xmlPci, uint64_t* device) {
   uint64_t ret = 0;
   const char* str;
@@ -637,6 +674,7 @@ struct kvDict kvDictPciGen[] = {{"2.5 GT/s", 15},
 // Return all DEV nodes whose id matches baseId with mlopart bits masked out.
 ncclResult_t ncclTopoGetDevNodes(struct ncclTopoSystem* system, int64_t baseId, struct ncclTopoNode** nodes,
                                  int* nNodes) {
+	/*处理gpu分拆成多个的逻辑*/
   *nNodes = 0;
   int64_t maskedBase = baseId & ~(int64_t)NCCL_TOPO_MLOPART_MASK;
   for (int d = 0; d < system->nodes[DEV].count; d++) {
@@ -666,9 +704,11 @@ static ncclResult_t ncclTopoCheckMloPartBusId(int64_t busId) {
 
 NCCL_PARAM(TopoSplitMlopart, "TOPO_SPLIT_MLOPART", 1);
 
+/*处理gpu添加,增加gpuDevnode并添加gpudev与cpu之间的link(走PCI_LINK),增加gpunode
+ * 并添加gpunode与gpudevnode之间的link(走LOC_LINK)*/
 static ncclResult_t ncclTopoAddGpuSub(struct ncclXmlNode* xmlPci, struct ncclXmlNode* xmlGpu,
                                       struct ncclTopoSystem* system, struct ncclTopoNode* parent, int systemId,
-                                      int64_t busId, float bw) {
+                                      int64_t busId, float bw/*带宽*/) {
   int mloPart = 0, sm = 0;
   int64_t devBusId = busId;
   NCCLCHECK(ncclTopoCheckMloPartBusId(busId));
@@ -683,13 +723,17 @@ static ncclResult_t ncclTopoAddGpuSub(struct ncclXmlNode* xmlPci, struct ncclXml
   }
 
   struct ncclTopoNode* gpudeviceNode = NULL;
-  NCCLCHECK(ncclTopoGetNode(system, &gpudeviceNode, DEV, NCCL_TOPO_ID(systemId, devBusId)));
+  NCCLCHECK(ncclTopoGetNode(system, &gpudeviceNode/*查出的gpu节点*/, DEV, NCCL_TOPO_ID(systemId, devBusId)/*拼systemid与busid*/));
   if (gpudeviceNode == NULL) {
+	/*此id对应的节点不存在，创建gpudev节点*/
     NCCLCHECK(ncclTopoCreateNode(system, &gpudeviceNode, DEV, NCCL_TOPO_ID(systemId, devBusId)));
+    /*填充此gpu节点*/
     NCCLCHECK(ncclTopoGetIntDevice(xmlPci, &gpudeviceNode->dev.device));
     NCCLCHECK(xmlGetAttrInt(xmlGpu, "sm", &gpudeviceNode->dev.cudaCompCap));
     NCCLCHECK(xmlGetAttrInt(xmlGpu, "dev", &gpudeviceNode->dev.dev));
+    /*设置gpudev节点到parent节点间的link数组*/
     NCCLCHECK(ncclTopoConnectNodes(gpudeviceNode, parent, LINK_PCI, bw));
+    /*更新parnet节点到gpudev节点的link数组*/
     NCCLCHECK(ncclTopoConnectNodes(parent, gpudeviceNode, LINK_PCI, bw));
     // add the local link with the existing uGPUs.
     struct ncclTopoNode* sibDevs[NCCL_TOPO_MLOPART_DEV_MAX];
@@ -703,64 +747,74 @@ static ncclResult_t ncclTopoAddGpuSub(struct ncclXmlNode* xmlPci, struct ncclXml
   }
 
   struct ncclTopoNode* gpuNode = NULL;
+  /*创建gpu节点（上面已经有了gpudev节点，这里有一个gpuNode节点）gpudev节点只有一个用于解决
+   * gpu物理节点，gpuNode可以有多个用于解决gpu分用问题*/
   NCCLCHECK(ncclTopoCreateNode(system, &gpuNode, GPU,
                                NCCL_TOPO_ID(systemId, NCCL_TOPO_GPU_LOCAL_ID(devBusId, gpudeviceNode->dev.nGpus))));
   NCCLCHECK(ncclTopoAddGpu(xmlGpu, system, gpuNode));
-  gpuNode->gpu.parent = gpudeviceNode;
+  gpuNode->gpu.parent = gpudeviceNode;/*使gpu的父节点为gpudev节点*/
+  /*创建link,gpudev->gpuNode（均指明为link_LOC)*/
   NCCLCHECK(ncclTopoConnectNodes(gpudeviceNode, gpuNode, LINK_LOC, LOC_BW));
+  /*创建link,gpuNode->gpudev*/
   NCCLCHECK(ncclTopoConnectNodes(gpuNode, gpudeviceNode, LINK_LOC, LOC_BW));
   gpudeviceNode->dev.nGpus++;
   return ncclSuccess;
 }
 
+/*处理pci节点*/
 ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* system, struct ncclTopoNode* parent,
                             int systemId, int numaId) {
   const char* str;
 
   int type;
-  NCCLCHECK(xmlGetAttrStr(xmlPci, "class", &str));
-  NCCLCHECK(kvConvertToInt(str, &type, kvDictPciClass));
+  NCCLCHECK(xmlGetAttrStr(xmlPci, "class", &str));/*取pci对应的class*/
+  NCCLCHECK(kvConvertToInt(str, &type, kvDictPciClass));/*class对应的字典索引*/
 
   int64_t busId;
   NCCLCHECK(xmlGetAttrStr(xmlPci, "busid", &str));
-  NCCLCHECK(busIdToInt64(str, &busId));
+  NCCLCHECK(busIdToInt64(str, &busId));/*取busid*/
 
   float bw;
   {
     int width, speed;
-    NCCLCHECK(xmlGetAttrInt(xmlPci, "link_width", &width));
-    NCCLCHECK(xmlGetAttrStr(xmlPci, "link_speed", &str));
+    NCCLCHECK(xmlGetAttrInt(xmlPci, "link_width", &width));/*取 PCIe 链路有多少条并行通道（lane）*/
+    NCCLCHECK(xmlGetAttrStr(xmlPci, "link_speed", &str));/*每条 lane 的传输速率，单位通常是 GT/s*/
     // Manage cases where speed was not indicated in /sys
     if (width == 0) width = 16;
     NCCLCHECK(kvConvertToInt(str, &speed, kvDictPciGen)); // Values in 100Mbps, per lane (we want GB/s in the end)
-    bw = width * speed / 80.0;
+    bw = width * speed / 80.0;/*算出带宽*/
   }
 
+  /*pci节点下仅考虑gpu*/
   for (int g = 0; g < xmlPci->nSubs; ++g) {
     if (strcmp(xmlPci->subs[g]->name, "gpu") != 0) continue;
     struct ncclXmlNode* xmlGpu = xmlPci->subs[g];
     int index;
-    NCCLCHECK(xmlGetAttrIndex(xmlGpu, "rank", &index));
-    if (index == -1) return ncclSuccess;
+    NCCLCHECK(xmlGetAttrIndex(xmlGpu, "rank", &index));/*取负责此gpu的rank*/
+    if (index == -1) return ncclSuccess;/*无rank负责此gpu,不添加*/
+    /*添加gpunode,gpudevnode并增加gpunode与gpudevnode间link,增加gpudevnode与cpu间link*/
     NCCLCHECK(ncclTopoAddGpuSub(xmlPci, xmlGpu, system, parent, systemId, busId, bw));
   }
 
   struct ncclTopoNode* node = NULL;
   struct ncclXmlNode* xmlNic = NULL;
-  NCCLCHECK(xmlGetSub(xmlPci, "nic", &xmlNic));
+  NCCLCHECK(xmlGetSub(xmlPci, "nic", &xmlNic));/*在pci节点下查找nic*/
   if (xmlNic != NULL) {
     type = NIC;
     // Ignore sub device ID and merge multi-port NICs into one PCI device.
     struct ncclTopoNode* nicNode = NULL;
     int64_t localNicId = NCCL_TOPO_LOCAL_NIC_ID(numaId, busId);
     int64_t id = NCCL_TOPO_ID(systemId, localNicId);
-    NCCLCHECK(ncclTopoGetNode(system, &nicNode, type, id));
+    NCCLCHECK(ncclTopoGetNode(system, &nicNode, type, id));/*通过id查找busid指明的nic节点*/
     if (nicNode == NULL) {
+      /*创建nic节点*/
       NCCLCHECK(ncclTopoCreateNode(system, &nicNode, type, id));
       node = nicNode; // Connect it to parent later on
     }
+    /*添加net节点，并指明net节点与nic节点间link*/
     NCCLCHECK(ncclTopoAddNic(xmlNic, system, nicNode, systemId));
   } else if (type == PCI) {
+	/*创建pci节点，设置此pci设备对应的device*/
     NCCLCHECK(ncclTopoCreateNode(system, &node, type, NCCL_TOPO_ID(systemId, busId)));
     NCCLCHECK(ncclTopoGetIntDevice(xmlPci, &node->pci.device));
 
@@ -774,6 +828,7 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
   }
 
   if (node) {
+	  /*添加pci link与parent之间为link_pci*/
     NCCLCHECK(ncclTopoConnectNodes(node, parent, LINK_PCI, bw));
     NCCLCHECK(ncclTopoConnectNodes(parent, node, LINK_PCI, bw));
   }
@@ -790,32 +845,37 @@ struct kvDict kvDictCpuVendor[] = {{"GenuineIntel", NCCL_TOPO_CPU_VENDOR_INTEL},
                                    {"  Shanghai  ", NCCL_TOPO_CPU_VENDOR_ZHAOXIN},
                                    {NULL, 0}};
 
-ncclResult_t ncclGetSystemId(struct ncclTopoSystem* system, struct ncclXmlNode* xmlCpu, int* systemIdPtr) {
+/*获取systemid对应的索引号*/
+ncclResult_t ncclGetSystemId(struct ncclTopoSystem* system, struct ncclXmlNode* xmlCpu, int* systemIdPtr/*出参，systemid对应的索引号*/) {
   const char* hostHashStr;
   NCCLCHECK(xmlGetAttr(xmlCpu, "host_hash", &hostHashStr));
   uint64_t hostHash = hostHashStr ? strtoull(hostHashStr, NULL, 16) : 0;
   int systemId;
   for (systemId = 0; systemId < system->nHosts; systemId++) {
-    if (system->hostHashes[systemId] == hostHash) break;
+    if (system->hostHashes[systemId] == hostHash) break;/*获得与当前host一致的索引位置*/
   }
+  /*没有找到相同的，增加一个*/
   if (systemId == system->nHosts) system->hostHashes[system->nHosts++] = hostHash;
-  *systemIdPtr = systemId;
+  *systemIdPtr = systemId;/*设置出参*/
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* system) {
+ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu/*cpu节点*/, struct ncclTopoSystem* system) {
   int numaId;
-  NCCLCHECK(xmlGetAttrInt(xmlCpu, "numaid", &numaId));
+  NCCLCHECK(xmlGetAttrInt(xmlCpu, "numaid", &numaId));/*取numa node id*/
   int systemId;
   NCCLCHECK(ncclGetSystemId(system, xmlCpu, &systemId));
+  /*创建topo cpu节点*/
   struct ncclTopoNode* cpu;
   NCCLCHECK(ncclTopoCreateNode(system, &cpu, CPU, NCCL_TOPO_ID(systemId, numaId)));
+
+  /*填充cpu节点*/
   const char* str;
   NCCLCHECK(xmlGetAttr(xmlCpu, "affinity", &str));
   if (str != NULL) {
     int cpuOffset;
     NCCLCHECK(xmlGetAttrIntDefault(xmlCpu, "affinity_offset", &cpuOffset, 0));
-    NCCLCHECK(ncclStrToCpuset(str, &cpu->cpu.affinity, cpuOffset));
+    NCCLCHECK(ncclStrToCpuset(str, &cpu->cpu.affinity, cpuOffset));/*转换为cpuset*/
   }
 
   NCCLCHECK(xmlGetAttrStr(xmlCpu, "arch", &str));
@@ -855,19 +915,27 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
       if (familyId == 7 && modelId == 0x5B) cpu->cpu.model = NCCL_TOPO_CPU_MODEL_YONGFENG;
     }
   }
+
+  /*遍历XML cpu下所有子节点，处理XML pci,XML nic两个标签*/
   for (int s = 0; s < xmlCpu->nSubs; s++) {
     struct ncclXmlNode* node = xmlCpu->subs[s];
+    /*添加pci节点*/
     if (strcmp(node->name, "pci") == 0) NCCLCHECK(ncclTopoAddPci(node, system, cpu, systemId, numaId));
     if (strcmp(node->name, "nic") == 0) {
+      /*添加nic节点*/
       struct ncclTopoNode* nic = NULL;
       int64_t localNicId = NCCL_TOPO_LOCAL_NIC_ID(numaId, 0);
       int64_t id = NCCL_TOPO_ID(systemId, localNicId);
       NCCLCHECK(ncclTopoGetNode(system, &nic, NIC, id));
       if (nic == NULL) {
+    	/*创建nic节点*/
         NCCLCHECK(ncclTopoCreateNode(system, &nic, NIC, id));
+        /*在cpu->nic之间添加link_PCI,并指明为loc_bw*/
         NCCLCHECK(ncclTopoConnectNodes(cpu, nic, LINK_PCI, LOC_BW));
+        /*在nic->cpu之间添加link_PCI,并指明为loc_bw*/
         NCCLCHECK(ncclTopoConnectNodes(nic, cpu, LINK_PCI, LOC_BW));
       }
+      /*添加net节点，并在net与nic间添加link_net*/
       NCCLCHECK(ncclTopoAddNic(node, system, nic, systemId));
     }
   }
@@ -1054,21 +1122,36 @@ ncclResult_t ncclTopoAddC2c(struct ncclXmlNode* node, struct ncclTopoSystem* sys
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem** topoSystem,
+/*从xml的内容（已完成本机rank合并）中构建topoSystem
+ * 将xml转换成system带权图结构
+ * 表示硬件层级的是system->cpu->pci->gpu(nic->net)
+ * 转换后变化为nodes[gpu],nodes[dev],nodes[pci],nodes[cpu]
+ * nodes[nic],nodes[net]...
+ * 其中每个node中通过links来表示“节点与remNode"之间的硬件连接方式及带宽
+ * 注意，为了支持gpu的虚拟化情况，网卡的虚拟化情况
+ * pci<->gpu之间不是互相连接的，而是通过pci<->gpudev<->gpu
+ * pci<->nic<->net 这样的方式连接起来的。
+ * gpu表示逻辑上的gpu,net表示逻辑的网络
+ * 因此link反应的是两个节点之间有一跳直接连接（虚拟这种抽象暂时忽略）,反应物理邻接关系
+ * 后面的path反映的是从源节点到目标节点的一条多路路线，由多个link组成，反应通过物理邻接的多条路线
+ * */
+ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem** topoSystem/*出参*/,
                                       const uint64_t localHostHash) {
   NCCLCHECK(ncclCalloc(topoSystem, 1));
   struct ncclTopoSystem* system = *topoSystem;
   struct ncclXmlNode* topNode;
-  NCCLCHECK(xmlFindTag(xml, "system", &topNode));
+  NCCLCHECK(xmlFindTag(xml, "system", &topNode));/*在xml中找到system节点*/
   if (topNode == NULL) {
     WARN("ncclTopoGetSystemFromXml: system node not found in XML");
     return ncclInternalError;
   }
+  /*遍历所有xml system子节点，仅xml cpu节点进行处理*/
   for (int s = 0; s < topNode->nSubs; s++) {
     struct ncclXmlNode* node = topNode->subs[s];
     if (strcmp(node->name, "cpu") == 0) NCCLCHECK(ncclTopoAddCpu(node, *topoSystem));
   }
 
+  /*查找自身所在的host在对应的hostHashs表中的索引*/
   int systemId = 0;
   while (systemId < system->nHosts && system->hostHashes[systemId] != localHostHash) systemId++;
   system->systemId = systemId;
@@ -1153,27 +1236,29 @@ int ncclTopoCheckPix(ncclXmlNode* common, ncclXmlNode** nodes, int nNodes) {
     ncclXmlNode* node = nodes[i];
     if (strcmp(node->name, "net") == 0) {
       node = node->parent;
-      if (node == NULL) return 0;
+      if (node == NULL) return 0;/*无父节点*/
       if (strcmp(node->name, "nic") == 0) {
         node = node->parent;
-        if (node == NULL) return 0;
+        if (node == NULL) return 0;/*无父节点*/
         // All nodes must descend from the same first level pci switch
         if (strcmp(node->name, "pci") == 0) {
           TRACE(NCCL_GRAPH, "Comparing parent of node=%p to common=%p", node->parent, common);
-          if (node->parent != common) return 0;
+          if (node->parent != common) return 0;/*不从属于同一个pci设备*/
         }
       }
     }
   }
 
-  return 1;
+  return 1;/*所有节点从属于同一个pci switch*/
 }
 
 #define NCCL_TOPO_XML_DEPTH_MAX 256
 typedef struct xmlNodeStack {
+	/*记录xmlNode的栈*/
   ncclXmlNode* elems[NCCL_TOPO_XML_DEPTH_MAX];
   int tail;
 
+  /*取栈顶元素*/
   ncclXmlNode* top() {
     if (!empty()) {
       return elems[tail - 1];
@@ -1182,6 +1267,7 @@ typedef struct xmlNodeStack {
     }
   }
 
+  /*弹栈*/
   ncclXmlNode* pop() {
     ncclXmlNode* node = top();
     if (node) {
@@ -1190,12 +1276,14 @@ typedef struct xmlNodeStack {
     return node;
   }
 
+  /*压栈*/
   void push(ncclXmlNode* node) {
     if (tail < NCCL_TOPO_XML_DEPTH_MAX) {
       elems[tail++] = node;
     }
   }
 
+  /*检查栈是否为空*/
   bool empty() {
     return tail == 0;
   }
@@ -1205,33 +1293,38 @@ typedef struct xmlNodeStack {
 ncclResult_t ncclFindFirstPciParent(ncclXmlNode** parent) {
   ncclXmlNode* newParent = *parent;
   while (strcmp(newParent->name, "pci") != 0) {
-    newParent = newParent->parent;
-    if (newParent == nullptr) return ncclSuccess;
+    newParent = newParent->parent;/*向上继续找*/
+    if (newParent == nullptr) return ncclSuccess;/*没有找到父节点*/
+    /*已找到system*/
     if (strcmp(newParent->name, "system") == 0) return ncclSuccess;
   }
-  *parent = newParent;
+  *parent = newParent;/*设置共同的父节点*/
   return ncclSuccess;
 }
 
 // 1. Find the common parent xmlNode between the given set of nodes
-ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXmlNode** parent) {
+ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes/*合并的结点数目*/, int* path/*path类型*/, ncclXmlNode** parent/*出参，公共父节点*/) {
   // Track a stack of parents per-net node being merged
   xmlNodeStack* parents;
-  NCCLCHECK(ncclCalloc(&parents, nNodes));
+  NCCLCHECK(ncclCalloc(&parents, nNodes));/*用做栈，有nNodes个栈*/
   // Find the common parent
   ncclXmlNode* common = NULL;
 
   if (nNodes == 1) {
+	  /*只有一个设备，返回PATH_LOC*/
     common = nodes[0];
     *path = PATH_LOC;
     goto out;
   }
 
+  /*沿这N个xmlNode,向上查找其父节点，全部压进栈里（即会有N个system标签栈中；
+   * 也可能temp的父节点为空了，但其还未指到system）*/
   for (int i = 0; i < nNodes; i++) {
     ncclXmlNode* temp;
     temp = nodes[i];
     while (temp) {
-      parents[i].push(temp);
+      parents[i].push(temp);/*压其父节点在i号栈*/
+      /*未达到system节点，则继续压*/
       temp = strcmp(temp->name, "system") == 0 ? NULL : temp->parent;
     }
   }
@@ -1239,22 +1332,24 @@ ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXml
   common = NULL;
   int c;
   c = 1;
-  while (c && !parents[0].empty()) {
-    ncclXmlNode* temp = parents[0].top();
+  while (c/*未出现不一致*/ && !parents[0].empty()/*0号栈不为空*/) {
+    ncclXmlNode* temp = parents[0].top();/*取零号栈栈顶*/
     for (int i = 1; i < nNodes; i++) {
       if (!parents[i].empty()) {
-        c &= (temp == parents[i].top());
+        c &= (temp == parents[i].top());/*如为同一个父节点，则c为0*/
       } else {
-        c = 0;
+        c = 0;/*不为同一个父节点*/
         break;
       }
     }
 
     if (c) {
+      /*所有nNodes个栈均有同一个父节点，即temp,记在comm中*/
       common = temp;
       if (common == NULL) {
         TRACE(NCCL_GRAPH, "COMMON IS NULL");
       }
+      /*使每个栈，将这个相同的父节点弹出*/
       for (int i = 0; i < nNodes; i++) {
         parents[i].pop();
       }
@@ -1262,9 +1357,11 @@ ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXml
       // For multi-port to be true, all parents (peers) must have the busId attribute with all but the last character
       // matching
     } else {
+      /*此时存在一个或多个栈基与0号栈的节点不是同一节点（即设备的祖辈节点出现分叉）*/
       int multiPort = 1;
       const char* tempBusId;
 
+      /*取此设备busid记为tempBusId,在众多栈里查是否有与此同宗的栈，置为multiPort*/
       NCCLCHECK(xmlGetAttr(temp, "busid", &tempBusId));
       if (tempBusId) {
         for (int i = 1; i < nNodes; i++) {
@@ -1290,6 +1387,7 @@ ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXml
         multiPort = 0;
       }
 
+      /*有与0号属于同宗的设备存在（即其下有多port)*/
       if (multiPort) {
         *path = PATH_PORT;
         goto out;
@@ -1297,20 +1395,28 @@ ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXml
     }
   }
 
+  /*0号设备对应的栈已空*/
   if (common == NULL) {
+	  /*未指向system的情况（认定为断开）*/
     *path = PATH_DIS;
   } else if (strcmp(common->name, "system") == 0) {
+	  /*共同节点是<system>即两个设备分属不同cpu*/
     *path = PATH_SYS;
   } else if (strcmp(common->name, "cpu") == 0) {
+	  /*共同节点是<cpu>,即两个设备挂在同一颗CPU下的不同root complex/host bridge下
+	   * 这种通信需要由各设备先到host bridge,再由 host bridge到另一个host brige,再到通方
+	   * */
     *path = PATH_PHB;
   } else if (strcmp(common->name, "nic") == 0) {
+	  /*共同点是<nic>,按多端口考虑*/
     *path = PATH_PORT;
   } else if (strcmp(common->name, "net") == 0) {
+	  /*共同点是<net>按多端口考虑*/
     *path = PATH_PORT;
   } else if (ncclTopoCheckPix(common, nodes, nNodes)) {
-    *path = PATH_PIX;
+    *path = PATH_PIX;/*所有节点都挂在同一个pcie switch下，中间不再隔层*/
   } else {
-    *path = PATH_PXB;
+    *path = PATH_PXB;/*共同点是<pci>但bdf不同，需跨pcie switch*/
   }
 
 out:
@@ -1389,6 +1495,7 @@ ncclResult_t ncclTopoMakeVnic(struct ncclXml* xml, struct ncclTopoNetInfo* netIn
 
   // Don't make vNics of size 1
   if (vProps->ndevs == 1) {
+	  /*单个设备的情况不合并*/
     TRACE(NCCL_GRAPH, "TOPO/NET : Skipping vNic of size 1");
     return ncclSuccess;
   }
@@ -1410,7 +1517,7 @@ ncclResult_t ncclTopoMakeVnic(struct ncclXml* xml, struct ncclTopoNetInfo* netIn
 }
 
 ncclResult_t ncclTopoForceMerge(struct ncclXml* xml, struct ncclTopoNetInfo* netInfo, int* placedDevs,
-                                ncclNetProperties_t* propsList, struct ncclXmlNode** physNetNodes, int nPhysDevs) {
+                                ncclNetProperties_t* propsList, struct ncclXmlNode** physNetNodes/*物理设备对应的xml节点*/, int nPhysDevs/*物理设备数*/) {
   ncclResult_t ret = ncclSuccess;
   const char* str = netInfo->forceMerge;
   INFO(NCCL_ENV | NCCL_NET, "TOPO/NET : Force-fusing NICs using NCCL_NET_FORCE_MERGE=%s", str);
@@ -1478,15 +1585,16 @@ ncclResult_t ncclTopoAutoMerge(struct ncclXml* xml, struct ncclTopoNetInfo* netI
   // Compute the path type between each device
   int* paths = NULL;
   ncclResult_t res = ncclSuccess;
-  ncclCalloc(&paths, nPhysDevs * nPhysDevs);
+  ncclCalloc(&paths, nPhysDevs * nPhysDevs);/*记录结果*/
   TRACE(NCCL_GRAPH, "Allocated %d paths", nPhysDevs * nPhysDevs);
+  /*遍历所有设备，针对两两测算距离（包含自已与自已）*/
   for (int i = 0; i < nPhysDevs; i++) {
     for (int j = 0; j < nPhysDevs; j++) {
       struct ncclXmlNode* nodes[2];
       nodes[0] = physNetNodes[i];
       nodes[1] = physNetNodes[j];
       struct ncclXmlNode* parent;
-      NCCLCHECKGOTO(ncclTopoGetPath(nodes, 2, &paths[i * nPhysDevs + j], &parent), res, out);
+      NCCLCHECKGOTO(ncclTopoGetPath(nodes, 2, &paths[i * nPhysDevs + j], &parent/*公共父结点*/), res, out);
     }
   }
 
@@ -1504,10 +1612,10 @@ ncclResult_t ncclTopoAutoMerge(struct ncclXml* xml, struct ncclTopoNetInfo* netI
       // Select each unplaced device "j" which is at most "mergeLevel" distance from "i", but not equal to "i"
       // (Don't merge the same device with itself)
       for (int j = 0; j < nPhysDevs; j++) {
-        if ((paths[i * nPhysDevs + j] <= netInfo->mergeLevel) && (placedDevs[j] == 0 && j != i) &&
+        if ((paths[i * nPhysDevs + j] <= netInfo->mergeLevel/*距离必须小于mergeLevel*/) && (placedDevs[j] == 0 && j != i) &&
             (netInfo->mergePolicy != NCCL_NET_MERGE_POLICY_RAIL ||
              (propsList[i].railId != NCCL_NET_ID_UNDEF && propsList[i].railId == propsList[j].railId))) {
-          vProps.devs[vProps.ndevs++] = j;
+          vProps.devs[vProps.ndevs++] = j;/*J这个设备也可以选*/
           placedDevs[j] = 1;
           TRACE(NCCL_GRAPH, "Placed dev %d path=%d", j, paths[i * nPhysDevs + j]);
         }
@@ -1564,6 +1672,7 @@ ncclResult_t ncclTopoFindLinkWidthRec(ncclXmlNode* node, ncclXmlNode** physNetNo
                                       int* linkWidth) {
   int myLinkWidth = 0;
   if (strcmp(node->name, "pci") == 0) {
+	  /*节点为pci,直接取link width*/
     NCCLCHECK(xmlGetAttrInt(node, "link_width", &myLinkWidth));
 #ifdef ENABLE_TRACE
     const char *busidAttr, *linkAttr;
@@ -1620,7 +1729,7 @@ ncclResult_t ncclTopoFindLinkWidth(ncclXmlNode* parent, ncclXmlNode** physNetNod
     ncclXmlNode* child = parent->subs[i];
     int foundPhysNet = 0;
     int childLinkWidth = 0;
-    NCCLCHECK(ncclTopoFindLinkWidthRec(child, physNetNodes, ndevs, &foundPhysNet, &childLinkWidth));
+    NCCLCHECK(ncclTopoFindLinkWidthRec(child/*子节点*/, physNetNodes, ndevs, &foundPhysNet, &childLinkWidth));
     if (foundPhysNet) {
       *linkWidth += childLinkWidth;
     }
@@ -1629,24 +1738,29 @@ ncclResult_t ncclTopoFindLinkWidth(ncclXmlNode* parent, ncclXmlNode** physNetNod
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, const char* tagName,
-                                   ncclResult_t (*getProperties)(int, ncclNetProperties_t*),
+ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, const char* tagName/*节点名称*/,
+                                   ncclResult_t (*getProperties/*设备属性获取函数*/)(int, ncclNetProperties_t*),
                                    ncclNetVDeviceProps_t* vProps, ncclXmlNode** parent) {
   ncclNetProperties_t props[NCCL_NET_MAX_DEVS_PER_NIC];
   ncclXmlNode* physNetNodes[NCCL_NET_MAX_DEVS_PER_NIC];
+  /*遍历vProps中的所有子设备*/
   for (int i = 0; i < vProps->ndevs; i++) {
+	  /*取设备属性*/
     NCCLCHECK(getProperties(vProps->devs[i], props + i));
     struct ncclXmlNode* physNetNode;
+    /*检查tag下是否有此物理设备*/
     NCCLCHECK(xmlFindTagKv(xml, tagName, &physNetNode, "name", props[i].name));
     physNetNodes[i] = physNetNode;
     TRACE(NCCL_GRAPH, "Re-found physical ncclNet node %d %s", i, props[i].name);
   }
 
+  /*取这一组物理设备的共同节点，并依据共同节点判断path情况（单设备时必为PatH_LOC)*/
   int path = PATH_LOC;
-  NCCLCHECK(ncclTopoGetPath(physNetNodes, vProps->ndevs, &path, parent));
+  NCCLCHECK(ncclTopoGetPath(physNetNodes/*所有查找到的物理设备xml节点*/, vProps->ndevs/*总数*/, &path, parent));
   int aggregateWidth = 0;
   if (path == PATH_PHB || path == PATH_PXB || path == PATH_PIX) {
-    NCCLCHECK(ncclTopoFindLinkWidth(*parent, physNetNodes, vProps->ndevs, &aggregateWidth));
+	  /*这组设备需要一条或多路PCIE switch,检查link带宽*/
+    NCCLCHECK(ncclTopoFindLinkWidth(*parent, physNetNodes/*所有查找到的物理设备xml节点*/, vProps->ndevs/*总数*/, &aggregateWidth));
   }
 
   // If the common parent is a PCI switch or the CPU, we must reparent the new NIC under a made up pci device with a
@@ -1685,6 +1799,7 @@ ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, const char* tagName,
   return ncclSuccess;
 }
 
+/*构造vnic*/
 ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netInfo, int physicalDevs) {
   int* placedDevs = NULL;
   struct ncclXmlNode** physNetNodes = NULL;
@@ -1695,17 +1810,21 @@ ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netI
   NCCLCHECKGOTO(ncclCalloc(&physNetNodes, physicalDevs), res, out);
   NCCLCHECKGOTO(ncclCalloc(&placedDevs, physicalDevs), res, out);
   NCCLCHECKGOTO(ncclCalloc(&props, physicalDevs), res, out);
+  /*记录所有physicalDevs对应的xml节点*/
   for (int i = 0; i < physicalDevs; i++) {
+	/*填设备属性*/
     NCCLCHECKGOTO(netInfo->getProperties(i, props + i), res, out);
     struct ncclXmlNode* physNetNode;
-    NCCLCHECKGOTO(xmlFindTagKv(xml, "net", &physNetNode, "name", props[i].name), res, out);
+    NCCLCHECKGOTO(xmlFindTagKv(xml, "net", &physNetNode/*取此物理设备对应的节点*/, "name", props[i].name), res, out);
     physNetNodes[i] = physNetNode;
     TRACE(NCCL_GRAPH, "Found physical ncclNet node %d %s", i, props[i].name);
   }
 
   if (netInfo->forceMerge) {
+	  /*强制合并*/
     NCCLCHECKGOTO(ncclTopoForceMerge(xml, netInfo, placedDevs, props, physNetNodes, physicalDevs), res, out);
   }
+  /*自动合并*/
   NCCLCHECKGOTO(ncclTopoAutoMerge(xml, netInfo, placedDevs, props, physNetNodes, physicalDevs), res, out);
 
 out:
@@ -1715,17 +1834,18 @@ out:
   return res;
 }
 
-static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*起始索引*/, int endIndex/*终止索引*/, struct ncclTopoNetInfo* netInfo,
-                                         int virtualNics/*是否虚拟网卡*/) {
-	/*tag名称*/
+static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*设备起始索引*/, int endIndex/*设备终止索引*/, struct ncclTopoNetInfo* netInfo,
+                                         int virtualNics/*是否为虚拟设备*/) {
+  /*tag名称（依据netInfo上提供的gin,rma标记确定）*/
   const char* tagName = netInfo->gin ? "gin" : (netInfo->rma ? "rma" : "net");
   for (int n = startIndex; n < endIndex; n++) {
     ncclNetProperties_t props;
-    NCCLCHECK(netInfo->getProperties(n/*设备编号*/, &props));/*取设备属性*/
+    NCCLCHECK(netInfo->getProperties(n/*设备编号*/, &props));/*取此设备属性*/
     struct ncclXmlNode* netNode = NULL;
     struct ncclXmlNode* parent = NULL;
     if (virtualNics) {/*虚拟网卡*/
       struct ncclXmlNode* net = NULL;
+      /*在tagName节点下，查找属性名称为name，且值为props.name（设备名）的节点*/
       NCCLCHECK(xmlFindTagKv(xml, tagName, &net, "name", props.name));
       // In the event of multithreaded use case, we need to re-discover the shared parent of the given devices for
       // this vNIC
@@ -1733,10 +1853,12 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*起始索
       if (net == NULL) NCCLCHECK(ncclTopoGetVNicParent(xml, tagName, netInfo->getProperties, &props.vProps, &parent));
     }
 
-    NCCLCHECK(ncclTopoFillNet(xml, tagName, props.pciPath, props.name, &netNode, parent));
+    /*填充net节点*/
+    NCCLCHECK(ncclTopoFillNet(xml, tagName, props.pciPath/*设备pci路径*/, props.name/*设备名称*/, &netNode/*出参，net节点*/, parent));
     // Move <net .... gin/rma=1> XML nodes to <gin/rma ...> nodes.
     // This would lead to duplication of the device in ncclTopoAddNic.
     if (netInfo->gin || netInfo->rma) {
+      /*做节点的向后兼容处理，将<net gin/rdma=1换成<gin/rdma 节点*/
       struct ncclXmlNode* legacyNetNode = NULL;
       NCCLCHECK(xmlFindTagKv(xml, "net", &legacyNetNode, "name", props.name));
       if (legacyNetNode) {
@@ -1756,7 +1878,7 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*起始索
     const char* colAttr;
     NCCLCHECK(xmlGetAttr(netNode, "coll", &colAttr));
 
-    NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
+    NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));/*为nic添加keep标记*/
     int dev;
     xmlGetAttrIntDefault(netNode, "dev", &dev, -1);
     if (dev != -1 && dev != n) {
@@ -1770,6 +1892,7 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*起始索
            netInfo->name, dev, n, net ? "NET" : "", gin ? "GIN" : "", rma ? "RMA" : "");
     }
 
+    /*设置netNode属性*/
     NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
@@ -1780,14 +1903,17 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*起始索
     int plane = (props.planeId == NCCL_NET_ID_UNDEF) ? NCCL_TOPO_UNDEF : (props.planeId & 0xFFFF);
     NCCLCHECK(ncclTopoGetRailPlane(netInfo->railKeyList, netNode, props.port, &rail, &plane));
 
+    /*取rail,plane*/
     int oldRail, oldPlane;
     NCCLCHECK(xmlGetAttrIntDefault(netNode, "rail", &oldRail, rail));
     NCCLCHECK(xmlGetAttrIntDefault(netNode, "plane", &oldPlane, plane));
     if (oldRail != rail || oldPlane != plane) {
+    	/*之前的值与现在的值不一致*/
       WARN("TOPO/NET : Inconsistent rail/plane for net %s: existing %d/%d, new %d/%d.", props.name, oldRail, oldPlane,
            rail, plane);
       return ncclInvalidUsage;
     }
+    /*更新进netNode(可能之前没有设置）*/
     NCCLCHECK(xmlInitAttrInt(netNode, "rail", rail));
     NCCLCHECK(xmlInitAttrInt(netNode, "plane", plane));
 
@@ -1803,9 +1929,9 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex/*起始索
     const char* netAttr = NULL;
     NCCLCHECK(xmlGetAttr(netNode, "net", &netAttr));
     if (netAttr) isNet = strtol(netAttr, NULL, 0);
-    NCCLCHECK(xmlSetAttrInt(netNode, "net", netInfo->net || isNet));
+    NCCLCHECK(xmlSetAttrInt(netNode, "net", netInfo->net || isNet));/*更新net属性*/
     // Only set coll or gin if it's not 0
-    if (netInfo->coll) NCCLCHECK(xmlInitAttrInt(netNode, "coll", netInfo->coll));
+    if (netInfo->coll) NCCLCHECK(xmlInitAttrInt(netNode, "coll", netInfo->coll));/*更新coll属性*/
     if (netInfo->gin) NCCLCHECK(xmlInitAttrInt(netNode, "gin", netInfo->gin));
     if (netInfo->rma) NCCLCHECK(xmlInitAttrInt(netNode, "rma", netInfo->rma));
 
@@ -1857,20 +1983,22 @@ ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct nc
   int nPhysicalNics, nVirtualNics;
   NCCLCHECK(net->getDevCount(net->netPluginIndex, &nPhysicalNics, &nVirtualNics));
   // List the physical devices in the topo and set keep = 1
+  /*填充物理设备*/
   NCCLCHECK(ncclTopoPopulateNics(xml, 0, nPhysicalNics, net, /*virtual=*/false));
   if (!usePhysicalDevices) {
     // Virtual devices are only created once per network
     if (nVirtualNics == NCCL_UNDEF_DEV_COUNT) {
+      /*创建虚拟设备*/
       NCCLCHECK(ncclTopoMakeVNics(xml, net, nPhysicalNics));
       // Update the number of virtual devices both locally and in the state tracking the plugin.
       // Note: 0 is a valid number of virtual devices
       int nDevs;
-      NCCLCHECK(net->devices(&nDevs));
-      nVirtualNics = nDevs - nPhysicalNics;
-      NCCLCHECK(net->setVirtDevCount(net->netPluginIndex, nVirtualNics));
+      NCCLCHECK(net->devices(&nDevs));/*再取设备数目*/
+      nVirtualNics = nDevs - nPhysicalNics;/*虚设备数目*/
+      NCCLCHECK(net->setVirtDevCount(net->netPluginIndex, nVirtualNics));/*更新虚设备数目*/
     }
     // populate the virtual devices if any
-    if (nVirtualNics > 0) {
+    if (nVirtualNics > 0) {/*有虚设备就更新*/
       // Physical devices within a virtual one have to be removed. The fused dev inherits the guid.
       // Note: ncclTopoMakeVnic doesn't create a vNic if ndevs = 1; no special case needed
       NCCLCHECK(ncclTopoUpdateVNics(xml, net, nPhysicalNics, nVirtualNics));
@@ -1899,6 +2027,7 @@ ncclResult_t ncclTopoGetXmlCpuArch(ncclXml* xml, int* cpuArch) {
   return ncclSuccess;
 }
 
+/*仅arm有可能返回true*/
 static bool ncclTopoIsVeraRubin(int cudaCompCap, int cpuArch) {
   return cpuArch == NCCL_TOPO_CPU_ARCH_ARM && RUBIN_AND_LATER(cudaCompCap);
 }
@@ -1909,6 +2038,7 @@ ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge, int 
   if (mergeLevelEnv) {
     kvConvertToInt(mergeLevelEnv, mergeLevel, nicPathKvList);
   } else {
+	  /*非arm平台默认为path_port*/
     *mergeLevel = ncclTopoIsVeraRubin(cudaCompCap, cpuArch) ? PATH_PHB : PATH_PORT;
   }
   return ncclSuccess;
@@ -1991,13 +2121,14 @@ exit:
   return ret;
 }
 
-ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** system, const char* dumpXmlFile) {
+/*加载XML，与本机其它rank同步各自XML内容，解析合并后的xml内容形成本机大表，基于本机大表构建system结构体并返回*/
+ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** system, const char* dumpXmlFile/*输出拓扑文件*/) {
   ncclResult_t ret = ncclSuccess;
   struct ncclXml* xml;
   char* mem = NULL;
-  int* localRanks = NULL;
+  int* localRanks = NULL;/*和本rank在同一个主机上的其它rank编号*/
   struct ncclXml* rankXml;
-  int localRank = -1, nLocalRanks = 0;
+  int localRank/*本rank在localRanks数组中的编号*/ = -1, nLocalRanks = 0/*和本rank在同一个主机上的rank数（即localRanks数组有效长度）*/;
   int cpuArch = NCCL_TOPO_UNDEF;
   struct ncclTopoNetInfo netInfo = {0};
   struct ncclTopoNetRailKeyList railKeyList;
@@ -2011,40 +2142,48 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   } else {
     /*从默认路径获取topo文件,并加载进xml */
     // Try default XML topology location
-    NCCLCHECKGOTO(ncclTopoGetXmlFromFile("/var/run/nvidia-topologyd/virtualTopology.xml", xml, 0), ret, fail);
+    NCCLCHECKGOTO(ncclTopoGetXmlFromFile("/var/run/nvidia-topologyd/virtualTopology.xml", xml, 0/*文件不存在时，不告警*/), ret, fail);
   }
+  /*行至此处，我们可能加载了xml,也可能没有*/
   // Fixup the cpu's host_hashes.
   struct ncclXmlNode* node;
   // Update every cpu node's host_hash attribute since those are not
   // intended to be preserved from the XML files that have been read.
+  /*cpu节点容许有多个，其中cpu属性host_hash可能是随机生成的，故此处覆盖*/
   NCCLCHECKGOTO(xmlFindTag(xml, "cpu", &node), ret, fail);
   while (node != nullptr/*cpu节点在*/) {
     NCCLCHECKGOTO(xmlSetAttrLong(node, "host_hash", getHostHash()), ret, fail);/*设置cpu节点的host_hash属性 */
     NCCLCHECKGOTO(xmlFindNextTag(xml, "cpu", node, &node), ret, fail);/*找到下一个cpu节点 */
   }
-  /**如当前节点为空，创建根节点 */
+  /**如根节点为空（完全没有加载xml)，创建根节点<system version="1"> */
   if (xml->maxIndex == 0) {
     // Create top tag
     struct ncclXmlNode* top;
-    NCCLCHECKGOTO(xmlAddNode(xml, NULL, "system", &top), ret, fail);/*添加system节点 */
-    NCCLCHECKGOTO(xmlSetAttrInt(top, "version", NCCL_TOPO_XML_VERSION), ret, fail);/*设置system节点的version属性 */
+    /*添加system节点 */
+    NCCLCHECKGOTO(xmlAddNode(xml, NULL, "system", &top), ret, fail);
+    /*设置system节点的version属性 */
+    NCCLCHECKGOTO(xmlSetAttrInt(top, "version", NCCL_TOPO_XML_VERSION), ret, fail);
   }
 
   NCCLCHECKGOTO(ncclTopoRefreshBcmP2pLinks(), ret, fail);
 
   // Detect only the GPU managed by this process.  We'll get any others through XML fusion.
   char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
-  /*将此rank负责的gpu对应的busid转换为字符串形式*/
+  /*将此rank负责的gpu对应的busid转换为字符串形式,并在xml中填充此gpu信息*/
   NCCLCHECKGOTO(int64ToBusId(comm->peerInfo[comm->rank].busId, busId), ret, fail);
-  NCCLCHECKGOTO(ncclTopoFillGpu(xml, busId, &node), ret, fail);
+  NCCLCHECKGOTO(ncclTopoFillGpu(xml, busId, &node/*出参，此gpu节点*/), ret, fail);
   if (node) {
-    /*设置gpu节点的keep,rank,gdr属性 */
+    /*设置gpu节点的keep,rank,gdr属性，例如<gpu dev="0" sm="90" rank="0" gdr="1" molopart="-1"> */
+	  /*指定keep为1*/
     NCCLCHECKGOTO(xmlSetAttrInt(node, "keep", 1), ret, fail);
     /*从属于哪个rank(这里有个问题，如果是多rank操作一个gpu呢？）*/
     NCCLCHECKGOTO(xmlSetAttrInt(node, "rank", comm->rank), ret, fail);
+    /*是否支持gdr*/
     NCCLCHECKGOTO(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport), ret, fail);
+    /*gpu虚拟化分用相关*/
     NCCLCHECKGOTO(xmlSetAttrInt(node, "mlopart", comm->peerInfo[comm->rank].mloPart), ret, fail);
   }
+
   /*获取cpuArch*/
   NCCLCHECKGOTO(ncclTopoGetXmlCpuArch(xml, &cpuArch), ret, fail);
 
@@ -2054,36 +2193,39 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     std::lock_guard<std::mutex> lock(netMutex);
     INFO(NCCL_GRAPH, "TOPO/NET : Importing network plugins to topology");
     struct ncclGinState* ginState = &comm->sharedRes->ginState;/*取ginState*/
-    ncclGin_t* gin = ginState->supported ? ginState->backends[0].ncclGin : NULL;
+    ncclGin_t* gin = ginState->supported/*有backend,取首个*/ ? ginState->backends[0].ncclGin : NULL;
     if (gin) {
       netInfo.net = 0;
       netInfo.coll = 0;
       netInfo.gin = 1;
       netInfo.rma = 0;
+      /*首个后端对应的插件index,比如ncclGinIbGdaki*/
       netInfo.netPluginIndex = ginState->backends[0].pluginIndex;
       netInfo.dmaBufSupport = comm->dmaBufSupport;
-      netInfo.getDevCount = ncclGinGetDevCount;
+      netInfo.getDevCount = ncclGinGetDevCount;/*返回gin插件发现的设备数目*/
       netInfo.name = gin->name;
-      netInfo.getProperties = gin->getProperties;
+      netInfo.getProperties = gin->getProperties;/*取设备属性*/
       netInfo.makeVDevice = NULL;
       netInfo.devices = gin->devices;
       netInfo.railKeyList = &railKeyList;
+      /*填充gin标签(gin标签当前仅支持mellanox网卡）*/
       NCCLCHECKGOTO(ncclTopoProcessNet(xml, dumpXmlFile, &netInfo), ret, fail);
     }
     ncclRma_t* rma = comm->rmaState.rmaProxyState.ncclRma;
     if (rma) {
       netInfo.net = 0;
       netInfo.coll = 0;
-      netInfo.gin = 0;/*不支持gin*/
-      netInfo.rma = 1;
+      netInfo.gin = 0;
+      netInfo.rma = 1;/*rma插件*/
       netInfo.netPluginIndex = comm->rmaPluginIndex;
       netInfo.dmaBufSupport = comm->dmaBufSupport;
-      netInfo.getDevCount = ncclRmaGetDevCount;
-      netInfo.name = rma->name;
-      netInfo.getProperties = rma->getProperties;
+      netInfo.getDevCount = ncclRmaGetDevCount;/*只返回插件记录的物理设备数目*/
+      netInfo.name = rma->name;/*rma插件名称，例如“RMA_IB_PROXY"*/
+      netInfo.getProperties = rma->getProperties;/*使用rma的取设备属性函数*/
       netInfo.makeVDevice = NULL;
       netInfo.devices = rma->devices;
       netInfo.railKeyList = &railKeyList;
+      /*填充rma标签（rma当前支持的是mergedDev，会为每一个设备生成一个标签)*/
       NCCLCHECKGOTO(ncclTopoProcessNet(xml, dumpXmlFile, &netInfo), ret, fail);
     }
     if (collNetSupport(comm)) {
@@ -2116,17 +2258,18 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     netInfo.getDevCount = ncclNetGetDevCount;
     netInfo.setVirtDevCount = ncclNetSetVirtDevCount;
     netInfo.name = comm->ncclNet->name;
-    netInfo.getProperties = comm->ncclNet->getProperties;
+    netInfo.getProperties = comm->ncclNet->getProperties;/*使用网络插件的属性获取*/
     netInfo.makeVDevice = comm->ncclNet->makeVDevice;
     netInfo.devices = comm->ncclNet->devices;
     netInfo.railKeyList = &railKeyList;
     NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge, comm->minCompCap, cpuArch));
     NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy, comm->minCompCap, cpuArch));
+    /*填充net标签*/
     NCCLCHECKGOTO(ncclTopoProcessNet(xml, dumpXmlFile, &netInfo), ret, fail);
   }
 
   // Remove XML branches which don't have a node with keep="1" (typically when importing a topology)
-  NCCLCHECKGOTO(ncclTopoTrimXml(xml), ret, fail);
+  NCCLCHECKGOTO(ncclTopoTrimXml(xml), ret, fail);/*移除子节点中没有明确keep的节点*/
 
   // XML topo fusion.
   if (comm->MNNVL) {
@@ -2145,16 +2288,21 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     }
   }
   NCCLCHECKGOTO(ncclCalloc(&mem, nLocalRanks/*和当前节点在同一主机的rank数量*/* xmlMemSize(NCCL_TOPO_XML_MAX_NODES)), ret, fail);
-  rankXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * localRank);/**写入自身对应的xml位置 */
+  /**将上面组装的xml写入到本rank对应的位置 */
+  rankXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * localRank);
   memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));
-  /**设置parent,subs属性 */
+
+  /**将rankxml中的parent,subs[i]指针解码为相对于xml->nodes的索引*/
   NCCLCHECKGOTO(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1), ret, fail);
   // nLocalRanks can't actually be 0, or we wouldn't be running at all...
   // coverity[divide_by_zero]
-  /**同步mem中的所有节点的xml位置 */
-  NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem,
-                                            xmlMemSize(NCCL_TOPO_XML_MAX_NODES)),
+  /**在本机的rank间同步mem中的所有节点的xml位置*/
+  NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks/*本机rank编号数组*/, localRank/*自身rank在localRanks中的编号*/, nLocalRanks/*本机rank数组长度*/, mem/*同步内容*/,
+                                            xmlMemSize(NCCL_TOPO_XML_MAX_NODES)/*数据大小*/),
                 ret, fail);
+
+  /*现在我们拿到了本机的其它rank收集的xml信息，
+   * 我们获得了本机硬件拓扑的全貌（有哪些gpu，有哪些网卡设备，它们的层次是怎么样的）*/
   if (comm->MNNVL) {
     // Ensure that we have enough room when fusing topos from multiple nodes.
     free(xml);
@@ -2166,18 +2314,22 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   }
   for (int i = 0; i < nLocalRanks; i++) {
     struct ncclXml* peerXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * i);
-    NCCLCHECKGOTO(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0), ret, fail);/**转换peerXml的parent,subs属性 */
-    NCCLCHECKGOTO(ncclTopoFuseXml(xml, peerXml), ret, fail);/**融合peerXml到xml */
+    /*对peerxml中的指针内容进行反序列化*/
+    NCCLCHECKGOTO(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0/*反序列化*/), ret, fail);
+    /**组合peerxml中的内容产生本机整张xml*/
+    NCCLCHECKGOTO(ncclTopoFuseXml(xml, peerXml), ret, fail);
   }
 
   if (dumpXmlFile && comm->rank == ncclParamTopoDumpFileRank()) {
+	/**指明了要dumpxml,且指定了要dumpxml的rank（默认为0号）,写入到dumpXmlFile文件 */
     INFO(NCCL_ENV, "NCCL_TOPO_DUMP_FILE set by environment to %s", dumpXmlFile);
-    NCCLCHECKGOTO(ncclTopoDumpXmlToFile(dumpXmlFile, xml), ret, fail);/**写入到dumpXmlFile文件 */
+    NCCLCHECKGOTO(ncclTopoDumpXmlToFile(dumpXmlFile, xml), ret, fail);
   }
 
   // Only update our topo tracking structure if we aren't dumping (separate steps)
   if (dumpXmlFile == NULL) {
-    NCCLCHECKGOTO(ncclTopoGetSystemFromXml(xml, system/** 从xml中获取拓扑结构 */, getHostHash()), ret, fail);
+	/*从这里开始我们需要将xml构造成图结构*/
+    NCCLCHECKGOTO(ncclTopoGetSystemFromXml(xml, system/*出参，图结构的system*/, getHostHash()), ret, fail);
     // store comm related information
     (*system)->minDriverVersion = comm->minDriverVersion;
     (*system)->cuMemGdrSupport = comm->cuMemGdrSupport;
@@ -2192,22 +2344,27 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclTopoGetLocal(struct ncclTopoSystem* system, int type, int index, int resultType,
-                              int locals[NCCL_TOPO_MAX_NODES], int* localCount, int* pathType) {
+/*取从源节点出发到目标节点走resultType类型link最优的link*/
+ncclResult_t ncclTopoGetLocal(struct ncclTopoSystem* system, int type/*源节点类型*/, int index/*源节点索引*/, int resultType/*目标节点path类型*/,
+                              int locals[NCCL_TOPO_MAX_NODES]/*出参，目标节点下标*/, int* localCount/*出参，目标节点数目*/, int* pathType/*出参，最佳的path type*/) {
   int minType = PATH_DIS;
   float maxBw = 0;
   int count = 0;
+  /*节点index的resultType型paths*/
   struct ncclTopoLinkList* paths = system->nodes[type].nodes[index].paths[resultType];
   if (paths == NULL) {
     *localCount = 0;
     return ncclSuccess;
   }
+
+  /*遍历一遍，就会形成按locals数组先后顺序排列的带宽情况，最后一个linkType会被更新为*pathType*/
   for (int i = 0; i < system->nodes[resultType].count; i++) {
+	  /*更新记录maxBw,minType*/
     if (paths[i].bw > maxBw || (paths[i].bw == maxBw && paths[i].type < minType)) {
       maxBw = paths[i].bw;
       minType = paths[i].type;
       if (pathType) *pathType = minType;
-      count = 0;
+      count = 0;/*清空count,使最优的站第一位（如果要使不清楚，需要两者完全一致）*/
     }
     if (paths[i].bw == maxBw && paths[i].type == minType) {
       if (count == NCCL_TOPO_MAX_NODES) {
@@ -2228,7 +2385,9 @@ ncclResult_t ncclTopoGetLocalNetCountByBw(struct ncclTopoSystem* system, int gpu
   // Caveat, this could be wrong if there is a PCIe switch, and a narrower link to the CPU.
   int c;
   NCCLCHECK(ncclGetLocalCpu(system, gpu, &c));
+  /*取得由gpu到c(cpu)路径带宽*/
   float gpuBw = system->nodes[GPU].nodes[gpu].paths[CPU][c].bw;
+  /*取这个gpu对应的rank*/
   int rank = system->nodes[GPU].nodes[gpu].gpu.rank;
 
   int netCountByBw = 0;
@@ -2339,10 +2498,12 @@ static ncclResult_t ncclTopoSortDevsByRailPlane(struct ncclTopoSystem* system, i
 ncclResult_t ncclTopoGetLocalNetType(struct ncclTopoSystem* system, int type, int rank, int channelId, int64_t* id,
                                      int* dev) {
   int gpu;
+  /*取rank对应的gpu*/
   NCCLCHECK(ncclTopoRankToIndex(system, rank, &gpu, /*showWarn=*/true));
 
   int localNets[NCCL_TOPO_MAX_NODES];
   int localNetCount;
+  /*从此gpu出发能到哪些net且路径最优*/
   NCCLCHECK(ncclTopoGetLocal(system, GPU, gpu, type, localNets, &localNetCount, NULL));
   if (localNetCount == 0) {
     WARN("Could not find any local path from gpu %d to net.", gpu);
@@ -2354,6 +2515,7 @@ ncclResult_t ncclTopoGetLocalNetType(struct ncclTopoSystem* system, int type, in
   int railOffset[NCCL_TOPO_MAX_NODES + 1];
   enum netDevsPolicy policy;
   NCCLCHECK(ncclTopoGetNetDevsPolicy(&policy, &policyCount));
+  /*从此net出发能到哪些gpu且路径最优*/
   NCCLCHECK(ncclTopoGetLocal(system, type, localNets[0], GPU, localGpus, &localGpuCount, NULL));
 
   struct ncclTopoNode* gpuNode = system->nodes[GPU].nodes + gpu;
@@ -2387,7 +2549,7 @@ ncclResult_t ncclTopoGetLocalNetType(struct ncclTopoSystem* system, int type, in
   return ncclSuccess;
 }
 ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int channelId, int64_t* id, int* dev) {
-  return ncclTopoGetLocalNetType(system, NET, rank, channelId, id, dev);
+  return ncclTopoGetLocalNetType(system, NET/*类型为net*/, rank, channelId, id, dev);
 }
 ncclResult_t ncclTopoGetLocalGinDev(struct ncclTopoSystem* system, int rank, int channelId, int64_t* id, int* dev) {
   return ncclTopoGetLocalNetType(system, GIN, rank, channelId, id, dev);
@@ -2450,6 +2612,7 @@ exit:
 /* External query functions */
 /****************************/
 
+/*取首个cpu的arch,vendor,model*/
 ncclResult_t ncclTopoCpuType(struct ncclTopoSystem* system, int* arch, int* vendor, int* model) {
   *arch = system->nodes[CPU].nodes[0].cpu.arch;
   *vendor = system->nodes[CPU].nodes[0].cpu.vendor;
@@ -2520,6 +2683,7 @@ ncclResult_t ncclTopoGetNvsCount(struct ncclTopoSystem* system, int* count) {
   return ncclSuccess;
 }
 
+/*取gpu最小最大算力*/
 ncclResult_t ncclTopoGetCompCap(struct ncclTopoSystem* system, int* ccMin, int* ccMax) {
   if (system->nodes[DEV].count == 0) return ncclInternalError;
   int min, max;

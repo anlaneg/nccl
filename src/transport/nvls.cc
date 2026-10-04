@@ -163,6 +163,7 @@ ncclResult_t ncclNvlsTuning(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+/*NVLINk SHARP初始化*/
 ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
   comm->nvlsSupport = 0;
   comm->nvlsChannels = 0;

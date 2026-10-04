@@ -26,6 +26,7 @@
 
 #define NODE_TYPE_NONE 0
 #define NODE_TYPE_OPEN 1
+/*标签关闭*/
 #define NODE_TYPE_CLOSE 2
 #define NODE_TYPE_SINGLE 3
 
@@ -132,6 +133,7 @@ inline void printMissingTopoAttrHint(const char* attrName, const char* nodeName)
 static ncclResult_t xmlGetAttrStr(struct ncclXmlNode* node, const char* attrName, const char** value) {
   NCCLCHECK(xmlGetAttr(node, attrName, value));
   if (*value == NULL) {
+	  /*属性不存在*/
     WARN("Attribute %s of node %s not found", attrName, node->name);
     printMissingTopoAttrHint(attrName, node->name);
     return ncclInternalError;
@@ -141,14 +143,15 @@ static ncclResult_t xmlGetAttrStr(struct ncclXmlNode* node, const char* attrName
 static ncclResult_t xmlGetAttrInt(struct ncclXmlNode* node, const char* attrName, int* value) {
   const char* str;
   NCCLCHECK(xmlGetAttrStr(node, attrName, &str));
+  /*将属性值转换为int*/
   *value = strtol(str, NULL, 0);
   return ncclSuccess;
 }
 
-static ncclResult_t xmlGetAttrIntDefault(struct ncclXmlNode* node, const char* attrName, int* value, int defaultValue) {
+static ncclResult_t xmlGetAttrIntDefault(struct ncclXmlNode* node, const char* attrName/*属性名*/, int* value/*出参，属性值*/, int defaultValue/*默认值，属性不存在时生效*/) {
   const char* str;
   NCCLCHECK(xmlGetAttr(node, attrName, &str));
-  *value = str ? strtol(str, NULL, 0) : defaultValue;
+  *value = str ? strtol(str, NULL, 0)/*属性在，取属值值*/ : defaultValue/*属性不在，取默认值*/;
   return ncclSuccess;
 }
 
@@ -190,7 +193,7 @@ static ncclResult_t xmlGetAttrFloatDefault(struct ncclXmlNode* node, const char*
 }
 
 /*在xml中查找子节点tagName,如果找到通过node返回*/
-static ncclResult_t xmlFindTag(struct ncclXml* xml, const char* tagName, struct ncclXmlNode** node) {
+static ncclResult_t xmlFindTag(struct ncclXml* xml, const char* tagName, struct ncclXmlNode** node/*出参，查找到的node*/) {
   *node = NULL;
   for (int i = 0; i < xml->maxIndex; i++) {
     struct ncclXmlNode* n = xml->nodes + i;
@@ -235,13 +238,15 @@ static ncclResult_t xmlFindTagKv(struct ncclXml* xml, const char* tagName/*节�
   return ncclSuccess;
 }
 
+/*在parentNode下所有子节点中查找searchNode(要求节点名称，属性值均完全相同）,如果找到返回，否则返回NULL*/
 static ncclResult_t xmlFindNode(struct ncclXmlNode* parentNode, struct ncclXmlNode* searchNode,
                                 struct ncclXmlNode** node) {
   *node = NULL;
   // Search for the node at the current level only.
+  /*考虑所有子节点（这种比对要求所有rank使用同一版本）*/
   for (int i = 0; i < parentNode->nSubs; i++) {
     struct ncclXmlNode* n = parentNode->subs[i];
-    if (strcmp(n->name, searchNode->name) == 0 && n->type == searchNode->type && n->nAttrs == searchNode->nAttrs) {
+    if (strcmp(n->name, searchNode->name) == 0/*名称相同*/ && n->type == searchNode->type && n->nAttrs == searchNode->nAttrs/*属性数相同*/) {
       int a;
       // Ensure that all the attributes are the same.
       for (a = 0; a < searchNode->nAttrs; a++) {
@@ -250,7 +255,7 @@ static ncclResult_t xmlFindNode(struct ncclXmlNode* parentNode, struct ncclXmlNo
         if (!val || strcmp(val, searchNode->attrs[a].value)) break;
       }
       if (a == searchNode->nAttrs) {
-        *node = n;
+        *node = n;/*完成相同，返回非NULL*/
         return ncclSuccess;
       }
     }
@@ -434,19 +439,22 @@ static ncclResult_t xmlRemoveNode(struct ncclXmlNode* node) {
 
 static ncclResult_t xmlAddTree(struct ncclXml* dst, struct ncclXmlNode* parent, struct ncclXmlNode* srcNode) {
   if (dst->maxIndex == dst->maxNodes) {
+	  /*不足以容纳xml node*/
     WARN("Error : too many XML nodes (max %d)", dst->maxNodes);
     return ncclInternalError;
   }
+  /*取填充结点*/
   struct ncclXmlNode* dstNode = dst->nodes + dst->maxIndex++;
-  *dstNode = *srcNode;
-  dstNode->parent = parent;
+  *dstNode = *srcNode;/*内容复制*/
+  dstNode->parent = parent;/*指向父节点*/
   if (parent) {
     if (parent->nSubs == MAX_SUBS) {
       WARN("Error : too many XML subnodes (max %d)", MAX_SUBS);
       return ncclInternalError;
     }
-    parent->subs[parent->nSubs++] = dstNode;
+    parent->subs[parent->nSubs++] = dstNode;/*父节点指向子节点*/
   }
+  /*将dst的子节点数置为0，递归复制*/
   dstNode->nSubs = 0;
   // Recursively copy the subtree(s)
   for (int i = 0; i < srcNode->nSubs; i++) NCCLCHECK(xmlAddTree(dst, dstNode, srcNode->subs[i]));

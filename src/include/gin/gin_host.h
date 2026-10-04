@@ -42,6 +42,7 @@ struct ncclGinBackendState {
 struct ncclGinState {
   ncclAffinity cpuAffinity;
   bool connected;
+  /*是否有后端*/
   bool supported;              // True if any backend is loaded on this comm.
   int proxyNthreads;           // Number of GIN progress threads.
   bool proxyThreadsCreated;     // Set once the GIN progress thread is spawned.

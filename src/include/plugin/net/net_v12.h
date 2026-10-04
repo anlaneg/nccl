@@ -12,7 +12,7 @@
 
 typedef struct {
   int ndevs;/*devs数组有效长度*/
-  int devs[NCCL_NET_MAX_DEVS_PER_NIC_V12];
+  int devs[NCCL_NET_MAX_DEVS_PER_NIC_V12];/*设备编号*/
 } ncclNetVDeviceProps_v12_t;
 
 #define NCCL_NET_TRAFFIC_CLASS_UNDEF -1
@@ -35,6 +35,7 @@ typedef struct {
   float latency;                   // Network latency
   int maxComms;                    // Maximum number of comms we can create
   int maxRecvs;                    // Maximum number of grouped receives.
+  /*设备类型，比如gin proxy，gin gdaki*/
   ncclNetDeviceType netDeviceType; // Network offload type
   int netDeviceVersion;            // Version number for network offload
   ncclNetVDeviceProps_v12_t vProps;

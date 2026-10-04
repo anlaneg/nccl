@@ -41,7 +41,7 @@ typedef enum ncclGinPluginState {
 typedef struct ginPluginLib {
   char name[MAX_STR_LEN];                       // Name of the plugin library
   void* dlHandle;                               // Handle to the plugin library
-  /*插件结构体*/
+  /*gin插件结构体,例如(ncclGinIbGdaki)*/
   ncclGin_t* ncclGin;                           // Pointer to the plugin structure
   int version;                                  // Version of the plugin
   /*插件状态*/
@@ -116,14 +116,14 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   if (pluginLib->state >= ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (!pluginLib->ncclGin->init ||
         pluginLib->ncclGin->init(outContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
-    	/*初始化失败，禁用此plugin*/
+      /*gin初始化失败，禁用此plugin*/
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
       ginInitCompleted = true;
     }
   }
   if (pluginLib->state == ncclGinPluginStateInitReady && pluginLib->ncclGin) {
-    if (pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) {
+    if (pluginLib->ncclGin->devices(&ndev)/*取设备数*/ != ncclSuccess || ndev <= 0) {
     	/*取设备失败，如必要执行finalize*/
       if (ginInitCompleted) {
         pluginLib->ncclGin->finalize(*outContext);
@@ -131,7 +131,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
       }
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
-      pluginLib->physDevs = ndev;
+      pluginLib->physDevs = ndev;/*设置gin设备*/
       pluginLib->state = ncclGinPluginStateEnabled;
     }
   }
@@ -344,6 +344,7 @@ ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+/*获取gin插件设备*/
 ncclResult_t ncclGinGetDevCount(int pluginIndex, int* nPhysDevs, int* nVirtDevs) {
   if (pluginLibs[pluginIndex].state != ncclGinPluginStateEnabled || pluginLibs[pluginIndex].physDevs == 0) goto fail;
   // lock not needed as it's called within a lock already in ncclTopoGetSystem

@@ -13,11 +13,13 @@ char ncclIbIfName[MAX_IF_NAME_SIZE + 1];
 /*ib使用的接口地址*/
 union ncclSocketAddress ncclIbIfAddr;
 
+/*ncclIbMergedDevs数组有效长度*/
 int ncclNMergedIbDevs = -1;
 /*ib设备数目*/
 int ncclNIbDevs = -1;
+/*记录各merged设备*/
 struct ncclIbMergedDev ncclIbMergedDevs[MAX_IB_VDEVS];
-/*记录ib设备信息*/
+/*记录各ib设备信息*/
 struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];
 int ncclIbRelaxedOrderingEnabled = 0;
 uint64_t ncclIbSpeedChangeCounter = 0;

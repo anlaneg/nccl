@@ -237,12 +237,13 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
   }
   // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->ncclCollNetPluginState == ncclNetPluginStateInitReady && pluginLib->ncclCollNet) {
+	  /*collNet插件已初始化，取设备数*/
     if (pluginLib->ncclCollNet->devices(&ndev) != ncclSuccess || ndev <= 0) {
       pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
     } else {
       pluginLib->collNetPhysDevs = ndev;
       pluginLib->collNetVirtDevs = NCCL_UNDEF_DEV_COUNT;
-      pluginLib->ncclCollNetPluginState = ncclNetPluginStateEnabled;
+      pluginLib->ncclCollNetPluginState = ncclNetPluginStateEnabled;/*置为enable*/
     }
   }
 
@@ -273,7 +274,8 @@ static ncclResult_t ncclNetPluginAssignToComm(struct ncclComm* comm, int pluginI
     *isAssigned = true;/*assigned成功*/
     INFO(NCCL_INIT | NCCL_NET, "Assigned NET plugin %s to comm", netPluginLibs[pluginIndex].ncclNet->name);
     if (netPluginLibs[pluginIndex].ncclCollNetPluginState >= ncclNetPluginStateEnabled) {
-      comm->ncclCollNet = netPluginLibs[pluginIndex].ncclCollNet;/*有collnet的设置*/
+    	/*有collnet插件被使能，设置*/
+      comm->ncclCollNet = netPluginLibs[pluginIndex].ncclCollNet;
     }
   }
   return ncclSuccess;
@@ -302,6 +304,7 @@ static void ncclNetPluginRegisterInternal(int* pluginCounter, ncclNet_t* net, in
   pluginLib->ncclNet = net;
   pluginLib->ncclNetVer = version;
   pluginLib->ncclNetPluginState = ncclNetPluginStateInitReady;
+  /*默认置为disable*/
   pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
   pluginLib->netPhysDevs = NCCL_UNDEF_DEV_COUNT;
   pluginLib->netVirtDevs = NCCL_UNDEF_DEV_COUNT;
@@ -453,6 +456,7 @@ ncclResult_t ncclNetFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+/*获取网络插件识别的物理设备及虚拟设备*/
 ncclResult_t ncclNetGetDevCount(int netPluginIndex, int* nPhysDevs, int* nVirtDevs) {
   if (netPluginLibs[netPluginIndex].ncclNetPluginState != ncclNetPluginStateEnabled ||
       netPluginLibs[netPluginIndex].netPhysDevs == NCCL_UNDEF_DEV_COUNT)
@@ -479,6 +483,7 @@ fail:
   return ncclInternalError;
 }
 
+/*设置虚拟设备数目*/
 ncclResult_t ncclNetSetVirtDevCount(int netPluginIndex, int nVirtDevs) {
   if (netPluginLibs[netPluginIndex].ncclNetPluginState != ncclNetPluginStateEnabled || nVirtDevs < 0) goto fail;
   // lock not needed as it's called within a lock already in ncclTopoGetSystem

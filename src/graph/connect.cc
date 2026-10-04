@@ -18,17 +18,18 @@
 /******************************************************************/
 
 ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs, struct ncclTopoRanks* topoRanks) {
-  int rank = comm->rank;
-  int localRanks = comm->topo->nodes[GPU].count;
-  int nChannels = comm->nChannels;
+  int rank = comm->rank;/*本机rank*/
+  int localRanks = comm->topo->nodes[GPU].count;/*本机rank总数*/
+  int nChannels = comm->nChannels;/*取当前tree&ring channel数*/
 
   topoRanks->crossNicRing = graphs[NCCL_ALGO_RING]->crossNic;
   topoRanks->nvlsHeadNum = 0;
   for (int c = 0; c < nChannels; c++) {
-    struct ncclChannel* channel = comm->channels + c;
+    struct ncclChannel* channel = comm->channels + c;/*取c对应的channel*/
     channel->ring.prev = channel->ring.next = -1;
     channel->tree.up = -1;
     channel->collnetChain.up = -1;
+    /*初始化down,按最大分叉进行初始化*/
     for (int i = 0; i < NCCL_MAX_TREE_ARITY; i++) channel->tree.down[i] = -1;
     for (int i = 0; i < NCCL_MAX_TREE_ARITY; i++) channel->collnetChain.down[i] = -1;
     channel->collnetDirect.out = -1;
@@ -39,29 +40,46 @@ ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs
     for (int i = 0; i < NCCL_MAX_DIRECT_ARITY; i++) channel->collnetDirect.up[i] = -1;
     for (int i = 0; i < NCCL_MAX_DIRECT_ARITY; i++) channel->collnetDirect.down[i] = -1;
 
+    /*取c号channel对应的机内ring排列*/
     int* ringIntra = graphs[NCCL_ALGO_RING]->intra + c * localRanks;
+    /*取c号channel对应的机内tree排列*/
     int* treeIntra = graphs[NCCL_ALGO_TREE]->intra + c * localRanks;
+    /*取c号channel对应的机内collnet排列*/
     int* collNetIntra = graphs[NCCL_ALGO_COLLNET_CHAIN]->intra + c * localRanks;
 
+    /*遍历本机所有rank(注意：此时本机的其它rank也会拿到一样的拓扑结果，但似乎当前并不严格保证一样）
+     * 只填写channel中本机的前后序信息*/
     for (int i = 0; i < localRanks; i++) {
       if (ringIntra[i] == rank) {
-        topoRanks->ringRecv[c] = ringIntra[0];
-        topoRanks->ringSend[c] = ringIntra[localRanks - 1];
-        topoRanks->ringPrev[c] = (i == 0) ? -1 : ringIntra[i - 1];
-        topoRanks->ringNext[c] = (i == localRanks - 1) ? -1 : ringIntra[i + 1];
+    	/*只考虑本rank的信息*/
+        topoRanks->ringRecv[c] = ringIntra[0];/*从节点外收*/
+        topoRanks->ringSend[c] = ringIntra[localRanks - 1];/*向节点外发*/
+        topoRanks->ringPrev[c] = (i == 0) ? -1 : ringIntra[i - 1];/*如果自已是0，则上一个节点在其它机器，现在还不知道*/
+        topoRanks->ringNext[c] = (i == localRanks - 1) ? -1 : ringIntra[i + 1];/*如果自已是localRanks-1，则下一个节点在其它机器，现在还不知道*/
       }
       if (treeIntra[i] == rank) {
         int parentIndex = 0;
+        /*所有tree型均是0连接parent,普通tree child0，child1均为0；
+         * balance tree/split tree child0均为1，仅split tree child1为1
+         * 为什么这么规定？
+         * 本质上均在考虑通知其它机器的事，由一个GPU做还是由二个GPU做。
+         * tree型（由一个GPU0做）
+         * balance tree(由两个GPU做）
+         * split tree(也由一个GPU1做，但跳过GPU0)
+         * 但为什么一定要分出tree与split tree型？还没有得到满意的答案
+         * */
         int child0Index = graphs[NCCL_ALGO_TREE]->pattern == NCCL_TOPO_PATTERN_TREE ? 0 : 1;
         int child1Index = graphs[NCCL_ALGO_TREE]->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE ? 1 : 0;
 
         topoRanks->treeToParent[c] = treeIntra[parentIndex];
         topoRanks->treeToChild0[c] = treeIntra[child0Index];
         topoRanks->treeToChild1[c] = treeIntra[child1Index];
+        /*本机的机间链（指出前一个，后一个）*/
         channel->tree.up = i == 0 ? -1 : treeIntra[i - 1];
         channel->tree.down[0] = i == localRanks - 1 ? -1 : treeIntra[i + 1];
       }
       if (collNetIntra[i] == rank) {
+    	  /*指出前一个后一个。*/
         channel->collnetChain.up = i == 0 ? comm->nRanks : collNetIntra[i - 1];
         channel->collnetChain.down[0] = i == localRanks - 1 ? -1 : collNetIntra[i + 1];
       }
@@ -69,44 +87,49 @@ ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs
   }
   // Duplicate channels trees
   struct ncclChannel* channel0 = comm->channels;
+  /*前面初始化时保证了nChannels总是MAXCHANNELS的一半，因此这里内存不会越界*/
   struct ncclChannel* channel1 = channel0 + nChannels;
   memcpy(channel1, channel0, nChannels * sizeof(struct ncclChannel));
 
   // Get nvls heads and the number of heads. Duplicate head is not allowed.
   for (int c = 0; c < graphs[NCCL_ALGO_NVLS]->nChannels; ++c) {
     bool addHead = true;
+    /*nvlink机内信息*/
     int* nvlsIntra = graphs[NCCL_ALGO_NVLS]->intra + c * localRanks;
 
     for (int dup = 0; dup < topoRanks->nvlsHeadNum; dup++) {
       if (topoRanks->nvlsHeads[dup] == nvlsIntra[0]) {
-        addHead = false;
+        addHead = false;/*已存在head,不重复添加*/
         break;
       }
     }
     if (addHead) {
+    /*需要添加*/
       topoRanks->nvlsHeads[topoRanks->nvlsHeadNum++] = nvlsIntra[0];
     }
   }
+  /*复制到comm中*/
   memcpy(comm->nvlsHeads, topoRanks->nvlsHeads, sizeof(int) * topoRanks->nvlsHeadNum);
 
   return ncclSuccess;
 }
 
-static ncclResult_t connectRings(struct ncclComm* comm, int* ringRecv, int* ringSend, int* ringPrev, int* ringNext) {
-  int nChannels = comm->nChannels;
-  int nNodes = comm->nNodes;
+/*完成各节点最后一个节点的next,分别与第一个节点的pre与后一个机器/前一个机器相连*/
+static ncclResult_t connectRings(struct ncclComm* comm, int* ringRecv/*每个节点上首个rank的Recv*/, int* ringSend/*每个节点上首个rank的send*/, int* ringPrev, int* ringNext) {
+  int nChannels = comm->nChannels;/*取channel总数*/
+  int nNodes = comm->nNodes;/*节点总数*/
   for (int c = 0; c < nChannels; c++) {
     int* recv = ringRecv + c * comm->nNodes;
     int* send = ringSend + c * comm->nNodes;
     int* prev = ringPrev + c * comm->nRanks;
     int* next = ringNext + c * comm->nRanks;
     for (int n = 0; n < nNodes; n++) {
-      int recvRank = recv[n];
-      int prevSendRank = send[(n - 1 + nNodes) % nNodes];
-      prev[recvRank] = prevSendRank;
-      int sendRank = send[n];
-      int nextRecvRank = recv[(n + 1) % nNodes];
-      next[sendRank] = nextRecvRank;
+      int recvRank = recv[n];/*此(n)节点的首个rank编号*/
+      int prevSendRank = send[(n - 1 + nNodes) % nNodes];/*此(n-1)节点的最后一个send编号*/
+      prev[recvRank] = prevSendRank;/*recvRank的前驱rank编号采用prevSendRank，使(n)节点与(n-1)节点尾首相连*/
+      int sendRank = send[n];/*此(n)节点的最后一个send编号*/
+      int nextRecvRank = recv[(n + 1) % nNodes];/*此(n+1)节点的首个rank编号*/
+      next[sendRank] = nextRecvRank;/*sendRank的后继rank编号采用nextRecvRank,使(n)节点与(n+1)节点尾首相连*/
     }
   }
   return ncclSuccess;
@@ -369,6 +392,7 @@ static int copyChannels(struct ncclComm* comm, int start, int end, int* ringPrev
   return c;
 }
 
+/*交换v0,v1*/
 void exchangeValues(int* v0, int* v1) {
   int tmp = *v1;
   *v1 = *v0;
@@ -378,7 +402,7 @@ void exchangeValues(int* v0, int* v1) {
 NCCL_PARAM(UnpackDoubleNChannels, "UNPACK_DOUBLE_NCHANNELS", 1);
 
 ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePatterns,
-                             struct ncclTopoRanks** allTopoRanks, int* rings, struct ncclTopoGraph** graphs,
+                             struct ncclTopoRanks** allTopoRanks/*所有rank的topo情况*/, int* rings, struct ncclTopoGraph** graphs,
                              struct ncclComm* parent) {
   // Gather data from all ranks
   ncclResult_t ret = ncclSuccess;
@@ -401,11 +425,19 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   // Alternate rings to avoid crossing rails.
   // CrossNic values could be not the same on all nodes as it depends on the number of net devs and the NVLink
   // bandwidth. Therefore, it's only done if the rank obtained a solution with crossNic=2.
-  for (int r = 0; r < comm->nRanks; r++) {
+  for (int r = 0; r < comm->nRanks/*遍历所有rank*/; r++) {
     if (allTopoRanks[r]->crossNicRing == 2 && (nChannels % 2) == 0 && (comm->rankToNode[r] % 2) == 1) {
       // Exchange rings
+      /*
+       * 配置是容许自动跨卡的，channel 数又是偶数，所以在ncclTopoSearchRecNet中我们约束了channel1的入口必须是channel0的出口
+       * 即存在channel出入口互换的情况，
+       * 比如 channel0 netx->gpu chain->nety 和 channel1 nety->gpu chain->netx，
+       * 如果直接拼接可能会出现跨 rail 的情况，这里将奇数节点的 channel0 与 channel1 交换，
+       * 可以避免这个问题。
+       * */
       for (int c = 0; c < nChannels; c += 2) {
-        exchangeValues(allTopoRanks[r]->ringRecv + c, allTopoRanks[r]->ringRecv + (c ^ 1));
+    	  /*交换*/
+        exchangeValues(allTopoRanks[r]->ringRecv + c/*c总是偶数*/, allTopoRanks[r]->ringRecv + (c ^ 1)/*总是奇数*/);
         exchangeValues(allTopoRanks[r]->ringSend + c, allTopoRanks[r]->ringSend + (c ^ 1));
         exchangeValues(allTopoRanks[r]->ringPrev + c, allTopoRanks[r]->ringPrev + (c ^ 1));
         exchangeValues(allTopoRanks[r]->ringNext + c, allTopoRanks[r]->ringNext + (c ^ 1));
@@ -414,8 +446,10 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   }
 
   for (int c = 0; c < nChannels; c++) {
+	  /*收集所有节点上，首个rank各channel对应
+	   * ringRecv,ringSend,treeToParent,treeTochild0,treeTochild1*/
     for (int n = 0; n < nNodes; n++) {
-      int r = firstRanks[n];
+      int r = firstRanks[n];/*此node上的首个rank*/
       ringRecv[c * nNodes + n] = allTopoRanks[r]->ringRecv[c];
       ringSend[c * nNodes + n] = allTopoRanks[r]->ringSend[c];
       treeToParent[c * nNodes + n] = allTopoRanks[r]->treeToParent[c];
@@ -428,6 +462,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
     }
   }
 
+  /*使minHeadNum取集群最小值*/
   for (int n = 0; n < nNodes; n++) {
     int r = firstRanks[n];
     if (minHeadNum > allTopoRanks[r]->nvlsHeadNum) minHeadNum = allTopoRanks[r]->nvlsHeadNum;
@@ -441,7 +476,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   }
 
   // Connect rings and trees. This should also duplicate the channels.
-  NCCLCHECKGOTO(connectRings(comm, ringRecv, ringSend, ringPrev, ringNext), ret, fail);
+  NCCLCHECKGOTO(connectRings(comm, ringRecv/*每个节点上首个Rank的recv*/, ringSend/*每个节点上首个Rank的send*/, ringPrev/*所有rank的pre*/, ringNext/*所有rank的next*/), ret, fail);
   NCCLCHECKGOTO(connectTrees(comm, treeToParent, treeToChild0, treeToChild1, treePatterns), ret, fail);
 
   // Duplicate ringPrev/ringNext for ncclBuildRing
