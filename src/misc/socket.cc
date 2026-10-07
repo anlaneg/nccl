@@ -58,12 +58,13 @@ void ncclSocketMove(struct ncclSocket* dst, struct ncclSocket* src) {
   src->crypto = nullptr;
 }
 
-static ncclResult_t socketProgressRaw(int op, struct ncclSocket* sock, void* ptr, int size, int* offset,
+static ncclResult_t socketProgressRaw(int op/*操作*/, struct ncclSocket* sock, void* ptr, int size, int* offset,
                                       bool* pclosed = nullptr) {
   int closed;
+  /*按操作处理socket*/
   NCCLCHECK(ncclOsSocketProgressOpt(op, sock, ptr, size, offset, 0, &closed));
   if (closed) {
-	  /*需要关闭socket*/
+	  /*如需要关闭，则关闭socket*/
     if (pclosed) {
       *pclosed = true;
       return ncclSuccess;
@@ -77,7 +78,7 @@ static ncclResult_t socketProgressRaw(int op, struct ncclSocket* sock, void* ptr
   return ncclSuccess;
 }
 
-static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset,
+static ncclResult_t socketProgress(int op/*操作*/, struct ncclSocket* sock, void* ptr, int size, int* offset,
                                    bool* pclosed = nullptr) {
   if (sock->crypto) {
     if (size <= *offset) return ncclSuccess;
@@ -89,8 +90,9 @@ static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, i
   return ncclSuccess;
 }
 
-static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset) {
+static ncclResult_t socketWait(int op/*操作*/, struct ncclSocket* sock, void* ptr, int size/*阻塞操作的长度*/, int* offset) {
   while (*offset < size) {
+	  /*直到操作完成，或者出错*/
     NCCLCHECK(socketProgress(op, sock, ptr, size, offset));
     // If we have more data to read or write, use the poll system call to wait
     // until the socket becomes readable or writable again.
@@ -116,6 +118,7 @@ ncclResult_t ncclSocketShutdown(struct ncclSocket* sock, int how) {
   return ncclSuccess;
 }
 
+/*取socket对应的fd*/
 ncclResult_t ncclSocketGetFd(struct ncclSocket* sock, ncclSocketDescriptor* socketDescriptor) {
   if (sock == NULL) {
     WARN("ncclSocketGetFd: pass NULL socket");
@@ -653,6 +656,7 @@ ncclResult_t ncclSocketSend(struct ncclSocket* sock, void* ptr, int size) {
   return ncclSuccess;
 }
 
+/*阻塞收取size字节或者收取失败*/
 ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size) {
   int offset = 0;
   if (sock == NULL) {
@@ -728,10 +732,12 @@ ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, boo
     return ncclInvalidArgument;
   }
   *closed = false;
+  /*收取数据*/
   NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, ptr, size, &offset, closed));
-  if (*closed) return ncclSuccess;
-  if (offset == 0 && !blocking) return ncclInProgress;
+  if (*closed) return ncclSuccess;/*已关闭*/
+  if (offset == 0 && !blocking) return ncclInProgress;/*如非阻塞，则先返回*/
   while (offset < size) {
+	  /*阻塞，断续收取，直到收满*/
     NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, ptr, size, &offset, closed));
     if (*closed) return ncclSuccess;
   }

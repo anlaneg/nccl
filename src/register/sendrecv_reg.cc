@@ -9,16 +9,18 @@
 #include "transport.h"
 
 ncclResult_t ncclRegisterP2pNetBuffer(
-  struct ncclComm* comm, void* userbuff, size_t size, struct ncclConnector* conn, int* regFlag, void** handle,
+  struct ncclComm* comm, void* userbuff/*buffer地址*/, size_t size/*buffer长度*/, struct ncclConnector* conn, int* regFlag, void** handle,
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue) {
   ncclResult_t ret = ncclSuccess;
 
   *regFlag = 0;
   if (comm->netDeviceType != NCCL_NET_DEVICE_UNPACK) {
     if (comm->planner.persistent && ncclParamGraphRegister()) {
-      ncclNetGraphRegisterBuffer(comm, userbuff, size, &conn, 1, regFlag, handle, cleanupQueue, NULL);
+    	/*为此连接主动注册buffer*/
+      ncclNetGraphRegisterBuffer(comm, userbuff, size, &conn, 1/*仅一个连接*/, regFlag, handle, cleanupQueue, NULL);
     }
-    if (*regFlag == 0 && ncclParamLocalRegister()) {
+    if (*regFlag == 0/*未注册成功*/ && ncclParamLocalRegister()) {
+    	/*主动注册不成功，检查是否在一个更大的buffer中此段已被注册*/
       ncclNetLocalRegisterBuffer(comm, userbuff, size, &conn, 1, regFlag, handle);
     }
   }

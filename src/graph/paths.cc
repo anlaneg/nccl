@@ -1030,8 +1030,9 @@ static ncclResult_t ncclTopoGetNchannels(struct ncclComm* comm, int g /*local gp
   }
   return ncclSuccess;
 }
-
+/*p2p最小channel数*/
 NCCL_PARAM(MinP2pNChannels, "MIN_P2P_NCHANNELS", 1);
+/*p2p最大channel数*/
 NCCL_PARAM(MaxP2pNChannels, "MAX_P2P_NCHANNELS", MAXCHANNELS);
 extern int64_t ncclParamWorkArgsBytes();
 
@@ -1083,6 +1084,7 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
     comm->p2pnChannelsPerPeer = std::min(comm->p2pnChannels, comm->p2pnChannelsPerPeer);
   }
 
+  /*从nChannnels开始，初始化p2pnChannels个channel*/
   // Init channels that weren't used so far
   for (int c = comm->nChannels; c < comm->p2pnChannels; c++) NCCLCHECK(initChannel(comm, c));
 

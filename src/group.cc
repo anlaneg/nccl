@@ -239,7 +239,7 @@ struct ncclMgmtTaskJob {
   struct ncclComm* comm;
 };
 
-/*建连*/
+/*负责完成preConnect工作*/
 ncclResult_t ncclP2PPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclPreconnectJob* job = (struct ncclPreconnectJob*)job_;
   struct ncclComm* comm = job->comm;
@@ -455,7 +455,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t doLaunches(struct ncclComm* head, int taskType) {
+ncclResult_t doLaunches(struct ncclComm* head/*一组comm*/, int taskType/*任务类型，比如ncclGroupTaskTypeCollective*/) {
   ncclResult_t result = ncclSuccess;
   struct ncclComm* cliqueHead = head;
   struct ncclComm* cliqueNextHead;
@@ -469,11 +469,12 @@ ncclResult_t doLaunches(struct ncclComm* head, int taskType) {
     do {
       (ncclCudaGraphValid(comm->planner.capturingGraph) ? capturingYes : capturingNo) = true;
       CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);/**设置当前线程的cuda设备为comm->cudaDev */
-      NCCLCHECKGOTO(ncclLaunchPrepare(comm), result, failure);/**准备launch任务 */
-      if (useBarrier) ncclCommIntraBarrierIn(comm, 1);
-      comm = comm->groupNext[taskType];/**获取下一个collective任务 */
+      /**准备plan */
+      NCCLCHECKGOTO(ncclLaunchPrepare(comm), result, failure);
+      if (useBarrier/*默认为假*/) ncclCommIntraBarrierIn(comm, 1);
+      comm = comm->groupNext[taskType];/**获取下一个comm */
     } while (comm != nullptr && comm != reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID) &&
-             comm->intraComm0 == cliqueHead->intraComm0);
+             comm->intraComm0 == cliqueHead->intraComm0/*必须是同族*/);
     cliqueNextHead = comm;
 
     if (capturingYes && capturingNo) {
@@ -500,7 +501,7 @@ ncclResult_t doLaunches(struct ncclComm* head, int taskType) {
         }
         if (moreRounds) {
           // Pop next unlaunched kernel
-          struct ncclKernelPlan* plan = comm->planner.unlaunchedPlansHead;
+          struct ncclKernelPlan* plan = comm->planner.unlaunchedPlansHead;/*取出首个待执行的plan*/
           if (plan != nullptr) {
             comm->planner.unlaunchedPlansHead = plan->next;
             CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
@@ -508,9 +509,10 @@ ncclResult_t doLaunches(struct ncclComm* head, int taskType) {
             if (plan->isCeColl) {
               NCCLCHECKGOTO(ncclLaunchCeColl(comm, plan), result, failure);
             } else if (plan->isRma) {
+            	/*rma情况*/
               NCCLCHECKGOTO(ncclLaunchRma(comm, plan), result, failure);
             } else {
-            	/*加载kernel*/
+              /*其它情况，加载kernel*/
               NCCLCHECKGOTO(ncclLaunchKernel(comm, plan), result, failure);
             }
           }
@@ -581,13 +583,13 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr,
         }
 
         { // Reset comm->planner to empty.
-          ncclKernelPlanner::Peer* tmp = comm->planner.peers;
+          ncclKernelPlanner::Peer* tmp = comm->planner.peers;/*先临时保存peers*/
           ncclIntruQueue<ncclTaskRma, &ncclTaskRma::next>* tmpRmaQueues = comm->planner.rmaTaskQueues;
           int numRmaCtx = comm->config.numRmaCtx;
 
-          memset(&comm->planner, 0, sizeof(comm->planner));
+          memset(&comm->planner, 0, sizeof(comm->planner));/*清理planner*/
 
-          comm->planner.peers = tmp;
+          comm->planner.peers = tmp;/*还原peers*/
           if (comm->planner.peers != NULL) {
             memset(comm->planner.peers, 0, comm->nRanks * sizeof(comm->planner.peers[0]));
           }
@@ -762,9 +764,9 @@ static ncclResult_t ncclPrepareTasksAndCollPreconnect(
   } else {
     bool needConnect = false;
     bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
-    memset(algoNeedConnect, 0, sizeof(bool) * NCCL_NUM_ALGORITHMS);
+    memset(algoNeedConnect, 0, sizeof(bool) * NCCL_NUM_ALGORITHMS);/*先初始化为不需要connect*/
 
-    CUDACHECK(cudaSetDevice(comm->cudaDev));
+    CUDACHECK(cudaSetDevice(comm->cudaDev));/*设置cuda设备*/
     NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, simInfo));
 
     if (comm->cuMemSupport && needConnect) {
@@ -805,7 +807,7 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
     do {
       struct ncclPreconnectJob* job;/**preConnect任务的job */
       NEW_NOTHROW_GOTO(job, ncclPreconnectJob, ret, fail);
-      job->base.func = ncclP2PPreconnectFunc;/**指明此类job的处理函数 */
+      job->base.func = ncclP2PPreconnectFunc;/**通过此函数完成p2p preConnect工作 */
       job->base.undo = nullptr;/*不回退*/
       job->base.destructor = ncclPreconnectJobFree;/*仅释放内存*/
       job->base.state = ncclGroupJobRunning;/*状态指为running*/
@@ -887,19 +889,20 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
       // at the same time.
       comm = cliqueHead;
       do {
-    	  /*入队列asyncCollJobs中*/
+    	/*将comm入队列asyncCollJobs中*/
         NCCLCHECKGOTO(ncclPrepareTasksAndCollPreconnect(comm, simInfo, &asyncCollJobs), ret, fail);
-        comm = comm->groupNext[ncclGroupTaskTypeCollective];/*沿集合通信task*/
-      } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*后面的comm不再与前面的comm是同一个族*/);
+        comm = comm->groupNext[ncclGroupTaskTypeCollective];/*沿集合通信task,取下一个*/
+      } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0/*后面的comm必须与前面的comm是同一个族，否则不循环*/);
 
       /**启动异步任务队列中的任务,执行collective job*/
       // connect
       NCCLCHECKGOTO(asyncJobLaunch(&asyncCollJobs, groupAbortFlag), ret, fail);
       while (!ncclIntruQueueEmpty(&asyncCollJobs)) {
+    	  /*asyncCollJobs如不为空，则执行销毁*/
         struct ncclAsyncJob* job = ncclIntruQueueDequeue(&asyncCollJobs);
         if (job->destructor) job->destructor((void*)job);
       }
-      cliqueHead = comm;
+      cliqueHead = comm;/*换下一族*/
     } while (cliqueHead != nullptr);
 
     // done with all buffer allocation, start registration and enqueue
@@ -907,13 +910,14 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
     do {
       CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
       NCCLCHECKGOTO(ncclTasksRegAndEnqueue(comm), ret, fail);
-      comm = comm->groupNext[ncclGroupTaskTypeCollective];
+      comm = comm->groupNext[ncclGroupTaskTypeCollective];/*换下一个comm*/
     } while (comm);
 
     // debug check
     cliqueHead = groupCommHeadMain[ncclGroupTaskTypeCollective];
     do {
       comm = cliqueHead;
+      /*处理mode为ncclCheckModeDebugGlobal的*/
       do {
         if (comm->checkMode == ncclCheckModeDebugGlobal) {
           struct ncclGroupSymmetricJob* job;
@@ -925,12 +929,13 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
           job->base.abortFlag = comm->abortFlag;
           job->base.abortFlagDev = comm->abortFlagDev;
           job->comm = comm;
-          ncclIntruQueueEnqueue(&asyncDebugJobs, (struct ncclAsyncJob*)job);
+          ncclIntruQueueEnqueue(&asyncDebugJobs, (struct ncclAsyncJob*)job);/*存入asyncDebugJobs*/
         }
         comm = comm->groupNext[ncclGroupTaskTypeCollective];
       } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
       NCCLCHECKGOTO(asyncJobLaunch(&asyncDebugJobs, groupAbortFlag), ret, fail);
       while (!ncclIntruQueueEmpty(&asyncDebugJobs)) {
+    	  /*执行销毁*/
         struct ncclAsyncJob* job = ncclIntruQueueDequeue(&asyncDebugJobs);
         if (job->destructor) job->destructor((void*)job);
       }
@@ -939,7 +944,7 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
   }
 
   if ((!simInfo) && (groupCommHeadMain[ncclGroupTaskTypeCollective] != nullptr)) {
-    /**simInfo为空，且collective任务链表不空,
+    /**simInfo为空，且collective任务链表不空（比如send,recv等均会入此链表）,
      * 启动集合通信任务链表中的任务*/
     NCCLCHECKGOTO(doLaunches(groupCommHeadMain[ncclGroupTaskTypeCollective], ncclGroupTaskTypeCollective), ret, fail);
   }

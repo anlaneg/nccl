@@ -158,7 +158,7 @@ struct ncclProxyConnector {
   int rank;
   int tpRank;
   int tpLocalRank;
-  int sameProcess;
+  int sameProcess;/*proxy是否与当前进程相同*/
   struct ncclProxyConnection* connection;
   ncclResult_t (*proxyProgress)(struct ncclProxyState* proxyState, struct ncclProxyArgs*); // Copied from transport if
                                                                                            // necessary
@@ -233,29 +233,32 @@ struct ncclNvls {
 
 #define NCCL_MAX_CONNS 2
 struct ncclChannelPeer {
-  struct ncclConnector send[NCCL_MAX_CONNS];
-  struct ncclConnector recv[NCCL_MAX_CONNS];
+  struct ncclConnector send[NCCL_MAX_CONNS];/*向peer发*/
+  struct ncclConnector recv[NCCL_MAX_CONNS];/*从peer收*/
   int refCount;
 };
 
 struct ncclKernelComm;
 
 struct alignas(16) ncclDevWorkP2p {
-  void *sendAddr, *recvAddr;
-  size_t sendBytes, recvBytes;
-  int sendRank, recvRank;
+  void *sendAddr/*发送地址*/, *recvAddr;
+  size_t sendBytes/*发送字节数*/, recvBytes;
+  int sendRank/*从哪个rank发*/, recvRank/*从哪个rank收*/;
   // From the part index, nP2pChannels, and channelBase the device code can
   // calculate which part of the transfer a channel is responsible for.
+  /*共有多少个channel*/
   uint8_t nP2pChannels; // Always equal to comm->p2pnChannels
+  /*指明first part对应的channelBase是哪个*/
   uint8_t channelBase; // Channel owning first part.
   // Zero channels indicates no work in that direction.
+  /*发送及接收channel各是多少*/
   uint8_t nSendChannels, nRecvChannels;
   // Chunk size stored in 8 bits via u32fp8Encode/Decode.
   uint8_t sendChunkSize_u32fp8, recvChunkSize_u32fp8;
 
-  uint8_t sendProtoLL:1, recvProtoLL:1;
-  uint8_t sendNetReg:1, recvNetReg:1;
-  uint8_t sendIpcReg:1, recvIpcReg:1;
+  uint8_t sendProtoLL:1/*发送是否采用LL协议*/, recvProtoLL:1;
+  uint8_t sendNetReg:1/*发送是否已网络注册成功*/, recvNetReg:1;
+  uint8_t sendIpcReg:1/*发送是否ipc注册成功*/, recvIpcReg:1;
   uint8_t profilerEnabled:1;
 };
 
@@ -374,6 +377,7 @@ enum ncclDevWorkType : uint8_t {
   ncclDevWorkTypeBcast,  // for batched broadcast
 };
 
+/*取不同devwork对应的大小*/
 constexpr size_t ncclDevWorkSize(enum ncclDevWorkType type) {
   return type == ncclDevWorkTypeP2p     ? sizeof(ncclDevWorkP2p) :
          type == ncclDevWorkTypeColl    ? sizeof(ncclDevWorkColl) :
@@ -403,18 +407,18 @@ struct alignas(16) ncclDevWorkBatch {
       // nextExtends: should next one be merged into this one.
       // nextJump=0: end of this channel's batch list
       // nextJump>0: batches[thisIndex+nextJump] is next batch in this list
-      uint32_t nextJump:14, nextExtends:1;
+      uint32_t nextJump:14/*下一个batch在此list中的位置*/, nextExtends:1;
       // func is the ncclFunc_t this batch's completions are counted under; the
       // device would otherwise have to translate funcId through a table in
       // global memory on the batch-entry path.
-      uint32_t workType:2, funcId : NCCL_DEV_WORK_BATCH_FUNC_ID_BITS, func : NCCL_DEV_WORK_BATCH_FUNC_BITS;
+      uint32_t workType:2/*work类型*/, funcId : NCCL_DEV_WORK_BATCH_FUNC_ID_BITS, func : NCCL_DEV_WORK_BATCH_FUNC_BITS;
     };
     // Unioning bitfields with underlying type hints compiler to emit the best
     // SASS LD/ST accesses.
     uint32_t flags;
   };
   // Rolling offset in fifo where this batch's work structs begin
-  uint32_t offsetBase;
+  uint32_t offsetBase;/*和base之间的偏移量*/
   // Set of relative offsets from offsetBase for this channel's subset of the batch:
   // For each bit index i in offsetMask, find work at fifo offset: offsetBase + i*sizeof(WorkStructType)
   uint64_t offsetBitset;
@@ -643,12 +647,12 @@ inline bool ncclNvlsSupported(int devRedOp, int type) {
 }
 
 // `ncclDevFuncIndex()` needs to be in sync with "all_functions()" in "src/device/generate.py"
-inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) {
+inline int ncclDevFuncId(int coll/*集合算法*/, int devRedOp, int type, int algo, int proto) {
   constexpr int NumTypes = ncclNumTypes;
   int row;
   do {
     row = 0; // ncclDevFuncIndex_P2p
-    if (coll == ncclFuncSendRecv) break;
+    if (coll == ncclFuncSendRecv) break;/*sendRecv直接安排为0*/
     row += 1;
 
     int nAlgos = 4;
@@ -706,7 +710,7 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
 }
 
 inline int ncclDevFuncId_P2p() {
-  return ncclDevFuncRowToId[0];
+  return ncclDevFuncRowToId[0];/*p2p直接安排取0*/
 }
 
 #endif

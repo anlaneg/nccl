@@ -147,6 +147,7 @@ ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan
   NCCLCHECK(ncclProxySaveOp(comm, op, &needed));
   if (needed) {
     struct ncclProxyOp* q = ncclMemoryPoolAlloc<struct ncclProxyOp>(&comm->memPool_ncclProxyOp, &comm->memPermanent);
+    /*复制op并入到到proxyOpQueue中*/
     *q = *op; // C++ struct assignment
     ncclIntruQueueEnqueue(&comm->planner.wipPlan.channels[op->channelId].proxyOpQueue, q);
   }
@@ -155,13 +156,14 @@ ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan
 
 NCCL_PARAM(P2pEpochEnable, "P2P_EPOCH_ENABLE", 1);
 
-void ncclAddWorkBatchToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
+/*为plan增加了一个work batch*/
+void ncclAddWorkBatchToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId/*channel编号*/,
                             enum ncclDevWorkType workType, int devFuncId, int progressSlot, uint32_t workOffset,
                             int p2pEpoch, int p2pRound, bool newBatch) {
   size_t workSize = ncclDevWorkSize(workType);
   ncclKernelPlanner::WipPlan::Channel* chan = &comm->planner.wipPlan.channels[channelId];
   // Conditions causing us to create a new blank batch.
-  newBatch = (chan->workBatchQueue.tail == nullptr);
+  newBatch = (chan->workBatchQueue.tail == nullptr);/*队列为空，则为新batch*/
   struct ncclDevWorkBatch* batch = nullptr;
   if (!newBatch) {
     batch = &chan->workBatchQueue.tail->batch;
@@ -195,16 +197,17 @@ void ncclAddWorkBatchToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, 
   }
   // Conditions causing us to create an extension batch (prev->nextExtends=1)
   uint32_t offset = newBatch ? 0 : (workOffset - batch->offsetBase);
-  bool extendBatch = 63 * workSize < offset;
+  bool extendBatch = 63 * workSize < offset;/*是否要扩展batch大小*/
   extendBatch |= 0 != offset % workSize;
   if (newBatch || extendBatch) {
     if (!newBatch) batch->nextExtends = extendBatch; // Extending the previous batch.
+    /*申请一块batchNode*/
     struct ncclWorkBatchList* batchNode = ncclMemoryStackAlloc<ncclWorkBatchList>(&comm->memScoped);
     // Coverity thinks that ncclIntruQueueEnqueue will access chan->workBatchQueue->tail, which might
     // be NULL.  But that code is guarded by chan->workBatchQueue->head not being NULL, in which
     // case tail won't be NULL either.
     // coverity[var_deref_model:FALSE]
-    ncclIntruQueueEnqueue(&chan->workBatchQueue, batchNode);
+    ncclIntruQueueEnqueue(&chan->workBatchQueue, batchNode);/*入队到workBatch队列*/
     batch = &batchNode->batch;
     batch->nextExtends = 0;
     batch->workType = (uint32_t)workType;
@@ -253,6 +256,7 @@ static void finishPlan(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   plan->kernelArgsSize = sizeof(struct ncclDevKernelArgs) + batchBytes;
   plan->kernelArgsSize += (plan->workStorageType == ncclDevWorkStorageTypeArgs) ? workBytes : 0;
   plan->kernelArgsSize = alignUp(plan->kernelArgsSize, 16);
+  /*申请kernelArgs*/
   plan->kernelArgs =
     (struct ncclDevKernelArgs*)ncclMemoryStackAlloc(&comm->memScoped, plan->kernelArgsSize, /*align=*/16);
   plan->kernelArgs->comm = comm->devComm;
@@ -264,20 +268,24 @@ static void finishPlan(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   // over the channels in ascending order until they're exhausted.
   uint64_t hasBatchMask = plan->channelMask;
   struct ncclDevWorkBatch* batchPrev[MAXCHANNELS] = {}; // {0...}
+  /*连续存放devWorkBatch*/
   struct ncclDevWorkBatch* batchZero = (struct ncclDevWorkBatch*)(plan->kernelArgs + 1);
   int batchIx = 0;
   while (hasBatchMask != 0) {
     uint64_t tmpMask = hasBatchMask; // channels with a batch for this round.
     do {
-      int c = popFirstOneBit(&tmpMask);
+      int c = popFirstOneBit(&tmpMask);/*取需要执行的channel*/
       if (!ncclIntruQueueEmpty(&wipChannels[c].workBatchQueue)) {
+    	  /*此workBatch队列不为空，弹一个出来*/
         struct ncclWorkBatchList* batchNode = ncclIntruQueueDequeue(&wipChannels[c].workBatchQueue);
         if (batchPrev[c] != nullptr) {
+          /*通过nextJump串连起每个batch*/
           batchPrev[c]->nextJump = int(&batchZero[batchIx] - batchPrev[c]);
         }
         batchPrev[c] = &batchZero[batchIx];
-        batchZero[batchIx++] = batchNode->batch;
+        batchZero[batchIx++] = batchNode->batch;/*存入此batchNode*/
       }
+      /*此channel已为空，清除掉此channel对应的标记*/
       if (ncclIntruQueueEmpty(&wipChannels[c].workBatchQueue)) {
         hasBatchMask ^= 1ull << c;
       }
@@ -346,9 +354,12 @@ struct ncclKernelPlanBudget {
 };
 
 bool ncclTestBudget(struct ncclKernelPlanBudget* budget, int nWorkBatches, ssize_t workBytes) {
+  /*每个workBatches用一个ncclDevWorkBatch结构*/
   ssize_t batchBytes = nWorkBatches * sizeof(struct ncclDevWorkBatch);
   bool ok = false;
+  /*总数占用小于inArgsBytes*/
   ok |= (batchBytes + workBytes <= budget->inArgsBytes);
+  /*或者batchBytes小于in,workBytes小于out*/
   ok |= (batchBytes <= budget->inArgsBytes) && (workBytes <= budget->outArgsBytes);
   return ok;
 }
@@ -356,7 +367,7 @@ bool ncclTestBudget(struct ncclKernelPlanBudget* budget, int nWorkBatches, ssize
 ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* task;
-  task = ncclIntruQueueHead(&planner->collTaskQueue);
+  task = ncclIntruQueueHead(&planner->collTaskQueue);/*取task queue*/
   while (task != nullptr) {
     // Build a ncclDevWorkColl[Reg?] struct for each task.
     void* regBufSend[NCCL_MAX_LOCAL_RANKS];
@@ -456,6 +467,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       t->maxCTAs = comm->config.maxCTAs;
       t->nvlsCTAs = comm->config.nvlsCTAs;
       t->cgaClusterSize = comm->config.cgaClusterSize;
+      /*广播队列中的bcastTask也转换为ncclTaskColl*/
       ncclTaskCollSorterInsert(&planner->collSorter, t, t->trafficBytes);
       planner->nTasksColl += 1;
       ncclMemoryPoolFree(&comm->memPool_ncclTaskBcast, bcastTask);
@@ -623,6 +635,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
         memcpy((void*)(workNode + 1), (void*)&devWork, workNode->size);
       }
 
+      /*统一转换为workNode后再统一入队到tmpCollWorkQueue*/
       ncclIntruQueueEnqueue(&planner->tmpCollWorkQueue, workNode);
     }
     task = task->next;
@@ -739,6 +752,7 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
         proxyOp.task.coll = task;
         proxyOp.rank = comm->rank;
         proxyOp.eActivationMask = task->eActivationMask;
+        /*添加进batch计划*/
         ncclAddWorkBatchToPlan(comm, plan, c, workNode->workType, task->devFuncId, task->func, plan->workBytes);
         NCCLCHECK(ncclAddProxyOpIfNeeded(comm, plan, &proxyOp));
       }
@@ -959,38 +973,52 @@ NCCL_PARAM(ChunkSize, "CHUNK_SIZE", 0);
 // match the corresponding values for this round of the p2p schedule (no -1's).
 // No-op's are encoded with a -1 size.
 static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, int nChannelsMin, int nChannelsMax,
-                                 int p2pEpoch, int p2pRound, int sendRank, void* sendAddr, ssize_t sendBytes,
-                                 int recvRank, void* recvAddr, ssize_t recvBytes, const int planTotalTasks[],
+                                 int p2pEpoch, int p2pRound/*当前round*/, int sendRank/*发送rank*/, void* sendAddr/*发地址*/, ssize_t sendBytes/*发字节数*/,
+                                 int recvRank/*收rank*/, void* recvAddr/*收地址*/, ssize_t recvBytes/*收字节数*/, const int planTotalTasks[],
                                  struct ncclTaskP2p** p2pTasks) {
   ncclResult_t ret = ncclSuccess;
   constexpr int connIndex = 1;
-  bool selfSend = (sendRank == comm->rank);
+  bool selfSend = (sendRank == comm->rank);/*是否自发*/
   // recv: dir=0, send: dir=1
-  void* addrs[2] = {recvAddr, sendAddr};
-  ssize_t bytes[2] = {recvBytes, sendBytes};
-  bool protoLL[2] = {!selfSend, !selfSend};
-  bool network[2] = {false, false};
+  /*以下数组下标0表示收，1表示发*/
+  void* addrs[2] = {recvAddr/*收地址*/, sendAddr/*发地址*/};
+  ssize_t bytes[2] = {recvBytes/*收字节数*/, sendBytes/*发字节数*/};
+  bool protoLL[2] = {!selfSend/*非自已发时可用*/, !selfSend/*是自发时可用*/};
+  bool network[2] = {false, false};/*默认为假，由实际情况产生*/
   bool proxySameProcess[2] = {true, true};
   void** handles[2] = {NULL, NULL};
   uint64_t p2pDirChannelMask[2] = {0, 0}; // per-direction channels (idx 0 recv, 1 send)
+
+  /*由round取对应的channel base(集群可依据round拿到相同的base)*/
   uint8_t base = ncclP2pChannelBaseForRound(comm, p2pRound);
   struct ncclProxyOp proxyOps[2] = {};
-  int nProxyOps = selfSend ? 0 : 2;
+  int nProxyOps = selfSend ? 0 : 2;/*指出proxyOps数组可用长度*/
   if (!selfSend) {
     for (int part = 0; part < nChannelsMax; part++) {
+      /*再结合base取此part实际对应的channelId*/
       int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, part);
+      /*取此channel上当时填写的peers情况*/
       struct ncclChannelPeer** channelPeers = comm->channels[channelId].peers;
+      /*处理发与收*/
       for (int dir = 0; dir <= 1; dir++) {
         int peerRank = dir ? sendRank : recvRank;
+        /*p2p只用1号connIndex,取connnector*/
         struct ncclConnector* conn =
           dir ? &channelPeers[peerRank]->send[connIndex] : &channelPeers[peerRank]->recv[connIndex];
+        /*此方向是否支持LL buffer*/
         protoLL[dir] &= conn->conn.buffs[NCCL_PROTO_LL] != nullptr;
+        /*此方向是否走netTransport*/
         network[dir] |= conn->transportComm == (dir ? &netTransport.send : &netTransport.recv);
+        /*此方向proxy是否与当前进程相同*/
         proxySameProcess[dir] &= conn->proxyConn.sameProcess;
       }
     }
   }
 
+  //此时
+  //protoLL中记录的是这组channel单一方向上是否均支持LL协议
+  //network中记录的是这组channel单一方向上是否需要走网络
+  //proxySameProcess当前send/recv方便使用的所有channel connector基本地proxy service是否都位于本进程
   ssize_t paramChunkSize = ncclParamChunkSize();
   // Arrays indexed by dir where recv=0, send=1:
   int nChannels[2];
@@ -1005,76 +1033,91 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   for (int dir = 0; dir < 2; dir++) {
     // 0=recv, 1=send
     // Assume SIMPLE protocol to start with to determine number of channels
-    stepSize[dir] = comm->p2pChunkSize;
+    stepSize[dir] = comm->p2pChunkSize;/*先假设是simple协议*/
 
     if (bytes[dir] == -1) {
-      nChannels[dir] = 0;
+      nChannels[dir] = 0;/*此方向没有操作*/
     } else if (bytes[dir] == 0) {
-      nChannels[dir] = 1;
+      nChannels[dir] = 1;/*此方向零字节操作*/
     } else {
+      /*小消息尽量不使用大量channel*/
       ssize_t minPartSize = comm->nNodes > 1 ? stepSize[dir] / 2 : stepSize[dir] / 8;
+      /*大消息要增大channel数（初始）*/
       ssize_t maxPartSize = comm->nNodes > 1 ? stepSize[dir] : stepSize[dir] * 32;
+      /*确定这个方向初始的channel数*/
       nChannels[dir] = std::min<int>(nChannelsMin, divUp(bytes[dir], minPartSize));
+      /*确定这个方向初始的partSize(消息经channel均分形成part,以便实现经channel并发）*/
       size_t partSize = std::max(minPartSize, divUp(bytes[dir], nChannels[dir]));
       while (partSize > maxPartSize && nChannels[dir] <= nChannelsMax / 2) {
-        nChannels[dir] *= 2;
+        nChannels[dir] *= 2;/*继续扩大channel数*/
         partSize = divUp(bytes[dir], nChannels[dir]);
       }
     }
 
     // Select protocol (LL vs SIMPLE) used based on payload per channel
+    /*此方向有操作，此方向protoLL开启的标志是：支持protoLL,且此方向操作的字节数小于门限*/
     if (bytes[dir] != -1) protoLL[dir] &= bytes[dir] <= nChannels[dir] * ncclParamP2pLLThreshold();
-    protocol[dir] = protoLL[dir] ? NCCL_PROTO_LL : NCCL_PROTO_SIMPLE;
+    protocol[dir] = protoLL[dir] ? NCCL_PROTO_LL : NCCL_PROTO_SIMPLE/*否则使用simple*/;
 
+    /*buffersize被均匀的切分成了NCCL_STEPS份，形成FIFO的ring型，取每一份大小*/
     stepSize[dir] = comm->buffSizes[protocol[dir]] / NCCL_STEPS;
     if (protocol[dir] == NCCL_PROTO_SIMPLE) stepSize[dir] = comm->p2pChunkSize;
     chunkSize[dir] = stepSize[dir];
     if (paramChunkSize != 0) {
       chunkSize[dir] = paramChunkSize;
-    } else if (network[dir]) {
+    } else if (network[dir]) {/*走网络,调整chunk size*/
       // Tune chunk size for the network
       if (protocol[dir] == NCCL_PROTO_SIMPLE && bytes[dir] < stepSize[dir]) chunkSize[dir] /= 4;
       else if (bytes[dir] < 8 * stepSize[dir]) chunkSize[dir] /= 2;
     }
 
+    /*chunkSize是协议实际占用的字节数，chunkDataSize是用户payload的字节数*/
     chunkDataSize[dir] = chunkSize[dir];
-    if (protocol[dir] == NCCL_PROTO_LL) chunkDataSize[dir] /= 2;
+    if (protocol[dir] == NCCL_PROTO_LL) chunkDataSize[dir] /= 2;/*LL容量减半*/
+    /*编码后解码，使chunkDataSize一致（防止出现数据不一致）*/
     chunkDataSize_u32fp8[dir] = u32fp8Encode(chunkDataSize[dir]);
     chunkDataSize[dir] = u32fp8Decode(chunkDataSize_u32fp8[dir]);
     chunkSize[dir] = chunkDataSize[dir];
-    if (protocol[dir] == NCCL_PROTO_LL) chunkSize[dir] *= 2;
+    if (protocol[dir] == NCCL_PROTO_LL) chunkSize[dir] *= 2;/*LL容量刚才按减半算的，还原回来*/
 
     if (p2pTasks[dir] && p2pTasks[dir]->allowUB) {
-      if (network[dir]) {
+      if (network[dir]) {/*网络情况*/
         bool pxnUsed = !ncclPxnDisable(comm) && comm->isAllNvlink && comm->maxLocalRanks > 1;
         if (bytes[dir] > 0 && proxySameProcess[dir] && protocol[dir] == NCCL_PROTO_SIMPLE && (!pxnUsed)) {
           int regFlag = 0;
           NCCLCHECKGOTO(ncclCalloc(&handles[dir], nChannelsMax), ret, cleanup);
+          /*数据会被分nChannelsMax份*/
           for (int part = 0; part < nChannelsMax; part++) {
+        	  /*取第一份对应的channelId*/
             int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, part);
             struct ncclChannelPeer** channelPeers = comm->channels[channelId].peers;
             int peerRank = dir ? sendRank : recvRank;
+            /*取这一份对应的connector*/
             struct ncclConnector* conn =
               dir ? &channelPeers[peerRank]->send[connIndex] : &channelPeers[peerRank]->recv[connIndex];
             if (conn->conn.flags & NCCL_DIRECT_NIC) {
-              ncclRegisterP2pNetBuffer(comm, addrs[dir], bytes[dir], conn, &regFlag, &handles[dir][part],
+            	/*尝试为conn注册这段buffer*/
+              ncclRegisterP2pNetBuffer(comm, addrs[dir]/*buffer地址*/, bytes[dir]/*buffer长度*/, conn, &regFlag, &handles[dir][part],
                                        &plan->cleanupQueue);
             }
-            if (!regFlag) break;
+            if (!regFlag) break;/*未成功，不再尝试*/
           }
+          /*标明这个方向是否均注册成功*/
           netRegistered[dir] = regFlag ? true : false;
         }
       } else if (bytes[dir] > 0 && addrs[dir] && protocol[dir] == NCCL_PROTO_SIMPLE && !selfSend) {
+    	  /*采用simple方式,注册p2pipc buffer*/
         int peerRank = dir ? sendRank : recvRank;
         int regFlag = 0;
         int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, 0);
         struct ncclChannelPeer** channelPeers = comm->channels[channelId].peers;
+        /*取得对应的connector*/
         struct ncclConnector* conn =
           dir ? &channelPeers[peerRank]->send[connIndex] : &channelPeers[peerRank]->recv[connIndex];
         void* regAddr = NULL;
         if (conn->conn.flags & (NCCL_P2P_WRITE | NCCL_P2P_READ)) {
           // We require users registering buffers on both sides
-          NCCLCHECKGOTO(ncclRegisterP2pIpcBuffer(comm, addrs[dir], bytes[dir], peerRank, &regFlag, &regAddr,
+          NCCLCHECKGOTO(ncclRegisterP2pIpcBuffer(comm, addrs[dir]/*要注册的地址*/, bytes[dir]/*注册的地址长度*/, peerRank/*目的rank*/, &regFlag, &regAddr,
                                                  &plan->cleanupQueue),
                         ret, cleanup);
           if (regFlag) {
@@ -1086,7 +1129,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
       }
     }
     // Tune channel count for registered NET buffers
-    if (netRegistered[dir]) {
+    if (netRegistered[dir]/*网络注册成功*/) {
       // Keep at least one channel per local NET device, then use the bw per channel value if defined
       int regChannels = std::max(1, comm->minNetCount);
       if (ncclParamP2pPerChannelRegNetBw() > 0)
@@ -1102,13 +1145,13 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   workNode = ncclMemoryStackAllocInlineArray<ncclWorkList, ncclDevWorkP2p>(&comm->memScoped, 1);
   workNode->workType = ncclDevWorkTypeP2p;
   workNode->size = sizeof(struct ncclDevWorkP2p);
-  ncclIntruQueueEnqueue(&plan->workQueue, workNode);
+  ncclIntruQueueEnqueue(&plan->workQueue, workNode);/*workNode入队*/
   uint32_t workOffset;
   workOffset = plan->workBytes;
   plan->workBytes += sizeof(struct ncclDevWorkP2p);
 
   struct ncclDevWorkP2p* work;
-  work = (struct ncclDevWorkP2p*)(workNode + 1);
+  work = (struct ncclDevWorkP2p*)(workNode + 1);/*转到填充跟随的结构体*/
   work->nP2pChannels = comm->p2pnChannels;
   work->channelBase = base;
   work->nSendChannels = nChannels[1];
@@ -1138,9 +1181,10 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     }
   }
 
+  /*填充proxyOp*/
   for (int dir = 0; dir < nProxyOps; dir++) {
     struct ncclProxyOp* op = &proxyOps[dir];
-    op->root = dir ? sendRank : recvRank;
+    op->root = dir ? sendRank : recvRank;/*dir=0表示收，即指明目的*/
     op->sliceSteps = 1;
     op->chunkSteps = 1;
     op->dtype = ncclInt8;
@@ -1168,12 +1212,15 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   maxConcurrent = comm->p2pnChannels / nChannelsMax * NCCL_MAX_DEV_WORK_P2P_PER_BATCH;
   concurrentTasks[0] = std::min(planTotalTasks[0], maxConcurrent);
   concurrentTasks[1] = std::min(planTotalTasks[1], maxConcurrent);
-  ++plan->p2pPairCounter;
+  ++plan->p2pPairCounter;/*配置数增加*/
   for (int i = 0; i < 2; i++) {
     if (p2pTasks[i]) p2pTasks[i]->p2pPairId = plan->p2pPairCounter;
   }
+  /*按channel拆分part*/
   for (int part = 0; part < nChannelsMax; part++) {
+	  /*取part对应的channelId*/
     int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, part);
+    /*指明占用此channel*/
     plan->channelMask |= uint64_t(1) << channelId;
     // Each direction uses its first nChannels[dir] parts; track per-direction
     // channels so the profiler emits KernelCh per direction (see profiler.cc).
@@ -1243,16 +1290,17 @@ static int calcP2pChannelCount(size_t totalSize, int minChannels, int maxChannel
   return nChannels;
 }
 
+/*按round顺序处理sendQ,recvQ,并将其出队到plan->p2pTaskQueue*/
 static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch, int* p2pRound,
                                            struct ncclKernelPlan* plan, struct ncclKernelPlanBudget* budget) {
-  int nRanks = comm->nRanks;
-  struct ncclKernelPlanner::Peer* peers = comm->planner.peers;
+  int nRanks = comm->nRanks;/*rank数目*/
+  struct ncclKernelPlanner::Peer* peers = comm->planner.peers;/*取此comm的peers记录*/
 
   plan->threadPerBlock = std::max(plan->threadPerBlock, NCCL_MAX_NTHREADS);
   if (!plan->kernelSpecialized) {
 	  /*选p2p对应的kernel function*/
-    plan->kernelFn = ncclDevKernelForFunc[ncclDevFuncId_P2p()];
-    plan->kernelSpecialized = ncclDevKernelForFuncIsSpecialized[ncclDevFuncId_P2p()];
+    plan->kernelFn = ncclDevKernelForFunc[ncclDevFuncId_P2p()];/*比如:ncclDevKernel_SendRecv*/
+    plan->kernelSpecialized = ncclDevKernelForFuncIsSpecialized[ncclDevFuncId_P2p()];/*是否special*/
   }
 
   // Compute how much to split operations
@@ -1263,31 +1311,36 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
   while (nChannelsMin * nRanks > comm->p2pnChannels && nChannelsMin > 1) nChannelsMin /= 2;
 
   // Save the total count of send/recv tasks in the plan
-  int planTotalTasks[2] = {comm->planner.nTasksP2pRecv, comm->planner.nTasksP2pSend};
-  while (comm->planner.nTasksP2p != 0) {
+  int planTotalTasks[2] = {comm->planner.nTasksP2pRecv/*收数目*/, comm->planner.nTasksP2pSend/*发数目*/};
+  while (comm->planner.nTasksP2p != 0/*任有p2p task需处理*/) {
     for (; *p2pRound < nRanks; (*p2pRound)++) {
+  	  /*遍历所有round,取此round下发/收目的rank*/
       int sendRank = comm->p2pSchedule[*p2pRound].sendRank;
       int recvRank = comm->p2pSchedule[*p2pRound].recvRank;
+      /*取到此目的rank的p2pTask(在send/recv api中我们已挂在此链上）*/
       struct ncclTaskP2p* send = ncclIntruQueueHead(&peers[sendRank].sendQueue);
       struct ncclTaskP2p* recv = ncclIntruQueueHead(&peers[recvRank].recvQueue);
-      if (send == nullptr && recv == nullptr) continue;
+      if (send == nullptr && recv == nullptr) continue;/*跳过本次调度无任务的round*/
 
       if (sendRank == comm->rank) {
+    	  /*本次要发送的目的地是当前rank本身*/
         if (send != nullptr && recv == nullptr) {
+        	/*只有发，没有收，报错*/
           WARN("Trying to send to self without a matching recv");
           return ncclInvalidUsage;
         }
         if (send == nullptr && recv != nullptr) {
+        	/*只有收，没有发，报错*/
           WARN("Trying to recv to self without a matching send");
           return ncclInvalidUsage;
         }
       }
-      ssize_t sendBytes = send ? send->bytes : -1;
-      ssize_t recvBytes = recv ? recv->bytes : -1;
-      void* sendBuff = send ? send->buff : nullptr;
-      void* recvBuff = recv ? recv->buff : nullptr;
+      ssize_t sendBytes = send ? send->bytes : -1;/*发送字节数*/
+      ssize_t recvBytes = recv ? recv->bytes : -1;/*接收字节数*/
+      void* sendBuff = send ? send->buff : nullptr;/*发送buffer*/
+      void* recvBuff = recv ? recv->buff : nullptr;/*接收buffer*/
 
-      if (sendRank == comm->rank && send->buff == recv->buff) {
+      if (sendRank == comm->rank/*发给自已*/ && send->buff == recv->buff/*收发buffer地址相等（共用）*/) {
         // Skip send to self in-place (we don't need to support this).
         ncclIntruQueueDequeue(&peers[sendRank].sendQueue);
         ncclIntruQueueDequeue(&peers[recvRank].recvQueue);
@@ -1300,36 +1353,42 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
         // Ensure room for worst case of one new batch per channel.
         if (!ncclTestBudget(budget, plan->nWorkBatches + nChannelsMax,
                             plan->workBytes + sizeof(struct ncclDevWorkP2p))) {
+        	/*无足够空间，不能继续处理*/
           return ncclSuccess;
         }
-        struct ncclTaskP2p* p2pTasks[2] = {recv, send};
+        struct ncclTaskP2p* p2pTasks[2] = {recv/*接收task*/, send/*发送task*/};
         NCCLCHECK(addP2pToPlan(comm, plan, nChannelsMin, nChannelsMax, *p2pEpoch, *p2pRound, sendRank, sendBuff,
                                sendBytes, recvRank, recvBuff, recvBytes, planTotalTasks, p2pTasks));
         if (send != nullptr) {
+        	/*已加入计划，弹出send*/
           ncclIntruQueueDequeue(&peers[sendRank].sendQueue);
           // Profiler - We can overwrite groupAPI event handles here since all operations here belong to the same group
           plan->groupApiEventHandle = send->groupApiEventHandle;
           if (send->launchCompletionEvent != nullptr) {
             plan->launchCompletionEvent = send->launchCompletionEvent;
           }
+          /*send进p2pTaskQueue*/
           ncclIntruQueueEnqueue(&plan->p2pTaskQueue, send);
+          /*已处理，减少计数*/
           comm->planner.nTasksP2p -= 1;
           comm->planner.nTasksP2pSend -= 1;
         }
         if (recv != nullptr) {
+        	/*已加入计划，弹出recv*/
           ncclIntruQueueDequeue(&peers[recvRank].recvQueue);
           // Profiler - We can overwrite groupAPI event handles here since all operations here belong to the same group
           plan->groupApiEventHandle = recv->groupApiEventHandle;
           if (recv->launchCompletionEvent != nullptr) {
             plan->launchCompletionEvent = recv->launchCompletionEvent;
           }
+          /*recv进p2pTaskQueue*/
           ncclIntruQueueEnqueue(&plan->p2pTaskQueue, recv);
           comm->planner.nTasksP2p -= 1;
           comm->planner.nTasksP2pRecv -= 1;
         }
       }
     }
-    *p2pRound = 0;
+    *p2pRound = 0;/*round回归到零*/
     (*p2pEpoch)++;
   }
   return ncclSuccess;
@@ -1570,7 +1629,7 @@ static ncclResult_t hostStreamPlanTask(struct ncclComm* comm, struct ncclKernelP
   NCCLCHECK(ncclProfilerPostPlanWork(comm, plan));
   if (ncclIntruQueueHead(&plan->proxyOpQueue)) {
     NCCLCHECK(uploadProxyOps(comm, plan));
-    NCCLCHECK(ncclProxyStart(comm));
+    NCCLCHECK(ncclProxyStart(comm));/*促使proxy线程工作*/
   }
   // Balances the start above (one stop per invocation); the stops also null their handles.
   NCCLCHECK(ncclProfilerStopTaskEvents(plan));
@@ -1714,8 +1773,9 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
       !ncclIntruQueueEmpty(&planner->collSymTaskQueue) || !ncclIntruQueueEmpty(&planner->collCeTaskQueue) ||
       planner->nTasksRma != 0) {
     do {
-      memset(&planner->wipPlan, 0, sizeof(planner->wipPlan));
+      memset(&planner->wipPlan, 0, sizeof(planner->wipPlan));/*清空wipPlan*/
 
+      /*申请一个plan*/
       struct ncclKernelPlan* plan =
         ncclMemoryPoolAlloc<struct ncclKernelPlan>(&comm->memPool_ncclKernelPlan, &comm->memPermanent);
       plan->comm = comm;
@@ -1748,6 +1808,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
           // first, the place where we cut the kernel could vary by rank which would
           // cause the "shortest channel first" channel picker to have divergent results.
           if (planner->nTasksColl != 0) {
+        	/*有集合通信Task*/
             NCCLCHECKGOTO(scheduleCollTasksToPlan(comm, plan, &budget), result, failure);
           }
           if (planner->nTasksColl == 0 && planner->nTasksBcast != 0) {
@@ -1755,12 +1816,14 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
           }
           // And only drain p2p tasks once colls are depleted.
           if (planner->nTasksColl == 0 && planner->nTasksBcast == 0 && planner->nTasksP2p != 0) {
+        	/*只有p2p任务*/
             NCCLCHECKGOTO(scheduleP2pTasksToPlan(comm, &p2pEpoch, &p2pRound, plan, &budget), result, failure);
           }
         }
 
-        finishPlan(comm, plan);
+        finishPlan(comm, plan);/*将devWorkBatch放入到plan->kernelArgs中*/
         if (plan->workBytes != 0) {
+        	/*将此plan入队到plan队列*/
           ncclIntruQueueEnqueue(&planner->planQueue, plan);
           nPlans += 1;
         }
@@ -1769,6 +1832,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
              !ncclIntruQueueEmpty(&planner->collSymTaskQueue) || !ncclIntruQueueEmpty(&planner->collCeTaskQueue) ||
              planner->nTasksRma != 0);
 
+    /*取上面指定的planHead*/
     struct ncclKernelPlan* planHead = ncclIntruQueueHead(&planner->planQueue);
     planner->unlaunchedPlansHead = planHead;
 
@@ -2672,8 +2736,11 @@ ncclResult_t ncclPlannerSetCapturingGraph(struct ncclComm* comm, struct ncclInfo
   return ncclSuccess;
 }
 
-static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, ncclFunc_t coll/** 操作符 */, ncclFunc_t collAPI,
-                                  void* buff/** 数据指针 */, size_t count/**数据数目 */, ncclDataType_t datatype/**数据类型 */, int peer/*对端编号*/, bool allowUB) {
+/* 1. p2pTask被创建后放置在planner->peers[peer].sendQueue/planner->peers[peer].recvQueue
+ * 2. 如果需要提前建连，comm->preconnectNext会串有本comm,comm->connectSend[peer]或comm->connectRecv[peer]指明到peer会用哪些channel
+ * */
+static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, ncclFunc_t coll/** 操作符 */, ncclFunc_t collAPI/*上层操作符（比如gather)*/,
+                                  void* buff/** 数据指针 */, size_t count/**数据数目 */, ncclDataType_t datatype/**数据类型 */, int peer/*对端rank编号*/, bool allowUB) {
   struct ncclKernelPlanner* planner = &comm->planner;
 
   // Determine peer and basic parameters.
@@ -2681,7 +2748,7 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
   bool isSendNotRecv = coll == ncclFuncSend;/** 是否为send操作 */
 
   // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
-  ncclGroupCommJoin(comm, ncclGroupTaskTypeCollective);/*将此Comm串起*/
+  ncclGroupCommJoin(comm, ncclGroupTaskTypeCollective);/*集合通信，指明此Comm入队*/
   info->coll = coll;/** 记录操作符 */
   // Set capturing graph. Called here so that profiler can emit a group API event with this information
   NCCLCHECK(ncclPlannerSetCapturingGraph(comm, info));
@@ -2705,7 +2772,7 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
   p2p->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
   p2p->p2pApiEventHandle = ncclProfilerApiState.p2pApiEventHandle;
   p2p->profilerTag = info->collConfig.userProfilerTag;
-  /**send,recv操作转换为p2p并入队到对应的peerbuff队列 */
+  /**send,recv操作转换为p2p并入队到peer rank对应的peerbuff队列 */
   ncclIntruQueueEnqueue(isSendNotRecv ? &planner->peers[peer].sendQueue : &planner->peers[peer].recvQueue, p2p);
   planner->nTasksP2p += 1;
   if (isSendNotRecv) planner->nTasksP2pSend += 1;/** 增加send task数目 */
@@ -2713,19 +2780,19 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
 
   // Mark channels that need pre-connect
   if (comm->rank != peer) {
-	  /** 如果当前gpu不是给自已收发(即不是自环P2P操作) */
+	  /*当前p2p任务不是给自已的*/
     if (!(isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen)) {
+    	/*之前sendSeen/recvSeen还没有设置，则设置*/
       // planner->peers[peer].send/recvSeen is private to each comm, so we need to set it anyway.
       (isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen) = true;
-      /*找出peer在p2p通信中的round（轮次）即哪一轮自peer发送/接收
-      comm->p2pSchedule[] 是初始化时预计算的调度表，长度 = nRanks。表内每一项 {sendRank, recvRank} 描述：在第 round 轮 P2P 交换中，本 rank 向谁发、从谁收。
-      */
+      /** 找出此peer在p2p通信中的round（轮次）*/
       int round = 0;
       while (peer != (isSendNotRecv ? comm->p2pSchedule[round].sendRank : comm->p2pSchedule[round].recvRank)) {
         round += 1;
       }
       uint8_t base = ncclP2pChannelBaseForRound(comm, round);
       for (int c = 0; c < comm->p2pnChannelsPerPeer; c++) {
+    	  /*依据perPeer channel数获得c次应使用的channlId*/
         int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, c);
         if (isSendNotRecv) {
           if (comm->channels[channelId].peers[peer]->send[1].hasSeen == 0) {
@@ -2733,11 +2800,12 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
             // the send/recv connector is shared among split shared comms. We need to set hasSeen to
             // 1 in order to avoid duplicate connection setup if user group sendrecv ops with split
             // shared comms together.
-            comm->channels[channelId].peers[peer]->send[1].hasSeen = 1;/**标明已完成PREConnect */
+            comm->channels[channelId].peers[peer]->send[1].hasSeen = 1;/**先标明已完成PREConnect，在其后添加 */
             comm->channels[channelId].peers[peer]->send[1].p2pOnly = 1;/** 标明此连接用于P2P操作 */
-            comm->connectSend[peer] |= (1ULL << channelId);
-            ncclGroupCommPreconnect(comm);/*加入PreConnect链表*/
+            comm->connectSend[peer] |= (1ULL << channelId);/*指明要用的channel id*/
+            ncclGroupCommPreconnect(comm);/*将此comm加入PreConnect链表,指明需要做preconnect*/
           }
+          //否则已做过preconnect,不必再做
         } else {
           if (comm->channels[channelId].peers[peer]->recv[1].hasSeen == 0) {
             // P2P uses only 1 connector
@@ -2770,7 +2838,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
   struct ncclKernelPlanner* planner = &comm->planner;
 
   // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
-  ncclGroupCommJoin(info->comm, ncclGroupTaskTypeCollective);
+  ncclGroupCommJoin(info->comm, ncclGroupTaskTypeCollective);/*将此comm加入到集合通信task列表中*/
   // Set capturing graph. Called here so that profiler can emit a group API event with this information
   NCCLCHECK(ncclPlannerSetCapturingGraph(comm, info));
 
@@ -2806,7 +2874,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     }
 
     // enqueue to peer's bcast queue instead of collSorter
-    ncclIntruQueueEnqueue(&planner->peers[info->root].bcastQueue, t);
+    ncclIntruQueueEnqueue(&planner->peers[info->root].bcastQueue, t);/*入队到广播队列*/
     planner->nTasksBcast += 1;
   } else {
     struct ncclTaskColl* t = ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
@@ -2856,7 +2924,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
 
     planner->nTasksColl += 1;
-    ncclTaskCollSorterInsert(&planner->collSorter, t, t->trafficBytes);
+    ncclTaskCollSorterInsert(&planner->collSorter, t, t->trafficBytes);/*添加进队列collSorter中*/
   }
   ncclProfilerStopCollApiEvent();
   return ncclSuccess;
@@ -3356,7 +3424,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
   } else if (info->coll == ncclFuncSend || info->coll == ncclFuncRecv) {
 	  /** 处理send和recv操作 */
     NCCLCHECK(p2pTaskAppend(comm, info, info->coll/** 操作符 */, collAPI, (void*)info->recvbuff/** 接收数据指针 */, info->count, info->datatype/** 数据类型 */,
-                            info->root/*对端编号*/, true));
+                            info->root/*对端rank编号*/, true));
   } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) {
 	  /*rma相关操作处理*/
     NCCLCHECK(rmaTaskAppend(comm, info));
@@ -3387,6 +3455,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
     NCCLCHECK(hostToDevRedOp(&opDev, info->op, info->datatype, comm));
 
     if (comm->nRanks == 1) {
+    	/*只有一个rank的情况*/
       NCCLCHECK(ncclLaunchOneRank(info->recvbuff, info->sendbuff, info->count, opDev, info->datatype, info->stream,
                                   ncclCollConfigGetLaunchCompletionEvent(&info->collConfig)));
       if (hasLaunchCompletionEvent) ncclRecordCollConfigLaunchCompletionEvent(comm);
@@ -3430,8 +3499,10 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
         if (info->coll == ncclFuncAlltoAll) {
           bool sendLocalValid = false;
           bool recvLocalValid = false;
+          /*取send buffer的注册信息*/
           NCCLCHECK(ncclRegFind(comm, info->sendbuff, comm->nRanks * info->count * ncclTypeSize(info->datatype),
                                 &sendReg));
+          /*取recv buffer的注册信息*/
           NCCLCHECK(ncclRegFind(comm, info->recvbuff, comm->nRanks * info->count * ncclTypeSize(info->datatype),
                                 &recvReg));
           if (sendReg) NCCLCHECK(ncclRegLocalIsValid(sendReg, &sendLocalValid));
@@ -3439,31 +3510,37 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
           // In non-captured mode, UB requires local-valid registration on both
           // sides; graph-only registration visibility must not enable UB.
           allowUB = captured || (sendLocalValid && recvLocalValid);
+          /*拆分成p2p实现*/
           for (int r = 0; r < comm->nRanks; r++) {
+        	  /*将send拆分成nranks份*/
             NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncSend, collAPI,
                                     (void*)((char*)info->sendbuff + r * info->count * ncclTypeSize(info->datatype)),
-                                    info->count, info->datatype, r, allowUB));
+                                    info->count, info->datatype, r/*目的方*/, allowUB));
+            /*将recv拆分成nrank份*/
             NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncRecv, collAPI,
                                     (void*)((char*)info->recvbuff + r * info->count * ncclTypeSize(info->datatype)),
-                                    info->count, info->datatype, r, allowUB));
+                                    info->count, info->datatype, r/*目的方*/, allowUB));
           }
         } else if (info->coll == ncclFuncGather) {
           size_t offset = 0;
           allowUB = captured;
-          NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncSend, collAPI, (void*)info->sendbuff, info->count, info->datatype,
-                                  info->root, allowUB));
+          /*对于gather(root是收集方）,所有rank均向root发送自已的数据片*/
+          NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncSend, collAPI, (void*)info->sendbuff/*发送buffer*/, info->count, info->datatype,
+                                  info->root/*发送root*/, allowUB));
           if (comm->rank == info->root) {
+        	/*而root rank，按offset收集需要自各rank接收的数据*/
             for (int r = 0; r < comm->nRanks; r++) {
               void* buff = (void*)((char*)info->recvbuff + offset);
               NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncRecv, collAPI, buff, info->count, info->datatype, r,
                                       allowUB));
-              offset += info->count * ncclTypeSize(info->datatype);
+              offset += info->count * ncclTypeSize(info->datatype);/*按照数据片大小结合rank编号进行偏移*/
             }
           }
         } else if (info->coll == ncclFuncScatter) {
           size_t offset = 0;
           allowUB = captured;
           if (comm->rank == info->root) {
+        	  /*对于scatter（root是发送方），root需要向所有rank发送nrank份数据*/
             for (int r = 0; r < comm->nRanks; r++) {
               void* buff = (void*)((char*)info->sendbuff + offset);
               NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncSend, collAPI, buff, info->count, info->datatype, r,
@@ -3471,6 +3548,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
               offset += info->count * ncclTypeSize(info->datatype);
             }
           }
+          /*所有rank需要自接收数据*/
           NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncRecv, collAPI, (void*)info->recvbuff, info->count, info->datatype,
                                   info->root, allowUB));
         } else if (!ncclCollConfigHasAlgSelection(&info->collConfig) && ceAvailable && comm->symmetricSupport &&
@@ -3480,6 +3558,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info/* �
           // route when the user passed an algorithm selection so the selection is honored.
           NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev));
         } else {
+        	/*其它集合通信处理*/
           NCCLCHECK(collTaskAppend(comm, info, opDev));
         }
       }

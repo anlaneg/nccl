@@ -58,6 +58,7 @@ constexpr static __host__ __device__ Int maxval(Int a, Int b, More... more) {
 
 #define ALIGN_SIZE(size, align) size = ((size + (align) - 1) / (align)) * (align)
 
+/*x/y向上取整*/
 template <typename X, typename Y, typename Z = decltype(X() + Y())>
 static __host__ __device__ constexpr Z divUp(X x, Y y) {
   return (x + y - 1) / y;
@@ -320,6 +321,8 @@ static __host__ __device__ int log2Down(Int x) {
   return (w - 1) - n;
 }
 
+/*取x的以2为底的对数，并对此对数向下取整
+ * 比如log2Up(8) = 3*/
 template <typename Int>
 static __host__ __device__ int log2Up(Int x) {
   int w, n;
@@ -353,6 +356,7 @@ static __host__ __device__ int log2Up(Int x) {
   return w - n;
 }
 
+/*向上取整到不少于x的最小2的幂*/
 template <typename Int>
 static __host__ __device__ Int pow2Up(Int x) {
   return Int(1) << log2Up(x);

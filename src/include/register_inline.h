@@ -11,7 +11,7 @@
 #include "comm.h"
 #include "register.h"
 
-/*查找<data,data+size>这一段内存对应的regCache*/
+/*查找<data,data+size>这一段内存是否被包含在一个更大的regCache中*/
 static inline ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, size_t size, struct ncclReg** outReg) {
   struct ncclRegCache* cache = &comm->regCache;
   *outReg = NULL;

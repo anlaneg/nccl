@@ -468,5 +468,5 @@ struct ncclTransport shmTransport = {
   "SHM",
   shmCanConnect,
   {shmSendSetup, shmSendConnect, shmSendFree, NULL, shmSendProxySetup, NULL, shmSendProxyFree, NULL},
-  {shmRecvSetup, shmRecvConnect, shmRecvFree, NULL, shmRecvProxySetup, NULL, shmRecvProxyFree, NULL}
+  {shmRecvSetup, shmRecvConnect, shmRecvFree, NULL, shmRecvProxySetup, NULL, shmRecvProxyFree/*不支持消息注册*/, NULL}
 };

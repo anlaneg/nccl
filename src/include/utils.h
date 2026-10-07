@@ -98,6 +98,7 @@ inline ncclResult_t getRandomData(void* buffer, size_t bytes) {
   return ncclSuccess;
 }
 
+/*求两个整数的最大公约数（Greatest Common Divisor）*/
 static inline int gcd(int a, int b) {
   // use the euclidian algorithm
   while (b != 0) {
@@ -405,6 +406,7 @@ inline T* ncclIntruQueueTail(ncclIntruQueue<T, next>* me) {
   return me->tail;
 }
 
+/*入队*/
 template <typename T, T* T::* next>
 inline void ncclIntruQueueEnqueue(ncclIntruQueue<T, next>* me, T* x) {
   x->*next = nullptr;/** 新节点的next指针设为nullptr */

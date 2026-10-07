@@ -119,7 +119,7 @@ static int busIdToCudaDev(int64_t busId) {
 }
 
 // CE memcpy support
-NCCL_PARAM(P2pUseCudaMemcpy, "P2P_USE_CUDA_MEMCPY", 0);
+NCCL_PARAM(P2pUseCudaMemcpy, "P2P_USE_CUDA_MEMCPY", 0);/*p2p是否采用内存copy*/
 static int useMemcpy = 0;
 static void initCeOperation();
 
@@ -454,6 +454,7 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   if (P2P_SAME_PID((comm->peerInfo + info->rank), myInfo) && (comm->peerInfo[info->rank].cudaDev != myInfo->cudaDev)) {
     req.refcount++;
   }
+  /*执行proxy连接*/
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_P2P, 1, info->rank, &send->proxyConn));
   if (useMemcpy) {
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, NULL, 0, &resources->proxyInfo,
@@ -1012,7 +1013,7 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size_t buffSize, int* peerRanks, int nPeers,
+static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff/*要注册的buffer*/, size_t buffSize/*buffer大小*/, int* peerRanks/*注册对应的一组对端rank*/, int nPeers,
                                       ncclIpcRegType type, struct ncclReg* regRecord, int* regBufFlag,
                                       uintptr_t* offsetOut, uintptr_t** peerRmtAddrsOut, bool* isLegacyIpc) {
   ncclResult_t ret = ncclSuccess;
@@ -1032,6 +1033,7 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
   *peerRmtAddrsOut = NULL;
   if (isLegacyIpc) *isLegacyIpc = false;
   if (regRecord && type != NCCL_IPC_COLLECTIVE && nPeers != 1) {
+	  /*p2p类型的注册只能有一个peer*/
     WARN("P2P IPC registration expected 1 peer, got %d", nPeers);
     ret = ncclInternalError;
     goto fail;
@@ -1049,6 +1051,7 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
     for (int p = 0; p < nPeers; p++) {
       int peerRank = peerRanks[p];
       if (peerRank < 0 || peerRank >= comm->nRanks) {
+    	  /*peerRank不合法*/
         WARN("rank %d invalid IPC peerRank %d nRanks %d", comm->rank, peerRank, comm->nRanks);
         ret = ncclInternalError;
         goto fail;
@@ -1082,16 +1085,19 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
         size_t regSize = (size_t)(regRecord->endAddr - regRecord->begAddr);
 
         if (baseAddr == NULL) {
+        	/*取得base地址及大小*/
           CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&baseAddr, &baseSize, (CUdeviceptr)regBeg), ret, fail);
           CUCHECKGOTO(cuPointerGetAttribute((void*)&legacyIpcCap, CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE,
                                             (CUdeviceptr)baseAddr),
                       ret, fail);
         }
 
+        /*检查是否为多段*/
         if ((uint64_t)baseAddr + baseSize < (uint64_t)regBeg + regSize) multiSegment = true;
         if (multiSegment && (!ncclCuMemEnable() || !ncclParamMultiSegmentRegister())) goto exit;
 
         if (!multiSegment) {
+        	/*不是多段，只申请ipcInfo*/
           NCCLCHECKGOTO(ncclCalloc(&ipcInfo, 1), ret, fail);
           totalMappedSize = baseSize;
         }
@@ -1105,6 +1111,7 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
         // get the CUDA legacy mem handle, or through cuMem*.
         if (ncclCuMemEnable()) {
           if (multiSegment) {
+        	  /*执行多端注册*/
             NCCLCHECKGOTO(ipcHandleMultiSegmentRegistration((CUdeviceptr)regBeg, regSize, comm, proxyConn,
                                                             &totalMappedSize, &numSegments, &ipcInfo),
                           ret, fail);
@@ -1162,6 +1169,7 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
           INFO(NCCL_REG,
                "rank %d - IPC registering buffer %p size %zu (baseAddr %p totalSize %zu numSegments %d) to peer %d",
                comm->rank, userbuff, buffSize, (void*)regRecord->begAddr, totalMappedSize, numSegments, peerRank);
+          /*发送msg注册（传递rpc注册）*/
           NCCLCHECKGOTO(ncclProxyCallBlocking(comm, proxyConn, ncclProxyMsgRegister, ipcInfo,
                                               sizeof(p2pIpcExpInfo) * numSegments, &rmtRegAddr, sizeof(void*)),
                         ret, fail);
@@ -1288,8 +1296,8 @@ static ncclResult_t cleanupIpc(struct ncclComm* comm, struct ncclCommCallback* c
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcGraphRegisterBuffer(ncclComm* comm, const void* userbuff, size_t buffSize, int* peerRanks,
-                                        int nPeers, ncclIpcRegType type, int* regBufFlag, uintptr_t* offsetOut,
+ncclResult_t ncclIpcGraphRegisterBuffer(ncclComm* comm, const void* userbuff/*要注册的buffer*/, size_t buffSize/*buffer大小*/, int* peerRanks/*对端peer*/,
+                                        int nPeers/*对端peer数*/, ncclIpcRegType type, int* regBufFlag, uintptr_t* offsetOut,
                                         uintptr_t** peerRmtAddrsOut, void* cleanupQueuePtr, int* nCleanupQueueElts) {
   ncclResult_t ret = ncclSuccess;
   void* baseAddr;
@@ -1303,9 +1311,12 @@ ncclResult_t ncclIpcGraphRegisterBuffer(ncclComm* comm, const void* userbuff, si
   *offsetOut = 0;
   *peerRmtAddrsOut = NULL;
   if (comm && userbuff && buffSize > 0 && nPeers > 0) {
+	  /*取此地址对应的base地址及大小*/
     NCCLCHECKGOTO(ncclCuMemGetAddressRange((CUdeviceptr)userbuff, buffSize, (CUdeviceptr*)&baseAddr, &baseSize, NULL),
                   ret, fail);
+    /*注册base地址及其大小（实现为填充cache)*/
     NCCLCHECKGOTO(ncclCommGraphRegister(comm, baseAddr, baseSize, (void**)&regRecord), ret, fail);
+    /*实现ipc注册buffer*/
     NCCLCHECKGOTO(ipcRegisterBuffer(comm, userbuff, buffSize, peerRanks, nPeers, type, regRecord, regBufFlag, offsetOut,
                                     peerRmtAddrsOut, &isLegacyIpc),
                   ret, fail);
@@ -1350,6 +1361,7 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
   void* regAddr = NULL;
   ncclResult_t ret = ncclSuccess;
   if (reqSize % sizeof(struct p2pIpcExpInfo) != 0) {
+	  /*发送的请求必须是N个p2pIpcExpInfo*/
     WARN("Invalid P2P IPC register request size %d, expected multiple of %zu", reqSize, sizeof(struct p2pIpcExpInfo));
     return ncclInternalError;
   }
@@ -1490,10 +1502,11 @@ fail:
   goto exit;
 }
 
+/*同机器通信使用的p2p*/
 struct ncclTransport p2pTransport = {"P2P",
                                      p2pCanConnect,
                                      {p2pSendSetup, p2pSendConnect, p2pSendFree, NULL, p2pSendProxySetup, NULL,
-                                      p2pSendProxyFree, NULL, p2pProxyRegister, p2pProxyDeregister},
+                                      p2pSendProxyFree, NULL, p2pProxyRegister/*p2p消息注册处理*/, p2pProxyDeregister},
                                      {p2pRecvSetup, p2pRecvConnect, p2pRecvFree, NULL, p2pRecvProxySetup, NULL,
                                       p2pRecvProxyFree, NULL, p2pProxyRegister, p2pProxyDeregister}};
 
@@ -1502,6 +1515,7 @@ static void initCeOperation() {
   if (!init) {
     useMemcpy = ncclParamP2pUseCudaMemcpy();
     if (useMemcpy) {
+    	/*默认useMemcpy是假*/
       p2pTransport.send.proxyConnect = p2pSendProxyConnect;
       p2pTransport.send.proxyProgress = p2pSendProxyProgress;
     }

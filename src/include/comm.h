@@ -171,7 +171,7 @@ struct ncclSharedResources {
 };
 
 struct ncclChannel {
-  struct ncclChannelPeer** peers;
+  struct ncclChannelPeer** peers;/*指出此channel需要到的peer*/
   struct ncclDevChannelPeer** devPeers;
   /* devPeer pointer array used for host side access */
   struct ncclDevChannelPeer** devPeersHostPtr;
@@ -184,6 +184,7 @@ struct ncclChannel {
 
   struct ncclNvls nvls;
 
+  /*channel编号*/
   int id; // index of this channel
   uint32_t workFifoProduced; // +1 successor of last used work fifo byte
 
@@ -195,14 +196,16 @@ struct ncclChannel {
 };
 
 struct ncclWorkBatchList {
-  struct ncclWorkBatchList* next;
+  struct ncclWorkBatchList* next;/*用于串连进队列*/
   struct ncclDevWorkBatch batch;
 };
 struct alignas(16) ncclWorkList {
   struct ncclWorkList* next;
-  enum ncclDevWorkType workType;
+  enum ncclDevWorkType workType;/*指明work类型*/
+  /*指明跟随的结构体大小*/
   int size; // Size of struct following this node
   // ncclDevWorkColl, ncclDevWorkColLReg, ncclDevWorkP2p[]...
+  /*此后是跟随的结构体*/
 };
 
 struct ncclCollnetHandleList {
@@ -363,7 +366,7 @@ struct ncclKernelPlan {
   // be the first member.
   struct ncclCommCallback reclaimer;
 
-  struct ncclComm* comm;
+  struct ncclComm* comm;/*此plane对应的comm*/
   struct ncclKernelPlan* next;
 
   bool persistent; // aka captured in a graph
@@ -376,26 +379,29 @@ struct ncclKernelPlan {
   int kernelDynSmem; // only for symmetric kernels
   void* kernelFn;
   union {
-    struct ncclDevKernelArgs* kernelArgs;
+    struct ncclDevKernelArgs* kernelArgs;/*存放此结构及devWorkBatch*/
     void* kernelSymArgs;
     struct ncclCeCollArgs* ceCollArgs;
     struct ncclRmaArgs* rmaArgs;
   };
   size_t kernelArgsSize;
+  /*指明当前使用的channel*/
   uint64_t channelMask; // bitset of which channels are present
   bool hasProxyOps; // does any channel have a non-empty proxyOpQueue
   // Any task with ncclProfileKernelCh; gates the captured host callback.
   bool hasProfilerOps;
   // Source of ncclTaskP2p::p2pPairId; incremented per addP2pToPlan() call.
-  uint16_t p2pPairCounter;
+  uint16_t p2pPairCounter;/*记录p2p操作配对数*/
   int threadPerBlock;
   int cgaClusterSize;  // per-launch CGA cluster size; defaults to comm->config.cgaClusterSize
   cudaEvent_t launchCompletionEvent;
 
   int collOpCount; // Number of collectives in this plan.
+  /*有多少个work batches*/
   int nWorkBatches; // Number of work batches.
   int nTasksBcast; // Number of bcast tasks in this plan.
   size_t workBytes; // Sum size of all work (in the fifo) in bytes.
+  /*记录要执行的work类型，比如ncclDevWorkP2p*/
   struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> workQueue;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> cleanupQueue;
   void* workBufPersistent;
@@ -476,7 +482,7 @@ inline bool ncclTaskCollSorterEmpty(struct ncclTaskCollSorter* me) {
 inline struct ncclTaskColl* ncclTaskCollSorterDequeueAll(struct ncclTaskCollSorter* me) {
   struct ncclTaskColl* head = me->head;
   if (head != nullptr) memset(me, 0, sizeof(*me));
-  return head;
+  return head;/*清空head内容*/
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -492,15 +498,15 @@ struct ncclKernelPlanner {
   //////////////////////////////////////////////////////////////////////////////
 
   struct Peer {
-    bool sendSeen, recvSeen;
+    bool sendSeen/*标记此peer有send任务*/, recvSeen/*标记此peer有recv任务*/;
     struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> sendQueue;/*发送队列*/
     struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> recvQueue;/*接收队列*/
-    struct ncclIntruQueue<struct ncclTaskBcast, &ncclTaskBcast::next> bcastQueue;/*广播队列*/
+    struct ncclIntruQueue<struct ncclTaskBcast, &ncclTaskBcast::next> bcastQueue;/*广播队列，用于处理ncclTaskBcast*/
   };
   struct ncclTaskCollSorter collSorter;
   struct Peer* peers /*[nRanks]*/;/*以gpu编号为索引，记录每个gpu的发送和接收队列 */
-  int nTasksColl, nTasksP2p/**p2p task数目 */, nTasksBcast, nTasksRma;
-  int nTasksP2pSend/**p2p send task数目 */, nTasksP2pRecv/**p2p recv task数目 */;
+  int nTasksColl, nTasksP2p/**p2p task数目（含send,recv) */, nTasksBcast, nTasksRma;
+  int nTasksP2pSend/**p2p task数目(仅含send) */, nTasksP2pRecv/**p2p task数目(仅含recv) */;
   int nCollConfigLaunchCompletionEvents; // Original event-bearing collective requests in this group.
 
   struct {
@@ -557,7 +563,7 @@ struct ncclKernelPlanner {
   //////////////////////////////////////////////////////////////////////////////
 
   // List of kernel plans built form tasks.
-  struct ncclIntruQueue<struct ncclKernelPlan, &ncclKernelPlan::next> planQueue;
+  struct ncclIntruQueue<struct ncclKernelPlan, &ncclKernelPlan::next> planQueue;/*存放待执行的kernel plan*/
   // First of the unlaunched kernels in `planQueue`
   struct ncclKernelPlan* unlaunchedPlansHead;
 };
@@ -592,9 +598,9 @@ struct ncclComm {
   struct ncclCudaContext* context;
   struct ncclSharedResources* sharedRes;
   /* map to top parent ranks. */
-  int* topParentRanks;
+  int* topParentRanks;/*将当前communicator内的rank,映射到最顶层父comm的rank编号*/
   int* topParentLocalRanks;
-  struct ncclChannel channels[MAXCHANNELS];
+  struct ncclChannel channels[MAXCHANNELS];/*指出有哪些channel*/
   struct ncclPeerInfo* peerInfo;/*nRanks+1个peerInfo结构（记录自身及peer信息）*/
   struct ncclTopoSystem* topo;/*拓扑(由xml获得的)*/
   struct ncclProxyConnector* gproxyConn;
@@ -698,14 +704,14 @@ struct ncclComm {
   // Channels (per peer) for p2p
   int p2pnChannels;
   int p2pnChannelsPerPeer;/*设置p2p每个peer之间channel总数*/
-  int p2pSchedGroupSize;
+  int p2pSchedGroupSize;/*组大小，这个数组可被所有Node上的rank数平分*/
   int p2pMaxPeers;/*系统peer最大数*/
 
   // Should this comm allocate LL buffers for network P2P connections?
   bool allocP2pNetLLBuffers;
 
   // Buffer sizes
-  int buffSizes[NCCL_NUM_PROTOCOLS];
+  int buffSizes[NCCL_NUM_PROTOCOLS];/*各协议对应的buffer大小*/
   int p2pChunkSize;
   int nvlsChunkSize;
 
@@ -802,7 +808,7 @@ struct ncclComm {
   struct P2pSchedulePair {
     int sendRank;/**发给谁 */
     int recvRank;/**收自谁 */
-  }* p2pSchedule;
+  }* p2pSchedule;/*结合rank自身推算的某round中可以发给谁，收谁（整个集群不会出现同一round时均发或收某rank的情况）*/
 
   struct ncclKernelPlanner planner;
   struct ncclRawTaskQueue rawTaskQueue;

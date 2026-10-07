@@ -626,6 +626,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   comm->planner.bcast_info.maxBcastPeer = INT_MIN;
 
   if (comm->topParentRanks == NULL) {
+	  /*申请nRanks个，用于记录父comm的rank编号，现在没有父填各rank编号*/
     NCCLCHECK(ncclCalloc(&comm->topParentRanks, comm->nRanks));
     for (int i = 0; i < comm->nRanks; ++i) comm->topParentRanks[i] = i;
   }
@@ -1036,7 +1037,9 @@ NCCL_PARAM(P2pPciChunkSize, "P2P_PCI_CHUNKSIZE", (1 << 17)); /* 128 kB */
 NCCL_PARAM(P2pNvlChunkSize, "P2P_NVL_CHUNKSIZE", (1 << 19)); /* 512 kB */
 
 static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
+	/*环境变量提供的各protocol buffer大小*/
   int64_t envs[NCCL_NUM_PROTOCOLS] = {ncclParamLlBuffSize(), ncclParamLl128BuffSize(), ncclParamBuffSize()};
+  /*系统提供的各protocol buffer大小*/
   int defaults[NCCL_NUM_PROTOCOLS] = {DEFAULT_LL_BUFFSIZE, DEFAULT_LL128_BUFFSIZE, DEFAULT_BUFFSIZE};
 
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
@@ -1109,18 +1112,24 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   // For MNNVL systems, we need to split the nodes into different groups to guarantee the proper PXN
   // aggregation factor.
   int groupSize = (comm->nNodes > 1) ? ncclParamGroupSize() : comm->maxLocalRanks;
+  /*遍历所有节点，修正groupSize,保证所有节点的rank数可被groupSize平分*/
   for (int node = 0; node < comm->nNodes; node++) {
-    int localRanks = nodeRanks[node].localRanks;
+    int localRanks = nodeRanks[node].localRanks;/*此节点有多少local rank*/
+    /*不能整分工者localRanks比groupSize小，取公因数，保证可平分*/
     if (localRanks % groupSize != 0 || localRanks < groupSize) groupSize = gcd(groupSize, nodeRanks[node].localRanks);
   }
   comm->p2pSchedGroupSize = groupSize;
 
+  /*本rank在组内排第几个*/
   int local = comm->localRank % groupSize; // local id inside my group
+  /*本rank排第几组*/
   int group = comm->localRank / groupSize; // id of my group, incremented when going over the previous nodes
+  /*系统rank共分了几组*/
   int nGroups = comm->nRanks / groupSize;
+  /*将组数目扩大到2的幂*/
   int nGroupsPow2 = pow2Up(nGroups);
 
-  int *groupToNode = nullptr, *groupToLocal = nullptr;
+  int *groupToNode = nullptr, *groupToLocal/*此数组指出每个group的起始local rank编号*/ = nullptr;
   int groupCount = 0;
   uint32_t groupRound = 0, groupDelta = 0;
   int round = 0;
@@ -1128,20 +1137,27 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   NCCLCHECKGOTO(ncclCalloc(&groupToLocal, nGroups), ret, cleanup); // local offset of the group
   for (int n = 0; n < comm->nNodes; ++n) {
     if (0 != comm->nodeRanks[n].localRanks % groupSize) {
+    	/*上面已保证所有node上的rank数已达到groupSize均分，故报错*/
       WARN("nLocals = %d should be a diviser of the number of ranks in node %d = %d", groupSize, n,
            comm->nodeRanks[n].localRanks);
       ret = ncclInternalError;
       goto cleanup;
     }
+    /*此node上共有几组*/
     int nGroupsInNode = comm->nodeRanks[n].localRanks / groupSize;
+    /*填写当前主机情况*/
     for (int g = 0; g < nGroupsInNode; ++g) {
+      /*每增加一个下标增加groupSize大小，即此数组指出每个group的起始local rank编号*/
       groupToLocal[groupCount] = g * groupSize;
+      /*由group到node编号*/
       groupToNode[groupCount] = n;
-      groupCount++;
+      groupCount++;/*组数增加*/
     }
+    /*切到下一个主机*/
     if (n < comm->node) group += nGroupsInNode;
   }
   if (groupCount != nGroups) {
+	  /*组数与实际填充不一致，报错*/
     WARN("Group creation failed: %d vs %d", groupCount, nGroups);
     ret = ncclInternalError;
     goto cleanup;
@@ -1155,13 +1171,17 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   do {
     if (groupDelta < nGroups) {
       // Filter nonsensical group deltas
-      int sendGroup = (group + groupDelta) % nGroups;
-      int recvGroup = (group - groupDelta + nGroups) % nGroups;
-      int sendNode = groupToNode[sendGroup];
-      int recvNode = groupToNode[recvGroup];
+      int sendGroup = (group + groupDelta) % nGroups;/*发送组号*/
+      int recvGroup = (group - groupDelta + nGroups) % nGroups;/*接收组号*/
+      int sendNode = groupToNode[sendGroup];/*发送组号对应的节点编号*/
+      int recvNode = groupToNode[recvGroup];/*接收组号对应的节点编号*/
+      /*遍历所有组*/
       for (int delta = 0; delta < groupSize; delta++) {
-        int sendLocal = groupToLocal[sendGroup] + (local + delta) % groupSize;
+    	/*随着delta的增加,sendLocal从当前ran的local rank位置开始向后递增*/
+        int sendLocal = groupToLocal[sendGroup]/*send所在组起始local rank编号*/ + (local/*本rank在组内排序*/ + delta) % groupSize;
+        /*随着delta的增加,sendLocal从当前ran的local rank位置开始向前递减*/
         int recvLocal = groupToLocal[recvGroup] + (local - delta + groupSize) % groupSize;
+        /*所以p2pSchedule实际上是站在本rank角度填充round轮后，本rank的消息可到达哪里*/
         comm->p2pSchedule[round].sendRank = nodeRanks[sendNode].localRankToRank[sendLocal];
         comm->p2pSchedule[round].recvRank = nodeRanks[recvNode].localRankToRank[recvLocal];
         round += 1;
@@ -1890,7 +1910,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->proxyState = parent->sharedRes->proxyState;
     ncclAtomicRefCountIncrement(&parent->sharedRes->proxyState->refCount);
   } else {
-    /**创建proxy线程与GPU,NIC相互衔接 */
+    /**创建proxy线程*/
     NCCLCHECKGOTO(ncclProxyCreate(comm), ret, fail);
   }
   NCCLCHECKGOTO(ncclCalloc(&comm->gproxyConn, comm->nRanks), ret, fail);
@@ -2017,11 +2037,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     if (str && strcasecmp(str, "GROUP") == 0) {
       mode = ncclLaunchModeGroup;
     } else {
-      mode = ncclLaunchModeParallel;
+      mode = ncclLaunchModeParallel;/*默认launch mode*/
     }
     // In theory we could be racing with other communicators not associated with
     // this one if the user is connecting to multiple ncclUniqueId's concurrently.
-    modeOld = COMPILER_ATOMIC_EXCHANGE(&ncclParamLaunchMode, mode, std::memory_order_relaxed);
+    modeOld = COMPILER_ATOMIC_EXCHANGE(&ncclParamLaunchMode/*设置mode*/, mode, std::memory_order_relaxed);
     if (modeOld == ncclLaunchModeInvalid && str && str[0] != '\0') {
       INFO(NCCL_ENV, "NCCL_LAUNCH_MODE set by environment to %s",
            mode == ncclLaunchModeParallel ? "PARALLEL" : "GROUP");

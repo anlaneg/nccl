@@ -150,10 +150,10 @@ struct recvNetResources {
 };
 
 struct netRegInfo {
-  uintptr_t buffer;
-  size_t size;
+  uintptr_t buffer;/*要注册的buffer*/
+  size_t size;/*buffer大小*/
   // Number of physical mapped segments that a buffer spans
-  int numSegments;
+  int numSegments;/*物理内存segments数目*/
 };
 
 /* Determine if two peers can communicate with NET */
@@ -584,7 +584,7 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
 
     populateCommNetAttrs(comm, recv, &args.netAttr);
 
-    /*发送opId对应的请求*/
+    /*发送proxymsg连接请求*/
     NCCLCHECK(ncclProxyCallAsync(comm, &recv->proxyConn, ncclProxyMsgConnect, &args, sizeof(netRecvConnectArgs),
                                  sizeof(struct connectMap), opId));
   } else {
@@ -860,6 +860,7 @@ static ncclResult_t ncclNetGetDeviceHandle(ncclNetDeviceType type, int version, 
   return ncclSuccess;
 }
 
+/*net transport的proxy connect处理*/
 static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState,
                                      void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   struct sendNetResources* resources = (struct sendNetResources*)(connection->transportResources);
@@ -895,6 +896,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
       }
       if (comms->sendComm[resources->channelId] == NULL &&
           comms->activeConnect[resources->channelId] == (resources->tpLocalRank + 1)) {
+    	  /*执行net插件connect*/
         ret = proxyState->ncclNet->connect(proxyState->netContext, resources->netDev, req->handle,
                                            comms->sendComm + resources->channelId, &resources->netDeviceHandle);
       }
@@ -1340,7 +1342,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       ncclProfilerRecordProxyOpEventState(s, args, ncclProfilerProxyOpInProgress_v4);
       if (!sub->reg) sub->sendMhandle = resources->mhandles[args->protocol];
     }
-    args->state = ncclProxyOpProgress;
+    args->state = ncclProxyOpProgress;/*切换到progress状态*/
   }
   args->idle = 1;
   if (args->state == ncclProxyOpProgress) {
@@ -1382,9 +1384,9 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       // Check whether we received data from the GPU and send it to the network
       if (sub->transmitted < sub->posted && sub->transmitted < sub->done + NCCL_STEPS) {
         int buffSlot = (sub->base + sub->transmitted) % NCCL_STEPS;
-        volatile uint64_t* recvTail = &resources->recvMem->tail;
+        volatile uint64_t* recvTail = &resources->recvMem->tail;/*指向tail*/
         uint64_t tail = sub->base + sub->transmitted;
-        if (connFifo[buffSlot].size != -1 && (*recvTail > tail || p == NCCL_PROTO_LL)) {
+        if (connFifo[buffSlot].size != -1 && (*recvTail/*读取gpu通知*/ > tail || p == NCCL_PROTO_LL)) {
           // We have something to receive, let's check if it's completely ready.
           int size = connFifo[buffSlot].size;
           bool shared = (p == NCCL_PROTO_SIMPLE) && resources->shared;
@@ -1799,9 +1801,10 @@ ncclResult_t ncclNetDeregBuffer(struct ncclComm* comm, struct ncclProxyConnector
   return ncclSuccess;
 }
 
-static ncclResult_t netRegisterBuffer(ncclComm* comm, const void* userbuff, size_t buffSize,
-                                      struct ncclConnector** peerConns, int nPeers, struct ncclReg* regRecord,
-                                      int* outRegBufFlag, void** outHandle, int numSegments) {
+/*为一组连接注册mr*/
+static ncclResult_t netRegisterBuffer(ncclComm* comm, const void* userbuff/*要注册的buffer*/, size_t buffSize/*要注册的buffer大小*/,
+                                      struct ncclConnector** peerConns, int nPeers/*指明connect数目*/, struct ncclReg* regRecord,
+                                      int* outRegBufFlag/*出参，是否注册成功*/, void** outHandle/*出参，提供npeer个注册对应的handle*/, int numSegments) {
   ncclResult_t ret = ncclSuccess;
   int gdrFlag = 1;
 
@@ -1823,26 +1826,28 @@ static ncclResult_t netRegisterBuffer(ncclComm* comm, const void* userbuff, size
       }
       if (found) {
         *outRegBufFlag = 1;
-        outHandle[p] = netHandle->handle;
+        outHandle[p] = netHandle->handle;/*已注册，就填充*/
         INFO(NCCL_REG, "rank %d - NET reuse buffer %p size %ld (baseAddr %p size %ld) handle %p", comm->rank, userbuff,
              buffSize, (void*)regRecord->begAddr, regRecord->endAddr - regRecord->begAddr, netHandle->handle);
       } else {
-        struct netRegInfo info = {regRecord->begAddr, regRecord->endAddr - regRecord->begAddr, numSegments};
+    	  /*指明注册信息*/
+        struct netRegInfo info = {regRecord->begAddr, regRecord->endAddr - regRecord->begAddr, numSegments/*段数目*/};
         void* handle = NULL;
 
         if (peerConn->conn.flags & NCCL_DIRECT_NIC) {
+        	/*发送proxymsgRegister消息*/
           NCCLCHECKGOTO(ncclProxyCallBlocking(comm, peerProxyConn, ncclProxyMsgRegister, &info,
-                                              sizeof(struct netRegInfo), &handle, sizeof(void*)),
+                                              sizeof(struct netRegInfo), &handle/*出参，msg注册handle*/, sizeof(void*)),
                         ret, fail);
           if (handle) {
             struct ncclRegNetHandles* netHandle;
-            regRecord->state |= NET_REG_COMPLETE;
+            regRecord->state |= NET_REG_COMPLETE;/*标记已完成*/
             NCCLCHECK(ncclCalloc(&netHandle, 1));
             netHandle->handle = handle;
             netHandle->proxyConn = peerProxyConn;
             netHandle->next = regRecord->netHandleHead;
-            regRecord->netHandleHead = netHandle;
-            outHandle[p] = handle;
+            regRecord->netHandleHead = netHandle;/*挂到regRecord链上（查重复注册用）*/
+            outHandle[p] = handle;/*记录结果*/
             *outRegBufFlag = 1;
             INFO(NCCL_REG, "rank %d - NET register userbuff %p (handle %p), buffSize %ld", comm->rank, userbuff, handle,
                  buffSize);
@@ -1877,13 +1882,16 @@ ncclResult_t ncclNetLocalRegisterBuffer(ncclComm* comm, const void* userbuff, si
 
   *outRegBufFlag = 0;
   if (comm && userbuff && buffSize > 0 && nPeers > 0) {
+	  /*检查是否已被一个更大的buffer注册过了*/
     NCCLCHECKGOTO(ncclRegFind(comm, userbuff, buffSize, &regRecord), ret, fail);
     NCCLCHECKGOTO(ncclRegLocalIsValid(regRecord, &isValid), ret, fail);
     if (isValid) {
+    	/*已注册且有效*/
       int numSegments = 0;
       NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr)userbuff, buffSize, (CUdeviceptr*)&base, &baseSize,
                                          &numSegments));
       if (numSegments > 1 && !ncclParamMultiSegmentRegister()) goto exit;
+      /*再注册*/
       NCCLCHECKGOTO(netRegisterBuffer(comm, userbuff, buffSize, peerConns, nPeers, regRecord, outRegBufFlag, outHandle,
                                       numSegments),
                     ret, fail);
@@ -1903,6 +1911,7 @@ struct ncclNetCleanupCallback {
   struct ncclReg* reg;
 };
 
+/*执行buffer注册清理*/
 static ncclResult_t cleanupNet(struct ncclComm* comm, struct ncclCommCallback* cb) {
   struct ncclNetCleanupCallback* obj = (struct ncclNetCleanupCallback*)cb;
   NCCLCHECK(ncclCommGraphDeregister(obj->comm, obj->reg));
@@ -1910,9 +1919,10 @@ static ncclResult_t cleanupNet(struct ncclComm* comm, struct ncclCommCallback* c
   return ncclSuccess;
 }
 
+/*为一组connector注册buffer*/
 ncclResult_t ncclNetGraphRegisterBuffer(
-  ncclComm* comm, const void* userbuff, size_t buffSize, struct ncclConnector** peerConns, int nPeers,
-  int* outRegBufFlag, void** outHandle,
+  ncclComm* comm, const void* userbuff/*buffer地址*/, size_t buffSize/*buffer大小*/, struct ncclConnector** peerConns/*一组连接*/, int nPeers/*连接数目*/,
+  int* outRegBufFlag/*出错成功与否标记*/, void** outHandle/*为每个连接注册成功后返回的操作handle*/,
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, int* nCleanupQueueElts) {
   ncclResult_t ret = ncclSuccess;
   struct ncclNetCleanupCallback* record = NULL;
@@ -1923,20 +1933,27 @@ ncclResult_t ncclNetGraphRegisterBuffer(
   *outRegBufFlag = 0;
   if (comm && userbuff && buffSize > 0 && nPeers > 0) {
     int numSegments = 0;
-    NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr)userbuff, buffSize, (CUdeviceptr*)&base, &baseSize, &numSegments));
+    /*取这块地址对应的地址段信息*/
+    NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr)userbuff, buffSize, (CUdeviceptr*)&base/*起始基地址*/, &baseSize/*总大小*/, &numSegments/*segments数目*/));
     if (numSegments > 1 && !ncclParamMultiSegmentRegister()) goto exit;
-    NCCLCHECKGOTO(ncclCommGraphRegister(comm, base, baseSize, (void**)&regRecord), ret, fail);
+    /*这是一个注册cache,用于防止重复注册的过程*/
+    NCCLCHECKGOTO(ncclCommGraphRegister(comm, base/*注册基地址*/, baseSize/*大小*/, (void**)&regRecord/*出参，注册结果*/), ret, fail);
+
+    /*为peerConns注册buffer*/
     NCCLCHECKGOTO(netRegisterBuffer(comm, userbuff, buffSize, peerConns, nPeers, regRecord, outRegBufFlag, outHandle,
                                     numSegments),
                   ret, fail);
     if (*outRegBufFlag) {
+    	/*注册成功*/
       NCCLCHECKGOTO(ncclCalloc(&record, 1), ret, fail);
       record->base.fn = cleanupNet;
       record->comm = comm;
       record->reg = regRecord;
+      /*挂清理队列*/
       ncclIntruQueueEnqueue(cleanupQueue, (struct ncclCommCallback*)record);
       if (nCleanupQueueElts) *nCleanupQueueElts += 1;
     } else {
+    	/*注册不成功，清理已经注册成功的*/
       NCCLCHECKGOTO(ncclCommGraphDeregister(comm, regRecord), ret, fail);
     }
   }
@@ -1947,16 +1964,18 @@ fail:
   goto exit;
 }
 
+/*先尝试dmafd式注册，如果不成，非多sgemnt的，采用普通mr注册*/
 static ncclResult_t sendProxyRegBuffer(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState,
-                                       void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+                                       void* reqBuff, int reqSize, void* respBuff, int respSize, int* done/*出参，是否完成mr注册*/) {
   void* handle = NULL;
-  struct netRegInfo* info = (struct netRegInfo*)reqBuff;
+  struct netRegInfo* info = (struct netRegInfo*)reqBuff;/*取请求消息格式netRegInfo*/
   struct sendNetResources* resources = (struct sendNetResources*)(connection->transportResources);
   // The value of ret is ignored
   ncclResult_t ret;
   bool needReg = true;
 
   if (reqSize != sizeof(struct netRegInfo)) {
+	  /*请求格式有误*/
     WARN("Invalid NET register request size %d, expected %zu", reqSize, sizeof(struct netRegInfo));
     return ncclInternalError;
   }
@@ -1972,27 +1991,32 @@ static ncclResult_t sendProxyRegBuffer(struct ncclProxyConnection* connection, s
     int dmabuf_fd;
     size_t dmaBufSize = info->size;
     ALIGN_SIZE(dmaBufSize, ncclOsGetPageSize());
+    /*将一个已经映射到 CUDA 虚拟地址空间的地址范围，转换成一个可用于跨进程或跨设备共享的“句柄”。（dma fd)*/
     CUCHECKGOTO(cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)info->buffer, dmaBufSize,
                                               CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
                                               getHandleForAddressRangeFlags(resources->useGdr)),
                 ret, peermem);
+    /*注册dma buffer*/
     NCCLCHECKGOTO(proxyState->ncclNet->regMrDmaBuf(resources->netSendComm, (void*)info->buffer, info->size,
                                                    NCCL_PTR_CUDA, 0ULL, dmabuf_fd, &handle),
                   ret, peermem);
     (void)close(dmabuf_fd);
     needReg = false;
   }
+  /*peermem情况*/
 peermem:
 #endif
-  if (needReg) {
+  if (needReg/*即上面dma buffer注册不成功*/) {
     // Non-dmabuf regMr does not support multiple physical segments
     if (numSegments > 1) {
+    	/*不支持大于1的segments注册*/
       INFO(NCCL_NET | NCCL_REG,
            "Buffer %p (size %zu, numSegments %d) not registered as DMABuf is not available. Non-DMABuf registration "
            "currently does not support multiple segments.",
            (void*)info->buffer, info->size, numSegments);
       goto fail;
     } else {
+    	/*走单segment的mr注册*/
       NCCLCHECKGOTO(proxyState->ncclNet->regMr(resources->netSendComm, (void*)info->buffer, info->size, NCCL_PTR_CUDA,
                                                &handle),
                     ret, fail);
@@ -2003,11 +2027,11 @@ exit:
   if (handle) {
     struct proxyMemHandle* memHandle;
     NCCLCHECK(ncclCalloc(&memHandle, 1));
-    memHandle->handle = handle;
+    memHandle->handle = handle;/*返回注册mr获得的handle*/
     ncclIntruQueueEnqueue(&connection->proxyMemHandleQueue, memHandle);
   }
-  memcpy(respBuff, (void*)&handle, sizeof(void*));
-  *done = 1;
+  memcpy(respBuff, (void*)&handle, sizeof(void*));/*提供给response*/
+  *done = 1;/*标明处理完成*/
   return ncclSuccess;
 fail:
   handle = NULL;
@@ -2015,7 +2039,7 @@ fail:
 }
 
 static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState,
-                                       void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+                                       void* reqBuff, int reqSize, void* respBuff, int respSize, int* done/*出参，是否已处理*/) {
   void* handle = NULL;
   struct netRegInfo* info = (struct netRegInfo*)reqBuff;
   struct recvNetResources* resources = (struct recvNetResources*)(connection->transportResources);
@@ -2024,10 +2048,12 @@ static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, s
   bool needReg = true;
 
   if (reqSize != sizeof(struct netRegInfo)) {
+	  /*请求格式不对*/
     WARN("Invalid NET register request size %d, expected %zu", reqSize, sizeof(struct netRegInfo));
     return ncclInternalError;
   }
   if (respSize != sizeof(void*)) {
+	  /*响应大小不对*/
     WARN("Invalid NET register response size %d, expected %zu", respSize, sizeof(void*));
     return ncclInternalError;
   }
@@ -2039,11 +2065,12 @@ static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, s
     int dmabuf_fd;
     size_t dmaBufSize = info->size;
     ALIGN_SIZE(dmaBufSize, ncclOsGetPageSize());
-    /*得得dma fd及cuda设备*/
+    /*由buffer地址获得dmabuf fd*/
     CUCHECKGOTO(cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)info->buffer, dmaBufSize,
                                               CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
                                               getHandleForAddressRangeFlags(resources->useGdr)),
                 ret, peermem);
+    /*采用dmabuff方式注册*/
     NCCLCHECKGOTO(proxyState->ncclNet->regMrDmaBuf(resources->netRecvComm, (void*)info->buffer, info->size,
                                                    NCCL_PTR_CUDA, 0ULL, dmabuf_fd, &handle),
                   ret, peermem);
@@ -2052,15 +2079,17 @@ static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, s
   }
 peermem:
 #endif
-  if (needReg) {
+  if (needReg/*仍需要注册*/) {
     // Non-dmabuf regMr does not support multiple physical segments
     if (numSegments > 1) {
+    	/*非dmabuf 的mr注册当前不支持多segments注册*/
       INFO(NCCL_NET | NCCL_REG,
            "Buffer %p (size %zu, numSegments %d) not registered as DMABuf is not available. Non-DMABuf registration "
            "currently does not support multiple segments.",
            (void*)info->buffer, info->size, numSegments);
       goto fail;
     } else {
+    	/*注册此buffer*/
       NCCLCHECKGOTO(proxyState->ncclNet->regMr(resources->netRecvComm, (void*)info->buffer, info->size, NCCL_PTR_CUDA,
                                                &handle),
                     ret, fail);
@@ -2071,8 +2100,8 @@ exit:
   if (handle) {
     struct proxyMemHandle* memHandle;
     NCCLCHECK(ncclCalloc(&memHandle, 1));
-    memHandle->handle = handle;
-    ncclIntruQueueEnqueue(&connection->proxyMemHandleQueue, memHandle);
+    memHandle->handle = handle;/*响应注册后返回的handle*/
+    ncclIntruQueueEnqueue(&connection->proxyMemHandleQueue, memHandle);/*入队指明已处理*/
   }
   memcpy(respBuff, (void*)&handle, sizeof(void*));
   *done = 1;
@@ -2136,8 +2165,8 @@ struct ncclTransport netTransport = {
   canConnect,/*判断是否可连接*/
   /*负责send*/
   {sendSetup, sendConnect, sendFree, proxySharedInit, sendProxySetup, sendProxyConnect, sendProxyFree,
-   sendProxyProgress, sendProxyRegBuffer, sendProxyDeregBuffer},
+   sendProxyProgress/*sendProxy处理*/, sendProxyRegBuffer/*send注册buffer*/, sendProxyDeregBuffer},
   /*负责recv*/
   {recvSetup, recvConnect, recvFree, proxySharedInit, recvProxySetup, recvProxyConnect, recvProxyFree,
-   recvProxyProgress, recvProxyRegBuffer, recvProxyDeregBuffer}
+   recvProxyProgress, recvProxyRegBuffer/*recv注册buffer*/, recvProxyDeregBuffer}
 };

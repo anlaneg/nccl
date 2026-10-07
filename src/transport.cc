@@ -138,7 +138,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   struct ncclConnect** recvData = NULL; // Points to entries inside data for given recv connection within a channel
   struct ncclConnect** sendData = NULL; // Points to entries inside data for given send connection within a channel
   int done = 0;
-  /**/
+  /*每round最多连接多少peer*/
   int maxPeers = ncclParamConnectRoundMaxPeers();
 
   struct timeval timeStart, timeLast;
@@ -163,7 +163,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     int recvPeer = (comm->rank - i + comm->nRanks) % comm->nRanks;/*从前一个收取*/
     int sendPeer = (comm->rank + i) % comm->nRanks;/*向后一个发送（这样就构成了一个ring)*/
     uint64_t recvMask = comm->connectRecv[recvPeer];/*接收可使用的channel id*/
-    uint64_t sendMask = comm->connectSend[sendPeer];
+    uint64_t sendMask = comm->connectSend[sendPeer];/*发送可使用的channel id*/
 
     // Data[i] contains all ncclConnect information for all send and receive connections with a given send and recv
     // peer
@@ -181,6 +181,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     int sendChannels = 0, recvChannels = 0/*记录recvChannel总数*/;
     int type;/*确定使用哪种transport*/
     TIME_START(0);
+    /*遍历并按mask要求的进行接收 transport选择*/
     for (int c = 0; c < MAXCHANNELS; c++) {
       if (recvMask & (1ULL << c)) {
         NCCLCHECKGOTO(selectTransport<0/*接收*/>(comm, graph, recvData[p] + recvChannels++/*待初始化的recvChannel*/, c/*channel编号*/, recvPeer/*收取目标*/, connIndex, &type), ret,
@@ -200,6 +201,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
 
     TIME_START(2);
     if (sendPeer == recvPeer) {
+    	/*sendPeer与recvPeer相同*/
       if (recvChannels + sendChannels) {
         NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag, data[p],
                                     sizeof(struct ncclConnect) * (recvChannels + sendChannels)),

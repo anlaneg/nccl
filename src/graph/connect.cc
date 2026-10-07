@@ -452,6 +452,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
       int r = firstRanks[n];/*此node上的首个rank*/
       ringRecv[c * nNodes + n] = allTopoRanks[r]->ringRecv[c];
       ringSend[c * nNodes + n] = allTopoRanks[r]->ringSend[c];
+      /*节点首个rank指向其parent,child0,child1的值*/
       treeToParent[c * nNodes + n] = allTopoRanks[r]->treeToParent[c];
       treeToChild0[c * nNodes + n] = allTopoRanks[r]->treeToChild0[c];
       treeToChild1[c * nNodes + n] = allTopoRanks[r]->treeToChild1[c];

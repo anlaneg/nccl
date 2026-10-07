@@ -149,7 +149,7 @@ struct ncclTransportComm {
                                int reqSize, void* respBuff, int respSize, int* done);
   /*Proxy 侧连接销毁*/
   ncclResult_t (*proxyFree)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState);
-  /**Proxy 线程主循环的核心回调*/
+  /**Proxy 线程主循环的核心回调，负责处理各rank投递给proxy的ProxyOp*/
   ncclResult_t (*proxyProgress)(struct ncclProxyState* proxyState, struct ncclProxyArgs*);
   /**用户 buffer 预注册*/
   ncclResult_t (*proxyRegister)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState,

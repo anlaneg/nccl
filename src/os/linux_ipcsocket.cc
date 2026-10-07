@@ -89,6 +89,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank/*当前rank*/, ui
   return ncclSuccess;
 }
 
+/*取ipcsocket对应的fd*/
 ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, ncclIpcFd* fd) {
   if (handle == NULL) {
     WARN("ncclIpcSocketGetFd: pass NULL socket");
@@ -114,7 +115,8 @@ ncclResult_t ncclIpcSocketClose(ncclIpcSocket* handle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, ncclIpcFd* recvFd) {
+/*读取handle获得消息及fd*/
+ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr/*出参，读到的消息*/, int hdrLen, ncclIpcFd* recvFd/*出参，读到的fd*/) {
   struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
   struct iovec iov[1];
 
@@ -136,12 +138,13 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
     iov[0].iov_len = sizeof(dummy_buffer);
   } else {
     iov[0].iov_base = hdr;
-    iov[0].iov_len = hdrLen;
+    iov[0].iov_len = hdrLen;/*收取的长度*/
   }
 
   msg.msg_iov = iov;
   msg.msg_iovlen = 1;
 
+  /*读取消息*/
   while ((ret = recvmsg(handle->fd, &msg, 0)) <= 0) {
     if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
       WARN("UDS: Receiving data over socket failed : %d", errno);
@@ -158,6 +161,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
         return ncclSystemError;
       }
 
+      /*取捎带的fd*/
       memmove(recvFd, CMSG_DATA(cmptr), sizeof(*recvFd));
     } else {
       WARN("UDS: Receiving data over socket %s failed", handle->socketName);
@@ -173,6 +177,7 @@ ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket* handle, ncclIpcFd* recvFd) {
   return ncclIpcSocketRecvMsg(handle, NULL, 0, recvFd);
 }
 
+/*向rank/hash构成的目的地址发送消息*/
 ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, ncclIpcFd sendFd, int rank,
                                   uint64_t hash) {
   struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
@@ -192,12 +197,12 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
   memset(&cliaddr, 0, sizeof(cliaddr));
   cliaddr.sun_family = AF_UNIX;
 
-  int len = snprintf(temp, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_SOCKNAME_STR, rank, hash);
+  int len = snprintf(temp, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_SOCKNAME_STR, rank/*送哪个rank*/, hash/*对应的hash是什么*/);
   if (len > (sizeof(cliaddr.sun_path) - 1)) {
     WARN("UDS: Cannot connect to provided name for socket. Name too large");
     return ncclInternalError;
   }
-  strcpy(cliaddr.sun_path, temp);
+  strcpy(cliaddr.sun_path, temp);/*设置目的*/
 
   int useAbstractSocket = ncclParamIpcUseAbstractSocket();
   if (useAbstractSocket) {
@@ -207,6 +212,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
   TRACE(NCCL_INIT, "UDS: Sending hdr %p len %d fd %d to UDS socket %s", hdr, hdrLen, sendFd, temp);
 
   if (sendFd != -1) {
+	  /*要捎带fd*/
     memset(&control_un, '\0', sizeof(control_un));
     msg.msg_control = control_un.control;
     msg.msg_controllen = sizeof(control_un.control);
@@ -222,6 +228,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
   msg.msg_namelen = sizeof(struct sockaddr_un);
 
   if (hdr == NULL) {
+	  /*未指定内容时，随便加此dummy buffer*/
     iov[0].iov_base = (void*)dummy_buffer;
     iov[0].iov_len = sizeof(dummy_buffer);
   } else {
@@ -232,6 +239,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
   msg.msg_iovlen = 1;
   msg.msg_flags = 0;
 
+  /*执行消息发送*/
   ssize_t sendResult;
   while ((sendResult = sendmsg(handle->fd, &msg, 0)) < 0) {
     if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
@@ -245,8 +253,9 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
   return ncclSuccess;
 }
 
+/*向rank发送fd(sendFd)*/
 ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket* handle, ncclIpcFd sendFd, int rank, uint64_t hash) {
-  return ncclIpcSocketSendMsg(handle, NULL, 0, sendFd, rank, hash);
+  return ncclIpcSocketSendMsg(handle, NULL/*发送的内容为空*/, 0/*发送的内容长度为0*/, sendFd/*要捎带的显存fd*/, rank, hash);
 }
 
 int ncclIpcFdClose(ncclIpcFd fd) {

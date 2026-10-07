@@ -23,7 +23,7 @@ ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size/*内存长度*/, bool isGraph, void** handle) {
+ncclResult_t ncclRegister(struct ncclComm* comm, void* data/*要注册的buffer*/, size_t size/*内存长度*/, bool isGraph/*是否gpu内存*/, void** handle) {
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
 
   struct ncclRegCache* cache = &comm->regCache;
@@ -39,6 +39,7 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size/*内存
     size_t baseSize;
     int numSegments;
     int legacyIpcCap;
+    /*data地址对应的base地址和内存大小*/
     CUCHECK(cuMemGetAddressRange(&base, &baseSize, (CUdeviceptr)data));
     CUmemorytype memType;
     CUCHECK(cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, (CUdeviceptr)data));
@@ -162,17 +163,20 @@ ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, vo
   return ncclSuccess;
 }
 
-ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
+ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff/*要注册的buffer*/, size_t size/*内存大小*/, void** handle) {
   if (ncclP2pUsesMemcpy()) {
+	  /*p2p之间采用memcpy，直接返回不注册*/
     *handle = NULL;
     INFO(NCCL_REG, "Skipping graph registration for buffer %p size %zi (P2pUsesMemcpy=%d)", buff, size,
          ncclP2pUsesMemcpy());
   } else {
+	  /*注册gpu内存，实现为一个cache,如果已注册就返回注册信息，没注册就增加注册（实际上是一个登记过程，防止重复注册）*/
     NCCLCHECK(ncclRegister(comm, buff, size, true/*指明为gpu内存注册*/, handle));
   }
   return ncclSuccess;
 }
 
+/*负责buffer解注册*/
 static ncclResult_t commDeregister(struct ncclComm* comm, bool isGraph, struct ncclReg* reg) {
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
   struct ncclRegCache* cache = &comm->regCache;
@@ -204,6 +208,7 @@ ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle) {
   return ncclSuccess;
 }
 
+/*解注册buffer*/
 ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg* handle) {
   NCCLCHECK(commDeregister(comm, true, handle));
   return ncclSuccess;

@@ -114,13 +114,13 @@ typedef int ncclShmDescriptor;  /* stub when no OS defined */
 
 // Shared memory handle structure
 struct ncclShmHandleInternal {
-  ncclShmDescriptor shmDesc;
-  char* shmPath;
-  char* shmPtr;
-  void* devShmPtr;
-  size_t shmSize;
-  size_t realShmSize;
-  int* refcount;
+  ncclShmDescriptor shmDesc;/*指定共享内存描述符*/
+  char* shmPath;/*共享内存在fs中的路径*/
+  char* shmPtr;/*共享内存在主机侧的指针*/
+  void* devShmPtr;/*共享内存在设备侧的指针*/
+  size_t shmSize;/*共享内存大小*/
+  size_t realShmSize;/*共享内存实际申请大小*/
+  int* refcount;/*共享内存的使用内存位置后有一块用于存放引用计数，此值记录引用计数指针*/
 };
 
 /* Initialize the shared memory handle structure */

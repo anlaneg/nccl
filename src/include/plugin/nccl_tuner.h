@@ -37,6 +37,10 @@ typedef ncclNvlDomainInfo_v6_t ncclNvlDomainInfo_t;
 #define NCCL_NUM_ALGORITHMS NCCL_NUM_ALGORITHMS_V5 // Tree/Ring/CollNet*/PAT
 
 #define NCCL_PROTO_UNDEF -1
+/*LL buffer
+ * LL‑Buffer 是 GPU 侧预先分配好的一块内部环形临时缓冲区
+ * （device memory），专门服务于小消息 p2p 通信（LL 协议）
+ **/
 #define NCCL_PROTO_LL 0
 #define NCCL_PROTO_LL128 1
 #define NCCL_PROTO_SIMPLE 2

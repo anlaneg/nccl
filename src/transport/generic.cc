@@ -9,6 +9,7 @@
 #include "transport.h"
 #include "bootstrap.h"
 
+/*是否支持多sement注册*/
 NCCL_PARAM(MultiSegmentRegister, "MULTI_SEGMENT_REGISTER", 1);
 
 ncclResult_t ncclTransportRingConnect(struct ncclComm* comm) {

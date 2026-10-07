@@ -46,7 +46,7 @@ typedef enum : uint8_t {
 } ncclPattern_t;
 
 enum ncclProxyOpState {
-  ncclProxyOpNone,
+  ncclProxyOpNone,/*无op*/
   ncclProxyOpReady,
   ncclProxyOpProgress
 };
@@ -73,7 +73,7 @@ struct ncclProxyOp {
   struct ncclProxyConnection* connection;
   ssize_t nbytes;
   uint64_t opCount;
-  int root;
+  int root;/*对应的读写目的rank*/
   int next;
   int nsteps;
   size_t chunkSize;
@@ -88,7 +88,7 @@ struct ncclProxyOp {
   uint8_t /*ncclDevRedOp_t*/ redOp;
   uint8_t /*ncclFunc_t*/ coll;
   uint8_t /*ncclFunc_t*/ collAPI;
-  uint8_t /*ncclPattern_t*/ pattern;
+  uint8_t /*ncclPattern_t*/ pattern;/*例如：发/收*/
   uint8_t protocol;
   uint8_t algorithm;
   uint8_t reg;
@@ -215,21 +215,27 @@ struct ncclProxyArgs {
 // p2p work contains a send and recv proxy op hence the 2x before it.
 #define MAX_OPS_PER_PEER (2 * MAXCHANNELS * 2 * NCCL_MAX_DEV_WORK_P2P_PER_BATCH)
 
+/*此结构位于共享内存（与本机其它rank进程共享）*/
 struct ncclProxyOpsPool {
+	/*每个元素代表一个待执行的代理操作，每个local rank最多有MAX_OPS_PER_PEER个空间*/
   struct ncclProxyOp ops[MAX_OPS_PER_PEER * NCCL_MAX_LOCAL_RANKS];
+  /*标记当前待处理操作链表的头部*/
   volatile int nextOps;
+  /*标记当前待处理操作链表的尾部*/
   volatile int nextOpsEnd;
+  /*每个local rank对应一个freeOps，消费者更新此位置表示本local rank哪个ops可以用了*/
   volatile int freeOps[NCCL_MAX_LOCAL_RANKS];
-  int syncObjectsInitialized;
-  std::mutex mutex;
-  std::condition_variable cond;
+  int syncObjectsInitialized;/*指明是否已初始化*/
+  std::mutex mutex;/*锁（进程间共享）*/
+  std::condition_variable cond;/*条件变量（进程间共享）*/
 };
 
 struct ncclProxyOps {
-  ncclProxyOpsPool* pool;
+  ncclProxyOpsPool* pool;/*共享内存poll,与其机其它rank共享*/
+  /*共享内存handle,此结构的pool与其它local rank共享，此handle是本机的map handle*/
   ncclShmHandle_t handle;
   int count;
-  int freeOp;
+  int freeOp;/*缓存本rank可用的首个ops索引，其它的从op->next中取*/
   int nextOps;
   int nextOpsEnd;
 };
@@ -261,12 +267,12 @@ struct ncclSharedNetComms {
 struct ncclProxyPool;
 struct ncclProxyProgressState {
   // Used by main threads to send work to progress thread
-  struct ncclProxyOpsPool* opsPool;
-  ncclShmHandle_t handle;
-  char opsPoolShmSuffix[16];
+  struct ncclProxyOpsPool* opsPool;/*指向进程间共享的ops pool*/
+  ncclShmHandle_t handle;/*opsPool共享内存的详细信息*/
+  char opsPoolShmSuffix[16];/*opsPool对应的共享内存路径后缀（前缀大家都一样）*/
 
   std::thread thread;
-  std::atomic<int> stop{0};
+  std::atomic<int> stop{0};/*停线程标记*/
   struct ncclProxyPeer** localPeers;
   struct ncclSharedNetComms* netComms[NCCL_MAX_NETDEVS];
   struct ncclProxyArgs* active;
@@ -287,7 +293,7 @@ struct ncclExpectedProxyResponse {
 
 struct ncclProxyAsyncOp {
   int type;/**操作类型 */
-  struct ncclProxyConnection* connection;
+  struct ncclProxyConnection* connection;/*指针，从socket收取*/
   int reqSize, respSize;
   char *reqBuff, *respBuff;
   void* opId;
@@ -295,11 +301,12 @@ struct ncclProxyAsyncOp {
 };
 
 struct ncclProxyLocalPeer {
-  struct ncclSocket sock;
-  int tpRank;
-  int tpLocalRank;
+  struct ncclSocket sock;/*peer的收发socket*/
+  int tpRank;/*本rank编号*/
+  int tpLocalRank;/*本机rank对应的编号*/
   ncclProxyAsyncOp* asyncOps;/**用于挂异步操作的队列 */
   int asyncOpCounter;
+  /*为每个peer连接分配的id号*/
   uint64_t id; // Unique id per accepted peer for connection identification
 };
 
@@ -313,29 +320,29 @@ struct ncclProxyRpcResponseHeader {
 
 // UDS support
 struct ncclIpcHdr {
-  int type;
-  int rank;
+  int type;/*消息类型*/
+  int rank;/*目的rank*/
   int reqSize;
   int respSize;
-  void* opId;
+  void* opId;/*目的hash(与rank共同组成唯一目的地）*/
   uint64_t data[16]; // 128-bytes
 };
 
 struct ncclProxyState {
   int refCount;
   struct ncclComm* comm;
-  int tpRank;
-  int tpnRanks;
-  int tpLocalnRanks;
-  int cudaDev;
+  int tpRank;/*自身rank编号*/
+  int tpnRanks;/*系统共有多少rank*/
+  int tpLocalnRanks;/*本节点上共有多少个rank编号*/
+  int cudaDev;/*对应的gpu*/
   int p2pnChannels;
   int p2pChunkSize;
   int nChannels;
   int buffSizes[NCCL_NUM_PROTOCOLS];
   bool allocP2pNetLLBuffers;
-  bool dmaBufSupport;
+  bool dmaBufSupport;/*是否支持dmabuf*/
   ncclNet_t* ncclNet;/*网络插件（比如ncclNetIb)*/
-  ncclCollNet_t* ncclCollNet;
+  ncclCollNet_t* ncclCollNet;/*collnet插件*/
   struct ncclGinState* ginState;
   uint32_t* abortFlag;
   bool directMode;
@@ -344,14 +351,14 @@ struct ncclProxyState {
   std::thread thread;
   std::thread threadUDS;
   struct ncclSocket* listenSock;/*记录proxy监听的地址*/
-  struct ncclIpcSocket ipcSock;/*记录unix socket（监听了rank+uds[rank])地址*/
+  struct ncclIpcSocket ipcSock;/*记录unix socket（监听了rank+uds[rank])地址,ncclProxyServiceUDS负责处理*/
   int stop;
   ncclResult_t asyncResult;
 
   // Used by main thread
   union ncclSocketAddress* peerAddresses;/*各rank监听的地址*/
   struct ncclSocket* peerSocks;
-  struct ncclProxyOps* proxyOps;
+  struct ncclProxyOps* proxyOps;/*每个本机rank一个proxyOps结构（通过localRank索引）*/
   void** sharedDevMems;
   int peerArraySize;  // Size of peerSocks/proxyOps/sharedDevMems arrays (tpNRanks)
   struct ncclIpcSocket peerIpcSock; // cuMEM API support (UDS)
@@ -359,7 +366,7 @@ struct ncclProxyState {
   uint64_t* peerAddressesUDS; // cuMem API support (UDS)
 
   // Progress thread
-  struct ncclProxyProgressState progressState;
+  struct ncclProxyProgressState progressState;/*progress线程state*/
 
   // Network plugin
   void* netContext;
@@ -388,11 +395,12 @@ struct proxyMemHandle {
 };
 
 struct ncclProxyConnection {
-  int send/*是否为发送*/, transport/*连接对应的transport,比如TRANSPORT_NET*/, shared;
-  int tpLocalRank, sameProcess;
-  struct ncclSocket* sock;
+  int send/*是否为发送*/, transport/*连接对应的transport,比如TRANSPORT_NET,其相对指明了ncclTransports数组的下标*/, shared;
+  int tpLocalRank/*本机此rank编号*/, sameProcess/*是否同进程*/;
+  struct ncclSocket* sock;/*连接使用的socket*/
+  /*连接从属的peer(通过此id可以找到peer)*/
   uint64_t peerId; // Initialized with peer->id, used for connection checks
-  struct ncclTransportComm* tcomm;
+  struct ncclTransportComm* tcomm;/*此连接对应的transport comm（比如同机的，不同机的）,见ncclTransports数组成员*/
   struct ncclProxyArgs* proxyAppend;
   struct ncclProxyArgs** proxyAppendPtr;
   void* transportResources;
@@ -401,6 +409,7 @@ struct ncclProxyConnection {
   proxyConnectState state;
   struct ncclCollNetSharedRes* collNet;
   int needsProxyProgress;
+  /*记录已注册的memory(这个是由net层面具体完成后直接入队的）*/
   struct ncclIntruQueue<struct proxyMemHandle, &proxyMemHandle::next> proxyMemHandleQueue;
 };
 

@@ -381,7 +381,7 @@ ncclResult_t ncclScatterConfig(const void* sendbuff, void* recvbuff, size_t coun
 }
 
 /**提供send操作 */
-NCCL_API(ncclResult_t, ncclSend, const void* sendbuff/**当前gpu要发送的数据指针 */, size_t count/**发送数据数量 */, ncclDataType_t datatype/**发送数据类型 */, int peer/**目标gpu编号 */, ncclComm_t comm,
+NCCL_API(ncclResult_t, ncclSend, const void* sendbuff/**当前gpu要发送的数据指针 */, size_t count/**发送数据数量 */, ncclDataType_t datatype/**发送数据类型 */, int peer/**发送目标rank */, ncclComm_t comm,
          cudaStream_t stream);
 ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer, ncclComm_t comm,
                       cudaStream_t stream) {

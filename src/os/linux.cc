@@ -343,7 +343,8 @@ ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock) {
   return socketConnectCheck(sock, ret, __func__);
 }
 
-ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int block,
+/*按操作处理收/发*/
+ncclResult_t ncclOsSocketProgressOpt(int op/*操作*/, struct ncclSocket* sock, void* ptr, int size, int* offset, int block,
                                      int* closed) {
   int bytes = 0;
   *closed = 0;
@@ -352,17 +353,21 @@ ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr,
   if (sock->asyncFlag || sock->abortFlag) block = 0;
   do {
     if (op == NCCL_SOCKET_RECV) {
-      bytes = recv(sock->socketDescriptor, data + (*offset), size - (*offset), block ? 0 : MSG_DONTWAIT);
+    	/*收取，并填充data*/
+      bytes = recv(sock->socketDescriptor, data + (*offset), size - (*offset), block/*是否阻塞*/ ? 0 : MSG_DONTWAIT);
     }
     if (op == NCCL_SOCKET_SEND) {
+    	/*发送*/
       bytes = send(sock->socketDescriptor, data + (*offset), size - (*offset),
                    block ? MSG_NOSIGNAL : MSG_DONTWAIT | MSG_NOSIGNAL);
     }
     if (op == NCCL_SOCKET_RECV && bytes == 0) {
+    	/*收取时返回0，需要关闭socket*/
       *closed = 1;
       return ncclSuccess;
     }
     if (bytes == -1) {
+    	/*出错*/
       if ((op == NCCL_SOCKET_SEND && errno == EPIPE) || (op == NCCL_SOCKET_RECV && errno == ECONNRESET)) {
         *closed = 1;
         return ncclSuccess;
@@ -561,18 +566,19 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
   return ncclSuccess;
 }
 
+/*初始化mutex,cond在多进程间共享*/
 void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized) {
   if (initialized != NULL && *initialized) return;
   pthread_mutexattr_t mutexAttr;
   pthread_mutexattr_init(&mutexAttr);
-  pthread_mutexattr_setpshared(&mutexAttr, PTHREAD_PROCESS_SHARED);
+  pthread_mutexattr_setpshared(&mutexAttr, PTHREAD_PROCESS_SHARED);/*指明在进程间共享*/
   pthread_mutex_t* mutexHandle = mutex.native_handle();
   pthread_mutex_init(mutexHandle, &mutexAttr);
   pthread_mutexattr_destroy(&mutexAttr);
 
   pthread_condattr_t condAttr;
   pthread_condattr_init(&condAttr);
-  pthread_condattr_setpshared(&condAttr, PTHREAD_PROCESS_SHARED);
+  pthread_condattr_setpshared(&condAttr, PTHREAD_PROCESS_SHARED);/*指明在进程间共享*/
   pthread_cond_t* condHandle = cond.native_handle();
   pthread_cond_init(condHandle, &condAttr);
   pthread_condattr_destroy(&condAttr);
@@ -629,6 +635,7 @@ ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity) {
 }
 
 int ncclOsGetCpu() {
+	//获取当前线程正在哪个 CPU 核心上运行。
   return sched_getcpu();
 }
 
@@ -776,8 +783,8 @@ ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, s
 #include <stdlib.h>
 
 void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSize, size_t realShmSize, char* hptr,
-                         void* dptr, bool create, struct ncclShmHandleInternal* handle) {
-  handle->shmDesc = shmDesc;
+                         void* dptr, bool create/*是否创建*/, struct ncclShmHandleInternal* handle) {
+  handle->shmDesc = shmDesc;/*指定共享内存描述符*/
   handle->shmPtr = hptr;
   handle->devShmPtr = dptr;
   handle->shmSize = shmSize;
@@ -788,33 +795,36 @@ void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSiz
     handle->shmPath = (char*)malloc(slen + 1);
     memcpy(handle->shmPath, shmPath, slen + 1);
     INFO_LOC(NCCL_ALLOC_HOST, "SHM path string Size %d pointer %p", slen + 1, handle->shmPath);
-    if (hptr) memset(hptr, 0, shmSize);
+    if (hptr) memset(hptr, 0, shmSize);/*初始化共享内存为全零*/
   } else {
+	  /*非创建呢况下，不给path赋值*/
     handle->shmPath = NULL;
   }
 }
 
-ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr,
-                           int refcount, struct ncclShmHandleInternal** handle) {
+ncclResult_t ncclOsShmOpen(char* shmPath/*share memory路径，如果为空，则函数会自已在/dev/shm/下构造*/, size_t shmPathSize/*shmPath空间大小*/, size_t shmSize/*共享内存大小*/, void** shmPtr/*出参，共享内存在主机侧指针*/, void** devShmPtr/*出参，共享内存在设备侧指针*/,
+                           int refcount/*引用计数大于0，则为创建*/, struct ncclShmHandleInternal** handle/*出参，此共享内存信息*/) {
   int fd = -1;
   char* hptr = NULL;
   void* dptr = NULL;
   ncclResult_t ret = ncclSuccess;
   struct ncclShmHandleInternal* tmphandle;
   bool create = refcount > 0 ? true : false;
-  const size_t refSize = sizeof(int);
-  const size_t realShmSize = shmSize + refSize;
+  const size_t refSize = sizeof(int);/*用于保存引用计数*/
+  const size_t realShmSize = shmSize + refSize;/*真实的共享内存大小需要增加refSize考虑*/
 
   *handle = NULL;
   *shmPtr = NULL;
+  /*申请1个tmpHandle*/
   EQCHECKGOTO(tmphandle = (struct ncclShmHandleInternal*)calloc(1, sizeof(struct ncclShmHandleInternal)), NULL, ret,
               fail);
 
   if (create) {
     if (shmPath[0] == '\0') {
+    	/*未指定share memory路径，自已构造*/
       snprintf(shmPath, shmPathSize, "/dev/shm/nccl-XXXXXX");
     retry_mkstemp:
-      fd = mkstemp(shmPath);
+      fd = mkstemp(shmPath);/*创建share memory*/
       if (fd < 0) {
         if (errno == EINTR) {
           INFO(NCCL_ALL, "mkstemp: Failed to create %s, error: %s (%d) - retrying", shmPath, strerror(errno), errno);
@@ -825,10 +835,12 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, vo
         goto fail;
       }
     } else {
+    	/*用户指明了share memory路径，这里执行创建*/
       SYSCHECKGOTO(fd = open(shmPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
     }
 
   retry_fallocate:
+  /*设置共享内存大小*/
     if (fallocate(fd, 0, 0, realShmSize) != 0) {
       if (errno == EINTR) {
         INFO(NCCL_ALL, "fallocate: Failed to extend %s to %ld bytes, error: %s (%d) - retrying", shmPath, realShmSize,
@@ -841,9 +853,11 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, vo
     }
     INFO_LOC(NCCL_ALLOC_HOST, "Allocated %ld bytes of shared memory in %s", realShmSize, shmPath);
   } else {
+	  /*无需创建共享内存，则直接打开*/
     SYSCHECKGOTO(fd = open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
   }
 
+  /*映射共享内存*/
   hptr = (char*)mmap(NULL, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (hptr == MAP_FAILED) {
     WARN("Error: Could not map %s size %zu, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
@@ -853,29 +867,34 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, vo
   }
 
   if (create) {
+	  /*创建情况：设置引用计数（引用计数安排在共享内存的后面）*/
     *(int*)(hptr + shmSize) = refcount;
   } else {
+	  /*非创建情况：减少引用计数*/
     int remref = ncclAtomicRefCountDecrement((int*)(hptr + shmSize));
     if (remref == 0) {
+    	/*引用计数降为0，移除文件*/
       if (unlink(shmPath) != 0) {
         INFO(NCCL_ALLOC, "unlink shared memory %s failed, error: %s (%d)", shmPath, strerror(errno), errno);
       }
     }
   }
 
-  if (devShmPtr) {
+  if (devShmPtr/*如果不为空，则主机侧的内存注册给设备侧*/) {
     INFO(NCCL_ALLOC,
          "SHM legacy: sharing buffer with GPU via cudaHostRegister + cudaHostGetDevicePointer (host %p size %ld)",
          (void*)hptr, (long)realShmSize);
     cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
     CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
+    /*将这块内存注册给GPU，使其可以dma访问*/
     CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterPortable | cudaHostRegisterMapped), ret,
                   fail);
-    CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, (void*)hptr, 0), ret, fail);
+    CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr/*获得此hptr注册后的地址*/, (void*)hptr, 0), ret, fail);
     CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
   }
 
-  ncclOsShmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
+  /*初始化此共享内存*/
+  ncclOsShmHandleInit(fd, shmPath, shmSize, realShmSize, hptr/*此共享内存在主机侧地址*/, dptr/*此共享内存在设备侧地址*/, create, tmphandle);
 exit:
   *shmPtr = hptr;
   if (devShmPtr) *devShmPtr = dptr;

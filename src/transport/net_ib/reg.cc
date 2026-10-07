@@ -16,6 +16,8 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
   size_t pages = ((uintptr_t)data + size - addr + pageSize - 1) / pageSize;/*取这段内存占用多少页*/
   std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
   for (int slot = 0; /*true*/; slot++) {
+	  /*先在cache中查，上层为了为每个connector注册buffer，会每个connector都发注册，但如果这些connector落到同一个ib
+	   * 就会出现同一个mr被多次注册，因此在这里加一级缓存，以解决重复注册问题*/
     if (slot == cache->population || addr < cache->slots[slot].addr) {
       // didn't find in cache
       if (cache->population == cache->capacity) {
@@ -62,7 +64,7 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       return ncclSuccess;
     } else if ((addr >= cache->slots[slot].addr) &&
                ((addr - cache->slots[slot].addr) / pageSize + pages) <= cache->slots[slot].pages) {
-    	/*被cache命中，直接返回之前获得的mr*/
+    	/*被cache命中，直接返回之前获得的mr，保证引用计数加1*/
     	cache->slots[slot].refs += 1;
       *mhandle = cache->slots[slot].mr;
       return ncclSuccess;
@@ -113,6 +115,7 @@ ncclResult_t ncclIbDeregMrInternal(ncclIbNetCommDevBase* base, ibv_mr* mhandle) 
   for (int i = 0; i < cache->population; i++) {
     if (mhandle == cache->slots[i].mr) {
       if (0 == --cache->slots[i].refs) {
+    	  /*仅引用计数减为0，才真正的执行ib解注册*/
         memmove(&cache->slots[i], &cache->slots[--cache->population], sizeof(struct ncclIbMr));
         if (cache->population == 0) {
           free(cache->slots);

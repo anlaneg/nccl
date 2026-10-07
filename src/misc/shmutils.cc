@@ -12,8 +12,9 @@
 #include <stdlib.h>
 #include "compiler.h"
 
-ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr,
-                         int refcount, ncclShmHandle_t* handle) {
+/*创建共享内存*/
+ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize/*共享内存大小*/, void** shmPtr, void** devShmPtr/*入出参，此值为空时，不映射给gpu；否则返回GPU映射后地址*/,
+                         int refcount/*引用计数*/, ncclShmHandle_t* handle/*出参，共享内存详细信息*/) {
   struct ncclShmHandleInternal* internalHandle = NULL;
   ncclResult_t ret = ncclOsShmOpen(shmPath, shmPathSize, shmSize, shmPtr, devShmPtr, refcount, &internalHandle);
   *handle = (ncclShmHandle_t)internalHandle;

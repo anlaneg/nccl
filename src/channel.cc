@@ -10,7 +10,8 @@
 #include "gdrwrap.h"
 #include "transport.h"
 
-ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
+/*初始化channel*/
+ncclResult_t initChannel(struct ncclComm* comm, int channelId/*channel编号*/) {
   struct ncclChannel* channel = &comm->channels[channelId];
   if (channel->id != -1) return ncclSuccess;
 

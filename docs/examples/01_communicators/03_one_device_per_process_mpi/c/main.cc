@@ -181,17 +181,18 @@ int main(int argc, char *argv[]) {
 
   // Generate NCCL unique ID (only rank 0 needs to do this)
   if (mpi_rank == 0) {
-    NCCLCHECK(ncclGetUniqueId(&nccl_id));
+    NCCLCHECK(ncclGetUniqueId(&nccl_id));/*获得nccl_id*/
     printf("Rank 0 generated NCCL unique ID for all processes\n");
   }
 
   // Share the unique ID with all processes using MPI broadcast
+  /*与其它进程共享这个nccl_id*/
   MPI_Bcast(&nccl_id, NCCL_UNIQUE_ID_BYTES, MPI_CHAR, 0, MPI_COMM_WORLD);
   printf("INFO: Rank %d received NCCL unique ID\n", mpi_rank);
 
   // Create NCCL communicator for this process
   // This is where each process joins the distributed NCCL communicator
-  NCCLCHECK(ncclCommInitRank(&comm, mpi_size, nccl_id, mpi_rank));
+  NCCLCHECK(ncclCommInitRank(&comm, mpi_size, nccl_id, mpi_rank));/*初始化当前rank*/
   printf("  Rank %d created NCCL communicator\n", mpi_rank);
 
   // =========================================================================
@@ -208,7 +209,7 @@ int main(int argc, char *argv[]) {
          comm_rank, comm_size, comm_device);
 
   // Give all processes a chance to finish their printf
-  MPI_Barrier(MPI_COMM_WORLD);
+  MPI_Barrier(MPI_COMM_WORLD);/*等待其它进程完成初始化*/
 
   // =========================================================================
   // STEP 5: Clean shutdown and resource cleanup
@@ -246,6 +247,6 @@ int main(int argc, char *argv[]) {
            "etc.)\n");
   }
 
-  MPI_Finalize();
+  MPI_Finalize();/*执行销毁*/
   return 0;
 }

@@ -391,15 +391,15 @@ fail:
 }
 
 // Get the base and size of all segments that span a given user buffer
-static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t userBuffSize,
-                                                    CUdeviceptr* mappedPtrBase, size_t* totalMappedBufferSize,
-                                                    int* numSegments, bool* hasSysmemSegment = nullptr) {
+static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff/*buffer起始地址*/, size_t userBuffSize/*buffer大小*/,
+                                                    CUdeviceptr* mappedPtrBase/*出参，起始地址对应的base*/, size_t* totalMappedBufferSize/*出参，总buffer映射的大小*/,
+                                                    int* numSegments/*出参，总段数目*/, bool* hasSysmemSegment = nullptr) {
   *totalMappedBufferSize = 0;
   *mappedPtrBase = 0;
   if (numSegments) *numSegments = 0;
   CUdeviceptr userBuffStart = userBuff;
-  CUdeviceptr userBuffEnd = userBuffStart + userBuffSize;
-  CUdeviceptr mappedPtrEnd = userBuffStart;
+  CUdeviceptr userBuffEnd = userBuffStart + userBuffSize;/*buffer结束地址*/
+  CUdeviceptr mappedPtrEnd = userBuffStart;/*初始化为起始地址*/
   CUdeviceptr baseSend;
   size_t baseSendSize;
 
@@ -408,6 +408,8 @@ static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t
   }
 
   while (mappedPtrEnd < userBuffEnd) {
+	  //查询一个设备指针所指向的、由 CUDA 分配的内存块的基地址和总大小
+	  //即mappedPtrEnd这块内存其从baseSend开始，长度为baseSendSize
     CUCHECK(cuMemGetAddressRange(&baseSend, &baseSendSize, mappedPtrEnd));
 
     if (hasSysmemSegment != nullptr && *hasSysmemSegment == false) {
@@ -421,7 +423,7 @@ static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t
       CUCHECK(cuMemRelease(handle));
     }
 
-    if (*totalMappedBufferSize == 0) {
+    if (*totalMappedBufferSize == 0) {/*记录起始位置的base*/
       // Workaround for CPU backed buffers since baseSend can be 0 in some CUDA driver versions
       if (baseSend == 0) {
         *mappedPtrBase = userBuffStart;
@@ -429,14 +431,16 @@ static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t
         *mappedPtrBase = baseSend;
       }
     }
-    *totalMappedBufferSize += baseSendSize;
+    *totalMappedBufferSize += baseSendSize;/*增加总map大小*/
     // Workaround for CPU backed buffers since baseSend can be 0 in some CUDA driver versions
     if (baseSend == 0) {
       mappedPtrEnd = mappedPtrEnd + baseSendSize;
     } else {
+    	/*更新下一个起始地址*/
       mappedPtrEnd = baseSend + baseSendSize;
     }
 
+    /*增加segment数目*/
     if (numSegments) *numSegments = *numSegments + 1;
   }
   return ncclSuccess;

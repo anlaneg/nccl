@@ -34,7 +34,7 @@ typedef union {
 } ncclIpcDesc;
 
 enum ncclIpcRegType {
-  NCCL_IPC_SENDRECV = 0,
+  NCCL_IPC_SENDRECV = 0,/*p2p注册*/
   NCCL_IPC_COLLECTIVE = 1
 };
 
