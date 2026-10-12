@@ -342,7 +342,6 @@ static int ncclTopoUserP2pLevel = -1; // Initially "uninitialized".  When initia
 // Gets the user-provided value of NCCL_P2P_LEVEL/NCCL_P2P_DISABLE.  If the user did not provide any, the value
 // of the "level" argument is left unchanged.
 ncclResult_t ncclGetUserP2pLevel(int* level) {
-  /*依据环境变量设置ncclTopoUserP2pLevel*/
   if (ncclTopoUserP2pLevel == -1) NCCLCHECK(ncclGetLevel(&ncclTopoUserP2pLevel, "NCCL_P2P_DISABLE", "NCCL_P2P_LEVEL"));
   if (ncclTopoUserP2pLevel != -2) *level = ncclTopoUserP2pLevel;
   return ncclSuccess;

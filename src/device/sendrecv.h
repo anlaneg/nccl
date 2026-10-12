@@ -19,16 +19,16 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
     bool useLargeChunk = (work->sendIpcReg && ncclShmem.comm.isAllNvlink) || work->sendNetReg;
     int chunkSize = useLargeChunk ? NCCL_MAX_NET_SIZE : u32fp8Decode(work->sendChunkSize_u32fp8);
     int stepSize = useLargeChunk ? NCCL_MAX_NET_SIZE : ncclShmem.comm.p2pChunkSize;
-    Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1> prims(tid, tn, nullptr, &work->sendRank, work->sendAddr,
+    Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1> prims(tid, tn, nullptr, &work->sendRank/* 发送端rank */, work->sendAddr,
                                                                  nullptr,
                                                                  /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, work,
                                                                  stepSize);
     size_t cursor = 0;
     do {
       int n = min(size_t(chunkSize), bytes - cursor);
-      prims.directSend(cursor, cursor, n);
+      prims.directSend(cursor, cursor, n/*计划发送n个字节*/);
       cursor += n;
-    } while (cursor < bytes);
+    } while (cursor < bytes);/*循环直接发送完所有数据*/
   }
 
   template <typename Proto>
@@ -161,14 +161,18 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
         subtid, subtn, 0, false, 1, &work->sendAddr, 1, &work->recvAddr, (ssize_t)work->sendBytes);
     } else if (isSend) {
       if (work->sendProtoLL) {
+        /* 发送LL协议 */
         runSend<ProtoLL>(subtid, subtn, group, work);
       } else {
+        /* 发送简单协议 */
         runSend<ProtoSimple<1, 1>>(subtid, subtn, group, work);
       }
     } else {
       if (work->recvProtoLL) {
+        /* 接收LL协议 */
         runRecv<ProtoLL>(subtid, subtn, group, work);
       } else {
+        /* 接收简单协议 */
         runRecv<ProtoSimple<1, 1>>(subtid, subtn, group, work);
       }
     }

@@ -202,7 +202,7 @@ struct ncclWorkBatchList {
 struct alignas(16) ncclWorkList {
   struct ncclWorkList* next;
   enum ncclDevWorkType workType;/*指明work类型*/
-  /*指明跟随的结构体大小*/
+  /*指明跟随的结构体大小，upload时依据此值copy内容*/
   int size; // Size of struct following this node
   // ncclDevWorkColl, ncclDevWorkColLReg, ncclDevWorkP2p[]...
   /*此后是跟随的结构体*/
@@ -746,9 +746,9 @@ struct ncclComm {
   void* workFifoBufGdrHandle;
 
   // Monotonic number of bytes (mod 1<<32) sent to fifo.
-  uint32_t workFifoProduced;
+  uint32_t workFifoProduced;/*生产指针（用于指明填充起始位置）*/
   uint32_t workFifoProducedLastRecorded;
-  uint32_t workFifoConsumed;
+  uint32_t workFifoConsumed;/*消费者指针（用于指定生产者尾）*/
 
   // Intra-process sync
   /*本进程内首个rank(本进程可以负责多个rank)对应的comm指针
@@ -946,23 +946,27 @@ inline ncclResult_t ncclCommPollCallbacks(struct ncclComm* comm, bool waitSome) 
   return ncclSuccess;
 }
 
-inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm* comm, bool waitSome) {
+inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm* comm, bool waitSome/*是否阻塞等*/) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   while (true) {
-    struct ncclCommEventCallback* cb = ncclIntruQueueHead(&comm->eventCallbackQueue);
+	  /*cudaEvent 是标记点；先调用 `cudaEventRecord(event, stream)`，
+	   * 把 event 插入对应 CUDA 流的任务队列；GPU 侧等到流前面所有任务跑完之后，
+	   * 这个 event 才完成。Event 本身属于 CPU 侧对象，完成状态由 GPU 回写更新。*/
+    struct ncclCommEventCallback* cb = ncclIntruQueueHead(&comm->eventCallbackQueue);/*取首个callback*/
     if (cb == nullptr) break;
     cudaError_t ok;
     if (waitSome) {
-      ok = cudaEventSynchronize(cb->event);
+      ok = cudaEventSynchronize(cb->event);/*CPU 线程阻塞等待，直到该 event 标记已经完成（GPU 执行到这个记录点）。*/
       waitSome = false;
     } else {
-      ok = cudaEventQuery(cb->event);
-      if (ok == cudaErrorNotReady) break;
+      ok = cudaEventQuery(cb->event);/*非阻塞查询！只是轮询状态；CPU 线程不会阻塞。立刻返回。*/
+      if (ok == cudaErrorNotReady) break;/*event 尚未完成，GPU 还没跑到这个记录点*/
     }
-    ncclIntruQueueDequeue(&comm->eventCallbackQueue);
+    ncclIntruQueueDequeue(&comm->eventCallbackQueue);/*此event已处理完成，弹出event callback*/
     if (ok == cudaSuccess) {
+    	/*执行event callback*/
       NCCLCHECKGOTO(cb->fn(comm, cb), result, finish);
     } else {
       CUDACHECKGOTO(ok, result, finish);

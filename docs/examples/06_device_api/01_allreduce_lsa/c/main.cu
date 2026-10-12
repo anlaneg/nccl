@@ -154,9 +154,9 @@ void* allReduce(int my_rank, int total_ranks, int local_device, int devices_per_
 
   // Allocate memory for AllReduce operation
   size_t count = 1024 * 1024; // 1M elements
-  size_t size_bytes = count * sizeof(float);
+  size_t size_bytes = count * sizeof(float);/*1M float数据*/
 
-  float *h_data = (float*)malloc(size_bytes);
+  float *h_data = (float*)malloc(size_bytes);/*申请主机侧内存*/
   void* d_sendbuff;
   void* d_recvbuff;
   ncclWindow_t send_win;
@@ -164,7 +164,7 @@ void* allReduce(int my_rank, int total_ranks, int local_device, int devices_per_
 
   // Device API requires allocation compatible with symmetric memory allocation
   // This ensures memory can be accessed directly by device kernels from all ranks
-  NCCLCHECK(ncclMemAlloc(&d_sendbuff, size_bytes));
+  NCCLCHECK(ncclMemAlloc(&d_sendbuff, size_bytes));/*申请设备侧内存*/
   NCCLCHECK(ncclMemAlloc(&d_recvbuff, size_bytes));
 
   // ==========================================================================
@@ -178,9 +178,9 @@ void* allReduce(int my_rank, int total_ranks, int local_device, int devices_per_
 
   // Initialize data with rank-specific values for verification
   for (size_t i = 0; i < count; i++) {
-    h_data[i] = (float)my_rank;
+    h_data[i] = (float)my_rank;/*直主机侧内容，值全为rank编号*/
   }
-  CUDACHECK(cudaMemcpy(d_sendbuff, h_data, size_bytes, cudaMemcpyHostToDevice));
+  CUDACHECK(cudaMemcpy(d_sendbuff, h_data, size_bytes, cudaMemcpyHostToDevice));/*复制主机侧内存到设备侧*/
   printf("  Rank %d initialized data with value %d\n", my_rank, my_rank);
 
   // ==========================================================================

@@ -8,6 +8,7 @@
 #include "group.h"
 #include "debug.h"
 
+/*task入队到comm->mgmtTaskQueue队列*/
 ncclResult_t ncclMgmtTaskEnqueue(struct ncclAsyncJob* task, ncclResult_t (*func)(struct ncclAsyncJob*),
                                  void (*destructor)(void*), ncclComm_t comm) {
   ncclResult_t ret = ncclSuccess;

@@ -785,13 +785,13 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
     // The workFifoBuf lives in GDR mapped CUDA memory.
     NCCLCHECKGOTO(ncclGdrCudaCalloc(&comm->workFifoBuf, &comm->workFifoBufDev, comm->workFifoBytes,
                                     &comm->workFifoBufGdrHandle, comm->memManager),
-                  ret, fail);
+                  ret, fail);// workFifoBuf 在GPU显存；host通过GDRCopy mmap映射访问这块显存
     ncclCommPushCudaGdrFree(comm, comm->workFifoBufGdrHandle);
   } else {
     // The workFifoBuf lives in cudaHost memory.
     comm->workFifoBufGdrHandle = nullptr;
     NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->workFifoBuf, comm->workFifoBytes), ret, fail);
-    ncclCommPushCudaHostFree(comm, comm->workFifoBuf);
+    ncclCommPushCudaHostFree(comm, comm->workFifoBuf);// workFifoBuf 在 **host锁页(pinned)内存**（CPU物理内存，不是GPU显存）
     comm->workFifoBufDev = comm->workFifoBuf;
   }
 

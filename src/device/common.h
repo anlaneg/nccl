@@ -80,6 +80,7 @@ extern __shared__ ulong2
 #endif
 
 __device__ inline void* ncclScratchForWarp(int warp) {
+  /*获取warp需填写的shmem基地址*/
   return (char*)ncclShmemPerWarp + warp * ncclShmemScratchWarpSize();
 }
 
@@ -128,12 +129,14 @@ __device__ inline bool barrier_red_or(bool vote, int name, int nThreads) {
 }
 
 // Copy 16-byte aligned data. You must call with at least `(bytes+15)/16` threads.
-inline __device__ void copyToShmem16(int tid, void* dst, void const* src, int bytes) {
-  int offset = 16 * tid;
+inline __device__ void copyToShmem16(int tid/**线程id */, void* dst, void const* src/**数据起始地址 */, int bytes/*总数据量*/) {
+  int offset = 16 * tid;/*第个线程处理的起始偏移量*/
   if (offset < bytes) {
     uint64_t a = 0, b = 0;
+    /*从src加载16字节数据到a,b*/
     asm volatile("ld.v2.u64 {%0,%1},[%2];" : "=l"(a), "=l"(b) : "l"((char const*)src + offset) : "memory");
     uint32_t udst = (uint32_t)__cvta_generic_to_shared(dst);
+    /*将a,b内容写入udst+offset位置处*/
     asm volatile("st.shared.v2.u64 [%0],{%1,%2};" ::"r"(udst + offset), "l"(a), "l"(b) : "memory");
   }
 }
@@ -141,17 +144,17 @@ inline __device__ void copyToShmem16(int tid, void* dst, void const* src, int by
 // Must run with at least 64 threads
 __device__ __forceinline__ void loadWorkBatchToShmem(int tid, int tn, struct ncclDevKernelArgs const* args,
                                                      int batchIx) {
-  int lane = tid % WARP_SIZE;
+  int lane = tid % WARP_SIZE;/*当前线程在warp中的索引*/
   int workCursor = 0; // num works written in previous loop iterations.
   while (true) {
-    struct ncclDevWorkBatch batch = ((struct ncclDevWorkBatch*)(args + 1))[batchIx];
+    struct ncclDevWorkBatch batch = ((struct ncclDevWorkBatch*)(args + 1))[batchIx];/*每一个thread block处理一个batch */
 
     // fnsOfBitset[n] = index of n'th set bit in batch.offsetBitset.
     // PTX has instruction "fns" (find n-th set) but it expands to a lot of SASS,
     // since we know all lanes will be querying the same bitmask we can compute
     // much faster using shared memory.
     uint8_t* fnsOfBitset = (uint8_t*)ncclScratchForWarp(threadIdx.x / WARP_SIZE);
-    __syncwarp();
+    __syncwarp();/*等待所有warp完成fnsOfBitset的计算*/
     if (uint32_t(batch.offsetBitset) & (1u << lane)) {
       int nWorksBelow = __popc(uint32_t(batch.offsetBitset) & ((1u << lane) - 1));
       fnsOfBitset[nWorksBelow] = lane;
@@ -438,14 +441,14 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   __syncthreads(); // publish ncclShmem.{args, channelId}
   /* set abort flag to 0 */
   if (tid == 0) {
-    ncclShmem.aborted = 0;
+    ncclShmem.aborted = 0;/*0号tid设置aborted为0*/
     ncclShmem.channel.workCounter =
       ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter;
   }
 
   // Use first 2 warps to load comm and channel, and remaining load work batch.
   switch (tid / WARP_SIZE) {
-  case 0:
+  case 0:/*首个warp,负责加载args.comm到ncclShemem.comm*/
     {
       void* dst = &ncclShmem.comm;
       void* src = ncclShmem.args.comm;
@@ -455,7 +458,7 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
       copyToShmem16(tid, dst, src, bytes);
     }
     break;
-  case 1:
+  case 1:/*第二个warp,负责加载args.comm->channels[channelId]到ncclDevChannel*/
     { // Get address of channel without incurring indirect load from ncclKernelComm::channels
       void* dst = &ncclShmem.channel;
       void* src = &((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId];
@@ -476,6 +479,7 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
     }
     break;
   }
+  /** 等待所有线程加载完成ncclShmem */
   __syncthreads(); // publish ncclShmem
 
   while (ncclShmem.aborted == 0) {
@@ -503,7 +507,8 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
 __global__ void ncclDevKernel_Generic(ncclDevKernelArgs4K NCCL_GRID_CONSTANT const args4K);
 __device__ void ncclDevFunc_Nop();
 
-#define DEFINE_ncclDevKernel(suffix, coll, redop, ty, algo, proto, specializedFnId) \
+/*生成脚本会根据suffix生成不同的内核，比如ncclDevKernel_SendRecv,因此此处为入口 */
+#define DEFINE_ncclDevKernel(suffix/** 内核后缀 */, coll, redop, ty, algo, proto, specializedFnId) \
   __global__ void ncclDevKernel_##suffix(ncclDevKernelArgs4K NCCL_GRID_CONSTANT const args4K) { \
     ncclKernelMain<specializedFnId, RunWorkBatch<coll, ty, redop<ty>, algo, proto>>(&args4K.args); \
   }

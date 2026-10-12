@@ -233,7 +233,7 @@ struct ncclNvls {
 
 #define NCCL_MAX_CONNS 2
 struct ncclChannelPeer {
-  struct ncclConnector send[NCCL_MAX_CONNS];/*向peer发*/
+  struct ncclConnector send[NCCL_MAX_CONNS];/*向peer发用的connector*/
   struct ncclConnector recv[NCCL_MAX_CONNS];/*从peer收*/
   int refCount;
 };
@@ -511,7 +511,7 @@ struct alignas(16) ncclKernelCommAndChannels {
 
 enum ncclDevWorkStorageType : uint8_t {
   ncclDevWorkStorageTypeArgs = 0,
-  ncclDevWorkStorageTypeFifo = 1,
+  ncclDevWorkStorageTypeFifo = 1,/*采用fifo型式*/
   ncclDevWorkStorageTypePersistent = 2
 };
 
@@ -534,6 +534,7 @@ template <size_t capacity>
 struct alignas(16) ncclDevKernelArgsStorage {
   union {
     struct ncclDevKernelArgs args;
+    /*通过扩充这个字段大小，可以使args的尾部成员大小增大*/
     ulong2 storage[capacity / sizeof(ulong2)];
   };
 };
@@ -554,6 +555,7 @@ template <typename T>
 __host__ __device__ constexpr T max_constexpr(T a) {
   return a;
 }
+/*取最大值（多值比较）*/
 template <typename T, typename... Ts>
 __host__ __device__ constexpr T max_constexpr(T a, T b, Ts... c) {
   return max_constexpr<T>((a > b ? a : b), c...);
@@ -597,6 +599,7 @@ __host__ __device__ constexpr int ncclNvlsUnroll(int bytePerPack, int cudaArch =
 __host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_CUDA_ARCH) {
   return (max_constexpr<int>(
             /*LL    */ 0,
+            /*每线程8个uint64_t*/
             /*LL128 */ (NCCL_LL128_SHMEM_ELEMS_PER_THREAD * WARP_SIZE) * sizeof(uint64_t),
             /*SIMPLE*/ (ncclCollUnroll(cudaArch) * WARP_SIZE + 1) * 16,
             // NVLS needs an extra 16B to read unaligned data.

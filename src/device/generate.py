@@ -497,6 +497,7 @@ for name in name_to_funcs.keys():
       sym = kernel_suffix(kfn)
       fn_id = primary_to_index[kfn]
       cudart, arch = required_cuda(*kfn)
+      #由于Include了common.h,此句将被展开为__global__做为cuda入口
       s = "DEFINE_ncclDevKernel({sym}, ncclFunc{coll}, {redop_cxx}, {ty_cxx}, NCCL_ALGO_{algo}, NCCL_PROTO_{proto}, {fn_id})\n"
       if (cudart, arch) != (0, 0):
         # Add conditional compilation logic around s. If CUDART_VERSION is satisfactory

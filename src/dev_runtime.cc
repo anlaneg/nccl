@@ -2064,7 +2064,7 @@ ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements c
     task->outDevComm = outDevComm;
     task->deviceCodeVersion = deviceCodeVersion;
     ncclIntruQueueEnqueue(&comm->devrState.commCreateTaskQueue, task);
-    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);
+    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);/*comm加入到symRegister*/
   }
 
 exit:

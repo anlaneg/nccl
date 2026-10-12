@@ -141,7 +141,7 @@ int main(int argc, char *argv[]) {
            mpi_size);
   }
   // Determine which local GPU this process should use
-  local_rank = getLocalRank(MPI_COMM_WORLD);
+  local_rank = getLocalRank(MPI_COMM_WORLD);/*取本地rank数 */
 
   printf("  MPI initialized - Process %d of %d total processes\n", mpi_rank,
          mpi_size);

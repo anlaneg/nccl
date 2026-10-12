@@ -23,7 +23,7 @@ struct ncclInfo {
   size_t count;/** 数据数量 */
   /** 数据类型 */
   ncclDataType_t datatype;
-  ncclRedOp_t op;
+  ncclRedOp_t op;/*归约算子*/
   /** 对端gpu编号（仅在点对点操作中有效） */
   int root; // peer for p2p operations
   ncclComm_t comm;

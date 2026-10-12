@@ -205,7 +205,7 @@ static inline ncclResult_t ncclAllReduceConfigImpl(const void* sendbuff, void* r
 NCCL_API(ncclResult_t, ncclAllReduce, const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
          ncclRedOp_t op, ncclComm* comm, cudaStream_t stream);
 /** ncclAllReduce 函数实现*/
-ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, ncclRedOp_t op,
+ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, ncclRedOp_t op/*归约算子*/,
                            ncclComm* comm, cudaStream_t stream) {
   NVTX3_FUNC_WITH_PARAMS(AllReduce, NcclNvtxParamsAllReduce,
                          NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), op));

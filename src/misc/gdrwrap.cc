@@ -76,8 +76,8 @@ static ncclGdrOps gdrLibraryOps = {};
 static const ncclGdrOps* gdrOps = NULL;
 
 struct gdr {
-  size_t pageSize;
-  size_t pageMask;
+  size_t pageSize;/*页大小*/
+  size_t pageMask;/*页掩码，与此值排除页偏移量*/
 };
 
 struct ncclGdrDmaBufMapping {
@@ -150,6 +150,7 @@ static int ncclGdrDmaBufSupported() {
     CUdevice dev;
     int supported = 0;
     if (CUPFN(cuDeviceGet(&dev, cudaDev)) != CUDA_SUCCESS) return 0;
+    /*检查设备是否支持dma buffer*/
     if (CUPFN(cuDeviceGetAttribute(&supported, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, dev)) != CUDA_SUCCESS) return 0;
     if (!supported) {
       INFO(NCCL_INIT, "NCCL internal DMA-BUF mmap backend disabled: CUDA device %d does not support DMA-BUF", cudaDev);
@@ -463,11 +464,12 @@ static void ncclGdrCloseLibraryBackend() {
 
 static ncclResult_t ncclGdrUseInternalDmaBufBackend() {
   if (!ncclGdrDmaBufSupported()) {
+	  /*设备不支持dma buffer*/
     INFO(NCCL_INIT, "NCCL internal DMA-BUF mmap backend unavailable");
     return ncclInternalError;
   }
   ncclGdrClearLibraryBackend();
-  gdrOps = &ncclGdrDmaBufOps;
+  gdrOps = &ncclGdrDmaBufOps;/*支持dmabuffer 设置gdr操作集*/
   return ncclSuccess;
 }
 
@@ -546,6 +548,7 @@ static void initOnceFunc(void) {
   /*加载gdrapi库*/
   gdrhandle = ncclOsDlopen(GDRAPI_LIBNAME, NCCL_OS_DL_NOW);
   if (!gdrhandle) {
+	  /*此库不存在*/
     INFO(NCCL_INIT, "Failed to open %s - %s; falling back to NCCL internal DMA-BUF mmap backend", GDRAPI_LIBNAME,
          ncclOsDlerror());
     initResult = ncclGdrUseInternalDmaBufBackend();

@@ -58,7 +58,7 @@
 #define COMPILER_BSWAP64(x) __builtin_bswap64(x)
 
 // Compiler hints
-#define COMPILER_ASSUME_ALIGNED(ptr, alignment) __builtin_assume_aligned((ptr), (alignment))
+#define COMPILER_ASSUME_ALIGNED(ptr, alignment/*对齐方式*/) __builtin_assume_aligned((ptr), (alignment))
 
 #define COMPILER_ATTRIBUTE_UNUSED __attribute__((unused))
 

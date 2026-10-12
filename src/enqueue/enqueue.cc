@@ -973,8 +973,8 @@ NCCL_PARAM(ChunkSize, "CHUNK_SIZE", 0);
 // match the corresponding values for this round of the p2p schedule (no -1's).
 // No-op's are encoded with a -1 size.
 static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, int nChannelsMin, int nChannelsMax,
-                                 int p2pEpoch, int p2pRound/*当前round*/, int sendRank/*发送rank*/, void* sendAddr/*发地址*/, ssize_t sendBytes/*发字节数*/,
-                                 int recvRank/*收rank*/, void* recvAddr/*收地址*/, ssize_t recvBytes/*收字节数*/, const int planTotalTasks[],
+                                 int p2pEpoch, int p2pRound/*当前round*/, int sendRank/*目的发送rank*/, void* sendAddr/*发地址*/, ssize_t sendBytes/*发字节数（如果无，为-1）*/,
+                                 int recvRank/*目的收rank*/, void* recvAddr/*收地址*/, ssize_t recvBytes/*收字节数（如果无，为-1）*/, const int planTotalTasks[],
                                  struct ncclTaskP2p** p2pTasks) {
   ncclResult_t ret = ncclSuccess;
   constexpr int connIndex = 1;
@@ -1021,7 +1021,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   //proxySameProcess当前send/recv方便使用的所有channel connector基本地proxy service是否都位于本进程
   ssize_t paramChunkSize = ncclParamChunkSize();
   // Arrays indexed by dir where recv=0, send=1:
-  int nChannels[2];
+  int nChannels[2];/*各方向channel数*/
   int protocol[2];
   int stepSize[2];
   int chunkSize[2];
@@ -1144,7 +1144,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   struct ncclWorkList* workNode;
   workNode = ncclMemoryStackAllocInlineArray<ncclWorkList, ncclDevWorkP2p>(&comm->memScoped, 1);
   workNode->workType = ncclDevWorkTypeP2p;
-  workNode->size = sizeof(struct ncclDevWorkP2p);
+  workNode->size = sizeof(struct ncclDevWorkP2p);/*指明此结构体大小，upload时依据此值copy内容*/
   ncclIntruQueueEnqueue(&plan->workQueue, workNode);/*workNode入队*/
   uint32_t workOffset;
   workOffset = plan->workBytes;
@@ -1396,6 +1396,7 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
 
 // Spin until its safe to increase comm->workFifoProduced to desiredProduced.
 static ncclResult_t waitWorkFifoAvailable(struct ncclComm* comm, uint32_t desiredProduced) {
+	/*检查desiredProduced是否可放下*/
   bool hasRoom = (desiredProduced - comm->workFifoConsumed) <= comm->workFifoBytes;
   if (!hasRoom) {
     while (true) {
@@ -1406,7 +1407,7 @@ static ncclResult_t waitWorkFifoAvailable(struct ncclComm* comm, uint32_t desire
 
       NCCLCHECK(ncclCommPollEventCallbacks(comm, /*waitSome=*/true));
       hasRoom = (desiredProduced - comm->workFifoConsumed) <= comm->workFifoBytes;
-      if (hasRoom) break;
+      if (hasRoom) break;/*空间足够，停止轮询*/
       std::this_thread::yield();
     }
   }
@@ -1444,9 +1445,9 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
     break;
   case ncclDevWorkStorageTypeFifo:
     fifoBufHost = comm->workFifoBuf;
-    fifoCursor = comm->workFifoProduced;
+    fifoCursor = comm->workFifoProduced;/*取填充位置*/
     fifoMask = comm->workFifoBytes - 1;
-    NCCLCHECK(waitWorkFifoAvailable(comm, fifoCursor + workBytes));
+    NCCLCHECK(waitWorkFifoAvailable(comm, fifoCursor + workBytes));/*检查自fifoCursor+workBytes是否可放下*/
     plan->kernelArgs->workBuf = comm->workFifoBufDev;
     break;
   case ncclDevWorkStorageTypePersistent:
@@ -1487,16 +1488,17 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
     char* dst = (char*)fifoBufHost;
     char* src = (char*)(workNode + 1);
     for (int n = workNode->size; n != 0; n -= 16) {
+    	/*将src中的内容填写到dst中，每次16字节*/
       memcpy(COMPILER_ASSUME_ALIGNED(dst + (fifoCursor & fifoMask), 16), COMPILER_ASSUME_ALIGNED(src, 16), 16);
       fifoCursor += 16;
       src += 16;
     }
-    workNode = workNode->next;
+    workNode = workNode->next;/*写所有workNode*/
   }
 
   switch (plan->workStorageType) {
   case ncclDevWorkStorageTypeFifo:
-    comm->workFifoProduced = fifoCursor;
+    comm->workFifoProduced = fifoCursor;/*更新生产指针*/
     if (comm->workFifoBufGdrHandle != nullptr) wc_store_fence();
     break;
   case ncclDevWorkStorageTypePersistent:
@@ -1526,14 +1528,15 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
       plan->kernelArgs->workBuf = fifoBufDev;
 
       // coverity[uninit_use_in_call:FALSE] => fifoBufHost is never NULL
+      /*复制安排进deviceStream*/
       CUDACHECKGOTO(cudaMemcpyAsync(fifoBufDev, fifoBufHost, workBytes, cudaMemcpyDefault, deviceStream), result, fail);
       cudaEvent_t memcpyDone;
       CUDACHECKGOTO(cudaEventCreateWithFlags(&memcpyDone, cudaEventDisableTiming), result, fail);
-      CUDACHECKGOTO(cudaEventRecord(memcpyDone, deviceStream), result, fail);
+      CUDACHECKGOTO(cudaEventRecord(memcpyDone, deviceStream), result, fail);/*在memcpy后加入memcpyDone event，以跟踪完成情况*/
 
       NCCLCHECKGOTO(ncclCalloc(&cleanup, 1), result, fail);
       cleanup->base.fn = uploadWork_cleanup_fn;
-      cleanup->base.event = memcpyDone;
+      cleanup->base.event = memcpyDone;/*指明此callback关联的event*/
       cleanup->hostBuf = fifoBufHost;
       ncclIntruQueueEnqueue(&comm->eventCallbackQueue, (struct ncclCommEventCallback*)cleanup);
 
@@ -1957,8 +1960,11 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   ncclResult_t ret = ncclSuccess;
   struct ncclKernelPlanner* planner = &comm->planner;
   int nChannels = countOneBits(plan->channelMask);
-  void* sym = plan->kernelFn;/*计划采用的kernel函数*/
+  /*计划采用的kernel函数*/
+  void* sym = plan->kernelFn;
+  /*1 个 thread‑block 负责处理 1 条 NCCL Channel。*/
   dim3 grid = {(unsigned)nChannels, 1, 1};
+  /*每一个 thread‑block 内部，一共拥有 `plan->threadPerBlock` 个 GPU 线程。*/
   dim3 block = {(unsigned)plan->threadPerBlock, 1, 1};
   int smem = plan->isSymColl ? plan->kernelDynSmem : ncclShmemDynamicSize(comm->cudaArch);
   cudaStream_t launchStream = planner->streams->stream;
@@ -2046,9 +2052,11 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
       attrs++;
     }
 #endif
+    /*指出grid规格*/
     launchConfig.gridDimX = grid.x;
     launchConfig.gridDimY = grid.y;
     launchConfig.gridDimZ = grid.z;
+    /*指出block规格*/
     launchConfig.blockDimX = block.x;
     launchConfig.blockDimY = block.y;
     launchConfig.blockDimZ = block.z;
@@ -2115,15 +2123,15 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
     cudaStream_t launchStream = planner->streams->stream; // First user stream gets launch
     cudaStream_t deviceStream, launchOrder;
     cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
-    CUDACHECK(cudaEventRecord(finishedEvent, launchStream));
+    CUDACHECK(cudaEventRecord(finishedEvent, launchStream));/*添加finishedEvent事件*/
 
     if (comm->workFifoProduced - comm->workFifoProducedLastRecorded > comm->workFifoBytes / 8) {
       comm->workFifoProducedLastRecorded = comm->workFifoProduced;
       struct KernelFinishCallback* cb;
       NCCLCHECK(ncclCalloc(&cb, 1));
-      cb->base.event = finishedEvent;
+      cb->base.event = finishedEvent;/*指明finishedEvent完成后执行*/
       cb->base.fn = KernelFinishCallback_fn;
-      cb->workFifoConsumed = comm->workFifoProduced;
+      cb->workFifoConsumed = comm->workFifoProduced;/*此工作完成后，消费指针就会指到此处（即生产位置）*/
       ncclIntruQueueEnqueue(&comm->eventCallbackQueue, &cb->base);
       // We just stole scratchEvent so must create a new one.
       CUDACHECK(cudaEventCreateWithFlags(&comm->sharedRes->scratchEvent, cudaEventDisableTiming));

@@ -101,7 +101,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
 
   template <int DirectRecv, int DirectSend, int Recv, int Send, int Src, int Dst>
   __device__ __forceinline__ void waitPeer(intptr_t srcIx, intptr_t dstIx, int offset, int nelts) {
-    const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
+    const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send/*非即发又收情况，检查是否等待发送 */;
     // Yes, for some template arguments this code will be unreachable.  That's fine.
     // coverity[dead_error_line]
     if ((flags & (Recv * RoleWaitRecv)) || (flags & (Send * RoleWaitSend))) {
@@ -175,7 +175,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
   }
 
   template <int DirectRecv1, int DirectSend1, int Recv, int Send, int SrcBuf, int DstBuf>
-  __device__ __forceinline__ void genericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
+  __device__ __forceinline__ void genericOp(intptr_t srcIx, intptr_t dstIx, int nelem/** 数据元素数量 */, bool postOp) {
     constexpr int DirectRecv = 1 && Direct && DirectRecv1;
     constexpr int DirectSend = 1 && Direct && DirectSend1;
     constexpr int Src = SrcBuf != -1;
@@ -938,14 +938,14 @@ public:
     genericOp<0, 0, 0, 1, Output, -1>(outIx, -1, eltN, false);
   }
   __device__ __forceinline__ void directSend(intptr_t inpIx, intptr_t outIx, int eltN) {
-    genericOp<0, 1, 0, 1, Input, -1>(inpIx, outIx, eltN, false);
+    genericOp<0, 1, 0, 1/*指明为发送 */, Input, -1>(inpIx, outIx, eltN, false);
   }
   __device__ __forceinline__ void directSendFromOutput(intptr_t outIx, int eltN) {
     genericOp<0, 1, 0, 1, Output, -1>(outIx, outIx, eltN, false);
   }
 
   __device__ __forceinline__ void recv(intptr_t outIx, int eltN, bool postOp = false) {
-    genericOp<0, 0, 1, 0, -1, Output>(-1, outIx, eltN, postOp);
+    genericOp<0, 0, 1/*指明为接收 */, -1, Output>(-1, outIx, eltN, postOp);
   }
   __device__ __forceinline__ void directRecv(intptr_t outIx, int eltN, bool postOp = false) {
     genericOp<1, 0, 1, 0, -1, Output>(outIx, outIx, eltN, postOp);
